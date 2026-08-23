@@ -1,0 +1,11 @@
+{
+  "name": "nghe-nhac-pro-max-frontend",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "test": "npm --prefix web run test",
+    "typecheck": "npm --prefix web run typecheck"
+  }
+}
