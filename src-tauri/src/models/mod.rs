@@ -1,0 +1,23 @@
+pub mod album;
+pub mod artist;
+pub mod browse;
+pub mod duplicate;
+pub mod genre;
+pub mod history;
+pub mod lyrics;
+pub mod playlist;
+pub mod settings;
+pub mod smart_playlist;
+pub mod track;
+
+pub use album::*;
+pub use artist::*;
+pub use browse::*;
+pub use duplicate::*;
+pub use genre::*;
+pub use history::*;
+pub use lyrics::*;
+pub use playlist::*;
+pub use settings::*;
+pub use smart_playlist::*;
+pub use track::*;

@@ -1,0 +1,60 @@
+[package]
+name = "nghenhacpromax-tauri"
+version = "0.2.0"
+description = "Nghe Nhac Pro Max - Tauri 2 Local Music Player"
+edition = "2021"
+
+[lib]
+name = "nghenhacpromax_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri Framework
+tauri = { version = "2", features = [] }
+
+# Serialization & Deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Local Storage / Database
+rusqlite = { version = "0.32", features = ["bundled", "blob", "chrono", "uuid", "backup"] }
+
+# Audio Metadata & Tag Extraction / Editing
+lofty = "0.21"
+
+# Filesystem Watching & Scanning
+notify = "6.1"
+walkdir = "2.5"
+
+# Audio Engine / Playback dependencies (prepared for audio integration)
+symphonia = { version = "0.5", features = ["all"] }
+cpal = "0.15"
+ringbuf = "0.4"
+dasp = "0.11"
+
+# Search & Utilities
+fuzzy-matcher = "0.3"
+rand = "0.8"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+anyhow = "1.0"
+directories = "5.0"
+regex = "1.10"
+sha2 = "0.10"
+unicode-normalization = "0.1"
+crossbeam-channel = "0.5"
+
+# Image processing for cover art cache
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+
+# Async runtime & Logging
+tokio = { version = "1.40", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.10"
