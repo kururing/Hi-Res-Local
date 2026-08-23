@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for Nghe Nhac Pro Max",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}
