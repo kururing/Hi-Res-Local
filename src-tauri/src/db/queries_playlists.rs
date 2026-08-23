@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
-use crate::db::queries_tracks::{get_track_by_id, get_track_by_path, map_row_to_track};
+use crate::db::queries_tracks::{get_track_by_path, map_row_to_track};
 use crate::error::{AppError, AppResult};
 use crate::models::playlist::{
     CreatePlaylistInput, Playlist, PlaylistWithTracks, UpdatePlaylistInput,
@@ -274,13 +274,16 @@ pub fn remove_tracks_from_playlist(
         )?;
     }
 
-    let mut stmt = tx.prepare(
-        "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position ASC",
-    )?;
-    let remaining_ids: Vec<String> = stmt
-        .query_map(params![playlist_id], |row| row.get(0))?
-        .filter_map(|r| r.ok())
-        .collect();
+    let remaining_ids: Vec<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![playlist_id], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        rows
+    };
 
     for (pos, tid) in remaining_ids.iter().enumerate() {
         tx.execute(
@@ -299,6 +302,14 @@ pub fn reorder_playlist_tracks(
     ordered_track_ids: &[String],
 ) -> AppResult<()> {
     let tx = conn.transaction()?;
+    // Step 1: Set temporary negative positions to prevent uniqueness collision on (playlist_id, position)
+    for (pos, track_id) in ordered_track_ids.iter().enumerate() {
+        tx.execute(
+            "UPDATE playlist_tracks SET position = ?1 WHERE playlist_id = ?2 AND track_id = ?3",
+            params![-100000 - (pos as i64), playlist_id, track_id],
+        )?;
+    }
+    // Step 2: Set final positive positions
     for (pos, track_id) in ordered_track_ids.iter().enumerate() {
         tx.execute(
             "UPDATE playlist_tracks SET position = ?1 WHERE playlist_id = ?2 AND track_id = ?3",
@@ -519,7 +530,9 @@ pub fn import_playlist_from_m3u(
         }
 
         let path_str = candidate_path.to_string_lossy().to_string();
-        if let Some(track) = get_track_by_path(conn, &path_str)? {
+        if let Some(track) = get_track_by_path(conn, trimmed)? {
+            track_ids.push(track.id);
+        } else if let Some(track) = get_track_by_path(conn, &path_str)? {
             track_ids.push(track.id);
         }
     }

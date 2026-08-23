@@ -82,7 +82,7 @@ impl Default for ReplayGainConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioTrack {
     pub id: String,
     pub path: String,

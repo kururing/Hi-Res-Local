@@ -9,6 +9,8 @@ fn main() {
             .set("FileDescription", "Nghe Nhac Pro Max music player")
             .set("InternalName", "nghenhacpromax.exe")
             .set("OriginalFilename", "nghenhacpromax.exe");
-        resource.compile().expect("failed to compile Windows resources");
+        resource
+            .compile()
+            .expect("failed to compile Windows resources");
     }
 }

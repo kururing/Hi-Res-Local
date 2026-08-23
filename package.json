@@ -1,11 +1,17 @@
 {
-  "name": "nghe-nhac-pro-max-frontend",
+  "name": "nghe-nhac-pro-max",
   "version": "2.0.0",
   "private": true,
   "scripts": {
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
     "dev": "npm --prefix web run dev",
     "build": "npm --prefix web run build",
     "test": "npm --prefix web run test",
     "typecheck": "npm --prefix web run typecheck"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0"
   }
 }

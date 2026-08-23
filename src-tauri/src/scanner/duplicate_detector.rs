@@ -10,8 +10,11 @@ pub fn normalize_string(input: &str) -> String {
     // 1. Decompose unicode characters (e.g. 'é' -> 'e' + combining acute)
     for c in input.nfd() {
         // Strip combining marks
-        if !unicode_normalization::is_combining_mark(c) {
-            if c.is_alphanumeric() || c == ' ' {
+        if !matches!(c, '\u{0300}'..='\u{036F}' | '\u{1AB0}'..='\u{1AFF}' | '\u{1DC0}'..='\u{1DFF}' | '\u{20D0}'..='\u{20FF}' | '\u{FE20}'..='\u{FE2F}')
+        {
+            if c == 'đ' || c == 'Đ' {
+                normalized.push('d');
+            } else if c.is_alphanumeric() || c == ' ' {
                 normalized.push(c.to_ascii_lowercase());
             }
         }

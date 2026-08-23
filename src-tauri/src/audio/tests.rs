@@ -1,11 +1,8 @@
-use super::*;
 use crate::audio::adapters::{
     ExclusiveAudioAdapter, FallbackMediaControlsAdapter, MediaControlsAdapter, StandardAudioAdapter,
 };
 use crate::audio::device::{convert_f32_to_i16, convert_f32_to_u16};
-use crate::audio::dsp::{
-    soft_limit, BiquadFilter, CrossfadeProcessor, EqualizerProcessor, ReplayGainProcessor,
-};
+use crate::audio::dsp::{CrossfadeProcessor, EqualizerProcessor, ReplayGainProcessor};
 use crate::audio::dto::*;
 use crate::audio::gapless::LinearResampler;
 use crate::audio::queue::PlaybackQueue;
@@ -38,7 +35,6 @@ fn test_queue_full_lifecycle() {
 
     let t1 = mock_track("1", "Track 1", 180000);
     let t2 = mock_track("2", "Track 2", 200000);
-    let t3 = mock_track("3", "Track 3", 220000);
 
     q.add_tracks(vec![t1.clone(), t2.clone()]);
     assert_eq!(q.len(), 2);

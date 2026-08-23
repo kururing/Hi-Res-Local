@@ -1,6 +1,3 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
 use crate::audio::decoder::AudioDecoder;
 use crate::audio::dto::{AudioTrack, QualityBadge, ReplayGainInfo};
 use crate::audio::error::{AudioError, AudioResult};
@@ -267,7 +264,7 @@ impl GaplessController {
                     None => {
                         // EOF on current track
                         source.is_eof = true;
-                        if let Some(mut next) = self.next_preloaded.take() {
+                        if let Some(next) = self.next_preloaded.take() {
                             track_transitioned = Some(next.track.clone());
                             self.samples_played = 0;
                             self.current_source = Some(next);

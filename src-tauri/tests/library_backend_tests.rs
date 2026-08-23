@@ -1,31 +1,25 @@
 use nghenhacpromax_lib::db::backup::{backup_database, restore_database};
 use nghenhacpromax_lib::db::queries_history::{get_play_history, record_play_history};
 use nghenhacpromax_lib::db::queries_library::{
-    add_library_root, get_albums, get_artists, get_home_feed, get_library_roots,
-    remove_library_root, set_album_favorite, set_artist_favorite,
+    add_library_root, get_library_roots, remove_library_root,
 };
 use nghenhacpromax_lib::db::queries_playlists::{
     add_tracks_to_playlist, create_playlist, evaluate_smart_playlist_tracks,
-    export_playlist_to_m3u, get_playlist_with_tracks, get_playlists, import_playlist_from_m3u,
+    export_playlist_to_m3u, get_playlist_with_tracks, import_playlist_from_m3u,
     reorder_playlist_tracks,
 };
-use nghenhacpromax_lib::db::queries_settings::{get_app_settings, save_app_settings};
 use nghenhacpromax_lib::db::queries_tracks::{
     get_track_by_id, get_tracks, set_track_favorite, set_track_rating, upsert_track,
 };
 use nghenhacpromax_lib::db::Database;
-use nghenhacpromax_lib::lyrics::lrc_parser::parse_lrc;
 use nghenhacpromax_lib::models::history::RecordPlayInput;
-use nghenhacpromax_lib::models::lyrics::LyricsSource;
 use nghenhacpromax_lib::models::playlist::{CreatePlaylistInput, Playlist};
 use nghenhacpromax_lib::models::smart_playlist::{
     MatchType, SmartField, SmartOperator, SmartPlaylistDefinition, SmartRule, SmartSortBy,
     SortOrder,
 };
 use nghenhacpromax_lib::models::track::{Track, TrackFilter, TrackSortField};
-use nghenhacpromax_lib::scanner::duplicate_detector::{
-    compute_duplicate_key, detect_and_assign_duplicates, normalize_string,
-};
+use nghenhacpromax_lib::scanner::duplicate_detector::detect_and_assign_duplicates;
 use tempfile::tempdir;
 
 fn create_sample_track(id: &str, title: &str, artist: &str, album: &str, format: &str) -> Track {

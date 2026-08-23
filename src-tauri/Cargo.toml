@@ -47,6 +47,7 @@ regex = "1.10"
 sha2 = "0.10"
 unicode-normalization = "0.1"
 crossbeam-channel = "0.5"
+rfd = "0.15"
 
 # Image processing for cover art cache
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

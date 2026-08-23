@@ -8,7 +8,6 @@ use crate::models::artist::{ArtistDetail, ArtistSummary};
 use crate::models::browse::HomeFeed;
 use crate::models::genre::GenreSummary;
 use crate::models::settings::LibraryRoot;
-use crate::models::track::Track;
 
 pub fn add_library_root(conn: &Connection, path: &str, name: &str) -> AppResult<LibraryRoot> {
     let id = uuid::Uuid::new_v4().to_string();
