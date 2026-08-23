@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "com.nghenhacpromax.app",
   "build": {
-    "beforeDevCommand": "npm --prefix ../web run dev",
+    "beforeDevCommand": "npm --prefix web run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm --prefix ../web run build",
+    "beforeBuildCommand": "npm --prefix web run build",
     "frontendDist": "../web/dist"
   },
   "app": {
