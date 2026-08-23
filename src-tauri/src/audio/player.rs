@@ -1,21 +1,14 @@
+use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::{SampleFormat, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
-use std::time::Duration;
-
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, Stream, StreamConfig};
 use tokio::sync::broadcast;
 
-use crate::audio::adapters::{
-    FallbackMediaControlsAdapter, MediaControlsAdapter, StandardAudioAdapter,
-};
-use crate::audio::decoder::AudioDecoder;
 use crate::audio::device::{convert_f32_to_i16, convert_f32_to_u16, OutputDeviceManager};
 use crate::audio::dsp::{soft_limit, CrossfadeProcessor, EqualizerProcessor, ReplayGainProcessor};
 use crate::audio::dto::{
-    AudioDeviceDTO, AudioEvent, AudioTrack, CrossfadeConfig, EqBand, EqConfig, EqPreset,
-    PlaybackProgress, PlaybackState, PlayerSnapshot, QualityBadge, RepeatMode, ReplayGainConfig,
+    AudioDeviceDTO, AudioEvent, AudioTrack, CrossfadeConfig, EqConfig, EqPreset, PlaybackProgress,
+    PlaybackState, PlayerSnapshot, QualityBadge, RepeatMode, ReplayGainConfig,
 };
 use crate::audio::error::{AudioError, AudioResult};
 use crate::audio::gapless::GaplessController;
@@ -79,6 +72,9 @@ pub struct AudioPlayer {
     is_playing_atomic: Arc<AtomicBool>,
     current_position_ms_atomic: Arc<AtomicU64>,
 }
+
+unsafe impl Send for AudioPlayer {}
+unsafe impl Sync for AudioPlayer {}
 
 impl Default for AudioPlayer {
     fn default() -> Self {
@@ -645,7 +641,7 @@ impl AudioPlayer {
 
         let err_event_sender = self.event_sender.clone();
         let err_fn = move |err: cpal::StreamError| {
-            log::error!("CPAL audio stream error: {}", err);
+            tracing::error!("CPAL audio stream error: {}", err);
             let _ = err_event_sender.send(AudioEvent::DeviceLost(err.to_string()));
         };
 
@@ -767,7 +763,7 @@ impl AudioPlayer {
                 }
             }
             Err(e) => {
-                log::error!("Audio decode error during stream callback: {}", e);
+                tracing::error!("Audio decode error during stream callback: {}", e);
                 output_buffer.fill(0.0);
             }
         }

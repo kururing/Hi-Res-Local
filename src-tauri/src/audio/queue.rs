@@ -1,5 +1,4 @@
 use rand::Rng;
-use std::collections::{HashSet, VecDeque};
 
 use crate::audio::dto::{AudioTrack, RepeatMode};
 use crate::audio::error::{AudioError, AudioResult};

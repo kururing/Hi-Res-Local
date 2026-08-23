@@ -21,7 +21,7 @@ impl LibraryWatcher {
         let (tx, rx) = channel::<notify::Result<Event>>();
         let (path_tx, path_rx) = channel::<PathBuf>();
 
-        let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
+        let watcher = RecommendedWatcher::new(tx, Config::default())?;
 
         // Background worker to debounce and process filesystem changes
         let db_clone = Arc::clone(&db);

@@ -1,5 +1,5 @@
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Host, SampleFormat, Stream, StreamConfig, SupportedStreamConfig};
+use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::{Device, Host, SupportedStreamConfig};
 
 use crate::audio::dto::AudioDeviceDTO;
 use crate::audio::error::{AudioError, AudioResult};

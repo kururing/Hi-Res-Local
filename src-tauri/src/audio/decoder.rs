@@ -1,14 +1,14 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use symphonia::core::audio::{AudioBufferRef, SampleBuffer, SignalSpec};
+use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{Decoder, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions};
 use symphonia::core::meta::{MetadataOptions, Tag, Value};
 use symphonia::core::probe::Hint;
-use symphonia::core::units::{Time, TimeBase, TimeStamp};
+use symphonia::core::units::{Time, TimeBase};
 
 use crate::audio::dto::{QualityBadge, ReplayGainInfo};
 use crate::audio::error::{AudioError, AudioResult};
@@ -86,7 +86,7 @@ impl AudioDecoder {
             })?;
 
         // Extract ReplayGain and QualityBadge
-        let replay_gain_info = Self::extract_replay_gain(&format_reader);
+        let replay_gain_info = Self::extract_replay_gain(&mut format_reader);
         let quality_badge = Self::build_quality_badge(&path_buf, &track, sample_rate, channels);
 
         Ok(Self {
@@ -194,9 +194,6 @@ impl AudioDecoder {
                     }
 
                     if let Some(ref mut buf) = self.sample_buffer {
-                        if buf.spec() != &spec {
-                            *buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-                        }
                         buf.copy_interleaved_ref(decoded);
                         let slice = &buf.samples()[..num_frames * spec.channels.count()];
                         return Ok(Some(slice));
@@ -204,7 +201,7 @@ impl AudioDecoder {
                 }
                 Err(SymphoniaError::DecodeError(e)) => {
                     // Non-fatal decode errors in streams can occur; continue reading next packet
-                    log::warn!("Symphonia decode error: {}, skipping packet", e);
+                    tracing::warn!("Symphonia decode error: {}, skipping packet", e);
                     continue;
                 }
                 Err(e) => {
@@ -217,7 +214,7 @@ impl AudioDecoder {
         }
     }
 
-    fn extract_replay_gain(format: &Box<dyn FormatReader>) -> Option<ReplayGainInfo> {
+    fn extract_replay_gain(format: &mut Box<dyn FormatReader>) -> Option<ReplayGainInfo> {
         let mut info = ReplayGainInfo::default();
         let mut found = false;
 

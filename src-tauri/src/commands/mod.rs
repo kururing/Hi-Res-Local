@@ -1,3 +1,4 @@
+pub mod audio_cmd;
 pub mod backup_cmd;
 pub mod browse_cmd;
 pub mod favorites_cmd;
@@ -11,6 +12,7 @@ pub mod smart_playlists_cmd;
 pub mod tags_cmd;
 pub mod tracks_cmd;
 
+pub use audio_cmd::*;
 pub use backup_cmd::*;
 pub use browse_cmd::*;
 pub use favorites_cmd::*;

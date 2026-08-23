@@ -1,8 +1,23 @@
+# Rust & Cargo
 /target
-/dist/
-/.worktrees/
+**/target
 **/*.rs.bk
-*.log
+
+# Node & Frontend
+node_modules
+**/node_modules
+dist
+**/dist
+.turbo
+
+# Tauri
+src-tauri/target
+**/src-tauri/target
+
+# Worktrees & Git
+/.worktrees/
+
+# IDE & OS
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -12,3 +27,9 @@
 *.njsproj
 *.sln
 *.sw?
+*.log
+
+# Database runtime files
+*.db
+*.db-shm
+*.db-wal

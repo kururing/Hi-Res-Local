@@ -1,6 +1,5 @@
 use directories::ProjectDirs;
 use lofty::file::{TaggedFile, TaggedFileExt};
-use lofty::tag::Accessor;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};

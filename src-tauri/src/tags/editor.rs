@@ -1,6 +1,6 @@
 use lofty::file::TaggedFileExt;
 use lofty::probe::Probe;
-use lofty::tag::{Accessor, ItemKey, Tag, TagExt, TagType};
+use lofty::tag::{Accessor, ItemKey, Tag, TagExt};
 use std::path::Path;
 
 use crate::db::queries_tracks::{get_track_by_id, update_track_tags};
@@ -52,7 +52,8 @@ pub fn write_tags_to_file(audio_path: &Path, update: &TrackUpdateTags) -> AppRes
         tag.insert_text(ItemKey::Lyrics, lyrics.clone());
     }
 
-    tag.save_to_path(audio_path)?;
+    use lofty::config::WriteOptions;
+    tag.save_to_path(audio_path, WriteOptions::default())?;
     Ok(())
 }
 

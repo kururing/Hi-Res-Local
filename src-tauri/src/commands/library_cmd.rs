@@ -6,6 +6,7 @@ use crate::db::queries_library::{
     add_library_root as db_add_root, get_library_roots as db_get_roots,
     remove_library_root as db_remove_root, set_root_active as db_set_active,
 };
+use crate::db::queries_tracks::get_duplicate_groups as db_get_duplicates;
 use crate::models::duplicate::DuplicateGroup;
 use crate::models::settings::LibraryRoot;
 use crate::scanner::scan_library_roots;
