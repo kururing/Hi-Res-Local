@@ -53,8 +53,9 @@ nghenhacpromax/
 Run the frontend and Tauri desktop application together in development mode:
 
 ```bash
-# Install frontend dependencies
-cd web && npm ci && cd ..
+# Install root (Tauri CLI) and frontend dependencies
+npm ci
+npm --prefix web ci
 
 # Start Tauri development app
 npm run tauri:dev
