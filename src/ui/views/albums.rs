@@ -35,10 +35,11 @@ pub fn render_albums_view(app: &App) -> Element<'_, Message> {
 
     if filtered_albums.is_empty() {
         if !app.search_query.is_empty() {
+            let msg = format!("No albums in your library match \"{}\".", app.search_query);
             return empty_state(
-                "💿",
+                "[?]",
                 "No Matching Albums",
-                format!("No albums in your library match \"{}\".", app.search_query),
+                msg,
                 Some(
                     button(text("Clear Search Filter").size(13))
                         .padding([10, 18])
@@ -49,15 +50,22 @@ pub fn render_albums_view(app: &App) -> Element<'_, Message> {
             );
         } else {
             return empty_state(
-                "💿",
+                "[-]",
                 "No Albums Found",
                 "Scan your music directory to automatically organize your tracks into albums.",
                 Some(
-                    button(text("Scan Music Folder").size(13))
-                        .padding([10, 20])
-                        .style(primary_button_style)
-                        .on_press(Message::OpenFolderDialog)
-                        .into(),
+                    button(
+                        row![
+                            text("+").size(16).color(colors::OLED_BLACK),
+                            text("Scan Music Folder").size(13),
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center),
+                    )
+                    .padding([10, 20])
+                    .style(primary_button_style)
+                    .on_press(Message::OpenFolderDialog)
+                    .into(),
                 ),
             );
         }

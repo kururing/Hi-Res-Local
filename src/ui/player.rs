@@ -46,7 +46,7 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
             .into()
         }
         None => row![
-            artwork_placeholder("♪", 44.0),
+            artwork_placeholder("*", 44.0),
             column![
                 text("No track playing")
                     .size(13)
@@ -72,7 +72,7 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
 
     // Shuffle Button
     let shuffle_btn = with_tooltip(
-        button(text("🔀").size(14))
+        button(text("SHUF").size(11))
             .padding([6, 8])
             .style(icon_control_button_style(status.shuffle))
             .on_press(Message::ToggleShuffle),
@@ -85,7 +85,7 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
 
     // Previous Track Button
     let prev_btn = with_tooltip(
-        button(text("⏮").size(15))
+        button(text("|<").size(12))
             .padding([6, 8])
             .style(icon_control_button_style(false))
             .on_press(Message::PreviousTrack),
@@ -94,8 +94,8 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
 
     // Main Play/Pause Button
     let play_icon = match status.state {
-        PlaybackState::Playing => "⏸",
-        PlaybackState::Loading => "⏳",
+        PlaybackState::Playing => "||",
+        PlaybackState::Loading => "...",
         _ => "▶",
     };
     let play_tooltip_label = match status.state {
@@ -104,7 +104,7 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
         _ => "Play",
     };
     let play_btn = with_tooltip(
-        button(text(play_icon).size(16))
+        button(text(play_icon).size(14))
             .width(Length::Fixed(40.0))
             .height(Length::Fixed(40.0))
             .style(circular_play_button_style)
@@ -114,7 +114,7 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
 
     // Next Track Button
     let next_btn = with_tooltip(
-        button(text("⏭").size(15))
+        button(text(">|").size(12))
             .padding([6, 8])
             .style(icon_control_button_style(false))
             .on_press(Message::NextTrack),
@@ -123,13 +123,13 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
 
     // Repeat Mode Button
     let (_loop_badge, loop_tooltip) = loop_mode_display(status.loop_mode);
-    let loop_icon = match status.loop_mode {
-        crate::app::LoopMode::Off => "🔁",
-        crate::app::LoopMode::Playlist => "🔁 All",
-        crate::app::LoopMode::Track => "🔂 1",
+    let loop_label = match status.loop_mode {
+        crate::app::LoopMode::Off => "REP",
+        crate::app::LoopMode::Playlist => "REP ALL",
+        crate::app::LoopMode::Track => "REP 1",
     };
     let repeat_btn = with_tooltip(
-        button(row![text(loop_icon).size(12),].align_y(Alignment::Center))
+        button(row![text(loop_label).size(10),].align_y(Alignment::Center))
             .padding([6, 8])
             .style(icon_control_button_style(
                 status.loop_mode != crate::app::LoopMode::Off,
@@ -177,16 +177,14 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
     // 3. Right Region: Volume & Now Playing View Toggle
     // ========================================================================
     let current_volume = if status.is_muted { 0.0 } else { status.volume };
-    let volume_icon = if status.is_muted || current_volume == 0.0 {
-        "🔇"
-    } else if current_volume < 0.5 {
-        "🔉"
+    let volume_label = if status.is_muted || current_volume == 0.0 {
+        "MUTE"
     } else {
-        "🔊"
+        "VOL"
     };
 
     let mute_btn = with_tooltip(
-        button(text(volume_icon).size(14))
+        button(text(volume_label).size(10))
             .padding([6, 6])
             .style(icon_control_button_style(status.is_muted))
             .on_press(Message::ToggleMute),
@@ -206,9 +204,12 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
 
     let now_playing_btn = with_tooltip(
         button(
-            row![text("🎛️").size(13), text("View").size(11),]
-                .spacing(4)
-                .align_y(Alignment::Center),
+            row![
+                text("✦").size(11).color(colors::ACCENT_PRIMARY),
+                text("Full").size(11),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
         )
         .padding([6, 8])
         .style(icon_control_button_style(

@@ -60,9 +60,12 @@ pub fn render_settings_view(app: &App) -> Element<'_, Message> {
                     .color(colors::TEXT_MUTED),
                 horizontal_space(),
                 button(
-                    row![text("📁").size(13), text("Rescan Music Folder").size(12),]
-                        .spacing(6)
-                        .align_y(Alignment::Center),
+                    row![
+                        text("+").size(16).color(colors::OLED_BLACK),
+                        text("Rescan Music Folder").size(12),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
                 )
                 .padding([6, 12])
                 .style(primary_button_style)
@@ -143,8 +146,12 @@ pub fn render_settings_view(app: &App) -> Element<'_, Message> {
                     shadow: iced::Shadow::default(),
                 }),
             column![
-                text(name).size(12).color(colors::TEXT_PRIMARY),
-                text(hex).size(10).color(colors::TEXT_MUTED),
+                text(name).size(12).style(|_theme| text::Style {
+                    color: Some(colors::TEXT_PRIMARY),
+                }),
+                text(hex).size(10).style(|_theme| text::Style {
+                    color: Some(colors::TEXT_MUTED),
+                }),
             ]
             .spacing(1),
         ]

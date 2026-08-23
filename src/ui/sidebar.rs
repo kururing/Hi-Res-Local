@@ -27,10 +27,14 @@ pub fn render_sidebar(app: &App) -> Element<'_, Message> {
 
     // 2. Navigation Item Helper
     let nav_item =
-        |mode: ViewMode, icon: &'static str, label: &'static str, count: Option<usize>| {
+        |mode: ViewMode, prefix: &'static str, label: &'static str, count: Option<usize>| {
             let is_active = app.active_view == mode;
             let mut row_content = row![
-                text(icon).size(16),
+                text(prefix).size(13).color(if is_active {
+                    colors::ACCENT_PRIMARY
+                } else {
+                    colors::TEXT_MUTED
+                }),
                 text(label).size(14).color(if is_active {
                     colors::TEXT_PRIMARY
                 } else {
@@ -38,7 +42,7 @@ pub fn render_sidebar(app: &App) -> Element<'_, Message> {
                 }),
                 horizontal_space(),
             ]
-            .spacing(12)
+            .spacing(10)
             .align_y(Alignment::Center);
 
             if let Some(c) = count {
@@ -57,12 +61,12 @@ pub fn render_sidebar(app: &App) -> Element<'_, Message> {
         text("DISCOVER & LIBRARY")
             .size(11)
             .color(colors::TEXT_MUTED),
-        nav_item(ViewMode::Tracks, "🎵", "All Tracks", Some(app.tracks.len())),
-        nav_item(ViewMode::Albums, "💿", "Albums", None),
-        nav_item(ViewMode::Artists, "🎙️", "Artists", None),
+        nav_item(ViewMode::Tracks, "•", "All Tracks", Some(app.tracks.len())),
+        nav_item(ViewMode::Albums, "•", "Albums", None),
+        nav_item(ViewMode::Artists, "•", "Artists", None),
         nav_item(
             ViewMode::Playlists,
-            "📑",
+            "•",
             "Playlists",
             Some(app.playlists.len())
         ),
@@ -71,8 +75,8 @@ pub fn render_sidebar(app: &App) -> Element<'_, Message> {
 
     let playing_nav = column![
         text("PLAYBACK").size(11).color(colors::TEXT_MUTED),
-        nav_item(ViewMode::NowPlaying, "🎛️", "Now Playing", None),
-        nav_item(ViewMode::Settings, "⚙️", "Settings & Stats", None),
+        nav_item(ViewMode::NowPlaying, "▶", "Now Playing", None),
+        nav_item(ViewMode::Settings, "⚙", "Settings & Stats", None),
     ]
     .spacing(6);
 
@@ -111,9 +115,12 @@ pub fn render_sidebar(app: &App) -> Element<'_, Message> {
 
     // 5. Import Action Button
     let import_btn = button(
-        row![text("📁").size(15), text("Scan Music Folder").size(13),]
-            .spacing(8)
-            .align_y(Alignment::Center),
+        row![
+            text("+").size(16).color(colors::OLED_BLACK),
+            text("Scan Music Folder").size(13),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
     )
     .width(Length::Fill)
     .padding([10, 16])

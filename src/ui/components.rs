@@ -470,7 +470,7 @@ pub fn artwork_placeholder<'a>(title: &str, size: f32) -> Element<'a, Message> {
     let initial = title
         .chars()
         .next()
-        .unwrap_or('♪')
+        .unwrap_or('*')
         .to_uppercase()
         .to_string();
 
@@ -508,9 +508,9 @@ pub fn empty_state<'a>(
     action: Option<Element<'a, Message>>,
 ) -> Element<'a, Message> {
     let mut content = column![
-        text(icon.into()).size(48).color(colors::ACCENT_MUTED),
-        text(title.into()).size(22).color(colors::TEXT_PRIMARY),
-        text(description.into()).size(14).color(colors::TEXT_MUTED),
+        text(icon.into()).size(36).color(colors::ACCENT_MUTED),
+        text(title.into()).size(20).color(colors::TEXT_PRIMARY),
+        text(description.into()).size(13).color(colors::TEXT_MUTED),
     ]
     .spacing(12)
     .align_x(Alignment::Center);
@@ -544,7 +544,7 @@ pub fn scanning_banner<'a>(progress: &ScanProgress) -> Element<'a, Message> {
 
     let content = column![
         row![
-            text("⚡ Scanning Audio Library...")
+            text("[SCAN] Scanning Audio Library...")
                 .size(13)
                 .color(colors::ACCENT_PRIMARY),
             text(format!(

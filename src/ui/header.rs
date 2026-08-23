@@ -17,16 +17,13 @@ pub fn render_header(app: &App) -> Element<'_, Message> {
     // 1. Search Bar with Clear Button
     let search_box = container(
         row![
-            text("🔍").size(14).color(colors::TEXT_MUTED),
-            text_input(
-                "Search songs, artists, albums, genres...",
-                &app.search_query
-            )
-            .on_input(Message::SearchQueryChanged)
-            .size(13)
-            .padding([8, 10])
-            .style(search_input_style)
-            .width(Length::Fill),
+            text("Search:").size(12).color(colors::TEXT_MUTED),
+            text_input("Songs, artists, albums, genres...", &app.search_query)
+                .on_input(Message::SearchQueryChanged)
+                .size(13)
+                .padding([8, 10])
+                .style(search_input_style)
+                .width(Length::Fill),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -37,7 +34,7 @@ pub fn render_header(app: &App) -> Element<'_, Message> {
 
     if !app.search_query.is_empty() {
         let clear_btn = with_tooltip(
-            button(text("✕").size(12))
+            button(text("x").size(12))
                 .padding([6, 10])
                 .style(secondary_button_style)
                 .on_press(Message::SearchQueryChanged(String::new())),
@@ -49,9 +46,12 @@ pub fn render_header(app: &App) -> Element<'_, Message> {
     // 2. Import Music Button
     let import_btn = with_tooltip(
         button(
-            row![text("📁").size(14), text("Import Audio").size(13),]
-                .spacing(6)
-                .align_y(Alignment::Center),
+            row![
+                text("+").size(15).color(colors::OLED_BLACK),
+                text("Import Audio").size(13),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
         )
         .padding([8, 14])
         .style(primary_button_style)

@@ -17,13 +17,14 @@ pub fn render_tracks_view(app: &App) -> Element<'_, Message> {
     // Empty State Handling
     if filtered_tracks.is_empty() {
         if !app.search_query.is_empty() {
+            let msg = format!(
+                "No tracks in your library match the search filter \"{}\".",
+                app.search_query
+            );
             return empty_state(
-                "🔍",
+                "[?]",
                 "No Matching Tracks Found",
-                format!(
-                    "No tracks in your library match the search filter \"{}\".",
-                    app.search_query
-                ),
+                msg,
                 Some(
                     button(text("Clear Search Filter").size(13))
                         .padding([10, 18])
@@ -34,13 +35,13 @@ pub fn render_tracks_view(app: &App) -> Element<'_, Message> {
             );
         } else {
             return empty_state(
-                "🎵",
+                "[-]",
                 "Your Music Library is Empty",
                 "Scan a local folder on your computer to index your Hi-Fi music files into Nghe Nhac Pro Max.",
                 Some(
                     button(
                         row![
-                            text("📁").size(15),
+                            text("+").size(16).color(colors::OLED_BLACK),
                             text("Scan Music Folder").size(13),
                         ]
                         .spacing(8)
@@ -110,7 +111,7 @@ pub fn render_tracks_view(app: &App) -> Element<'_, Message> {
         let is_hires = quality_tag.contains("LOSSLESS") || quality_tag.contains("HI-RES");
 
         let number_or_icon = if is_playing {
-            text("🔊").size(13).color(colors::ACCENT_PRIMARY)
+            text("▶").size(12).color(colors::ACCENT_PRIMARY)
         } else {
             text(format!("{:02}", index + 1))
                 .size(12)
@@ -148,7 +149,7 @@ pub fn render_tracks_view(app: &App) -> Element<'_, Message> {
             .color(colors::TEXT_MUTED);
 
         let play_btn = with_tooltip(
-            button(text(if is_playing { "⏸" } else { "▶" }).size(12))
+            button(text(if is_playing { "||" } else { "▶" }).size(12))
                 .padding([6, 12])
                 .style(circular_play_button_style)
                 .on_press(Message::PlayTrack(track.clone())),
@@ -157,7 +158,7 @@ pub fn render_tracks_view(app: &App) -> Element<'_, Message> {
 
         let track_id = track.id;
         let select_btn = with_tooltip(
-            button(text("ℹ").size(12))
+            button(text("i").size(12))
                 .padding([6, 8])
                 .style(secondary_button_style)
                 .on_press(Message::SelectTrack(Some(track_id))),

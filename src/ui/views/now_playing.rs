@@ -23,7 +23,7 @@ pub fn render_now_playing_view(app: &App) -> Element<'_, Message> {
         Some(t) => t,
         None => {
             return empty_state(
-                "🎛️",
+                "[-]",
                 "No Track Currently Playing",
                 "Select any audio track from your library or playlists to view Hi-Fi playback details.",
                 Some(
@@ -102,7 +102,7 @@ pub fn render_now_playing_view(app: &App) -> Element<'_, Message> {
 
     // Buttons
     let shuffle_btn = with_tooltip(
-        button(text("🔀").size(18))
+        button(text("SHUF").size(12))
             .padding([8, 14])
             .style(icon_control_button_style(status.shuffle))
             .on_press(Message::ToggleShuffle),
@@ -110,7 +110,7 @@ pub fn render_now_playing_view(app: &App) -> Element<'_, Message> {
     );
 
     let prev_btn = with_tooltip(
-        button(text("⏮").size(20))
+        button(text("|<").size(14))
             .padding([8, 14])
             .style(icon_control_button_style(false))
             .on_press(Message::PreviousTrack),
@@ -118,12 +118,12 @@ pub fn render_now_playing_view(app: &App) -> Element<'_, Message> {
     );
 
     let play_icon = match status.state {
-        PlaybackState::Playing => "⏸",
-        PlaybackState::Loading => "⏳",
+        PlaybackState::Playing => "||",
+        PlaybackState::Loading => "...",
         _ => "▶",
     };
     let play_btn = with_tooltip(
-        button(text(play_icon).size(22))
+        button(text(play_icon).size(18))
             .width(Length::Fixed(56.0))
             .height(Length::Fixed(56.0))
             .style(circular_play_button_style)
@@ -132,20 +132,20 @@ pub fn render_now_playing_view(app: &App) -> Element<'_, Message> {
     );
 
     let next_btn = with_tooltip(
-        button(text("⏭").size(20))
+        button(text(">|").size(14))
             .padding([8, 14])
             .style(icon_control_button_style(false))
             .on_press(Message::NextTrack),
         "Next Track",
     );
 
-    let loop_icon = match status.loop_mode {
-        crate::app::LoopMode::Off => "🔁",
-        crate::app::LoopMode::Playlist => "🔁 All",
-        crate::app::LoopMode::Track => "🔂 1",
+    let loop_label = match status.loop_mode {
+        crate::app::LoopMode::Off => "REP",
+        crate::app::LoopMode::Playlist => "REP ALL",
+        crate::app::LoopMode::Track => "REP 1",
     };
     let repeat_btn = with_tooltip(
-        button(text(loop_icon).size(16))
+        button(text(loop_label).size(12))
             .padding([8, 14])
             .style(icon_control_button_style(
                 status.loop_mode != crate::app::LoopMode::Off,

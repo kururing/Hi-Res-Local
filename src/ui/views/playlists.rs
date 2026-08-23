@@ -17,9 +17,12 @@ pub fn render_playlists_view(app: &App) -> Element<'_, Message> {
     // Top bar with New Playlist creation action
     let create_btn = with_tooltip(
         button(
-            row![text("➕").size(13), text("New Playlist").size(13),]
-                .spacing(6)
-                .align_y(Alignment::Center),
+            row![
+                text("+").size(16).color(colors::OLED_BLACK),
+                text("New Playlist").size(13),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
         )
         .padding([8, 14])
         .style(primary_button_style)
@@ -43,7 +46,7 @@ pub fn render_playlists_view(app: &App) -> Element<'_, Message> {
                 top_bar,
                 vertical_space().height(16),
                 empty_state(
-                    "📑",
+                    "[-]",
                     "No Playlists Yet",
                     "Organize your Hi-Fi music into custom playlists for any vibe or genre.",
                     Some(
@@ -120,7 +123,7 @@ fn render_playlists_list<'a>(app: &'a App) -> Element<'a, Message> {
         );
 
         let delete_btn = with_tooltip(
-            button(text("🗑").size(12))
+            button(text("Delete").size(11))
                 .padding([6, 10])
                 .style(danger_button_style)
                 .on_press(Message::DeletePlaylist(pl_id)),
@@ -249,7 +252,7 @@ fn render_playlist_detail<'a>(
 
     if playlist_tracks.is_empty() {
         tracks_column = tracks_column.push(empty_state(
-            "🎵",
+            "[-]",
             "This Playlist is Empty",
             "Add tracks to this playlist from the All Tracks view or scan your library.",
             None,
@@ -266,7 +269,7 @@ fn render_playlist_detail<'a>(
             );
 
             let remove_btn = with_tooltip(
-                button(text("✕").size(12))
+                button(text("x").size(12))
                     .padding([6, 8])
                     .style(danger_button_style)
                     .on_press(Message::RemoveTrackFromPlaylist {
