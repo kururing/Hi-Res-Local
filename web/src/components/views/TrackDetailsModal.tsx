@@ -110,14 +110,15 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
         <div className="flex flex-col gap-1.5 p-3 rounded-xl bg-oled-base/50 border border-brand-border/60">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold text-brand-muted uppercase flex items-center gap-1.5">
-              <HardDrive className="w-3.5 h-3.5" />
+              <HardDrive className="w-3.5 h-3.5" aria-hidden="true" />
               {t('detail_path', settings.language)}
             </span>
             <button
               onClick={handleCopy}
-              className="text-xs text-brand-accent hover:underline flex items-center gap-1 focus-visible:outline-none"
+              className="min-h-[44px] px-2 text-xs text-brand-accent hover:underline flex items-center gap-1 focus-visible:outline-none"
+              aria-label="Copy track file path"
             >
-              <Copy className="w-3 h-3" />
+              <Copy className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Copy</span>
             </button>
           </div>

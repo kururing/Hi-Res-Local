@@ -136,8 +136,10 @@ export const NowPlayingExpanded: React.FC = () => {
               onClick={() => toggleFavoriteTrack(track.id)}
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-oled-card border border-brand-border text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
               aria-label={isFav ? 'Remove favorite' : 'Add favorite'}
+              aria-pressed={isFav}
             >
               <Heart
+                aria-hidden="true"
                 className={`w-5 h-5 ${
                   isFav ? 'text-rose-500 fill-rose-500' : 'text-brand-muted'
                 }`}
@@ -150,7 +152,7 @@ export const NowPlayingExpanded: React.FC = () => {
         <div className="lg:col-span-7 flex flex-col h-full max-h-[550px] bg-oled-card/60 border border-brand-border rounded-2xl p-6 backdrop-blur-md relative overflow-hidden">
           <div className="flex items-center justify-between pb-3 border-b border-brand-border/40 mb-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-brand-foreground font-display">
-              <FileText className="w-4 h-4 text-brand-accent" />
+              <FileText className="w-4 h-4 text-brand-accent" aria-hidden="true" />
               <span>{t('lyrics_title', settings.language)}</span>
             </div>
             {parsedLyrics?.is_synced && (
@@ -183,7 +185,7 @@ export const NowPlayingExpanded: React.FC = () => {
               })
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-brand-muted gap-2">
-                <FileText className="w-10 h-10 stroke-1" />
+                <FileText className="w-10 h-10 stroke-1" aria-hidden="true" />
                 <p className="text-sm">{t('lyrics_not_available', settings.language)}</p>
               </div>
             )}
@@ -224,8 +226,9 @@ export const NowPlayingExpanded: React.FC = () => {
                 status.shuffle ? 'text-brand-accent' : 'text-brand-muted hover:text-white'
               }`}
               aria-label="Toggle shuffle"
+              aria-pressed={status.shuffle}
             >
-              <Shuffle className="w-5 h-5" />
+              <Shuffle className="w-5 h-5" aria-hidden="true" />
             </button>
 
             <button
@@ -233,18 +236,18 @@ export const NowPlayingExpanded: React.FC = () => {
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full text-white hover:text-brand-accent transition-colors focus-visible:outline-none"
               aria-label="Previous track"
             >
-              <SkipBack className="w-6 h-6 fill-current" />
+              <SkipBack className="w-6 h-6 fill-current" aria-hidden="true" />
             </button>
 
             <button
               onClick={togglePlayPause}
-              className="w-14 h-14 rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-105 active:scale-95 transition-all focus-visible:outline-none"
+              className="w-14 h-14 min-h-[44px] min-w-[44px] rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-105 active:scale-95 transition-all focus-visible:outline-none"
               aria-label="Play or Pause"
             >
               {status.state === 'playing' ? (
-                <Pause className="w-7 h-7 fill-oled-base" />
+                <Pause className="w-7 h-7 fill-oled-base" aria-hidden="true" />
               ) : (
-                <Play className="w-7 h-7 fill-oled-base ml-1" />
+                <Play className="w-7 h-7 fill-oled-base ml-1" aria-hidden="true" />
               )}
             </button>
 
@@ -253,7 +256,7 @@ export const NowPlayingExpanded: React.FC = () => {
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full text-white hover:text-brand-accent transition-colors focus-visible:outline-none"
               aria-label="Next track"
             >
-              <SkipForward className="w-6 h-6 fill-current" />
+              <SkipForward className="w-6 h-6 fill-current" aria-hidden="true" />
             </button>
 
             <button
@@ -262,8 +265,13 @@ export const NowPlayingExpanded: React.FC = () => {
                 status.loop_mode !== 'off' ? 'text-brand-accent' : 'text-brand-muted hover:text-white'
               }`}
               aria-label="Toggle repeat"
+              aria-pressed={status.loop_mode !== 'off'}
             >
-              {status.loop_mode === 'track' ? <Repeat1 className="w-5 h-5" /> : <Repeat className="w-5 h-5" />}
+              {status.loop_mode === 'track' ? (
+                <Repeat1 className="w-5 h-5" aria-hidden="true" />
+              ) : (
+                <Repeat className="w-5 h-5" aria-hidden="true" />
+              )}
             </button>
           </div>
 
@@ -273,11 +281,12 @@ export const NowPlayingExpanded: React.FC = () => {
               onClick={toggleMute}
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-white focus-visible:outline-none"
               aria-label="Mute toggle"
+              aria-pressed={status.is_muted}
             >
               {status.is_muted || status.volume === 0 ? (
-                <VolumeX className="w-5 h-5 text-rose-400" />
+                <VolumeX className="w-5 h-5 text-rose-400" aria-hidden="true" />
               ) : (
-                <Volume2 className="w-5 h-5" />
+                <Volume2 className="w-5 h-5" aria-hidden="true" />
               )}
             </button>
             <div className="flex-1">

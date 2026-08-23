@@ -108,25 +108,29 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           disabled={!canGoBack}
           onClick={onGoBack}
-          className="w-8 h-8 rounded-lg bg-oled-card border border-brand-border text-brand-muted hover:text-white disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center transition-colors focus-visible:outline-none"
+          className="min-w-[44px] min-h-[44px] rounded-lg bg-oled-card border border-brand-border text-brand-muted hover:text-white disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center transition-colors focus-visible:outline-none"
           aria-label="Go back"
         >
-          <ChevronLeft className="w-4 h-4" />
+          <ChevronLeft className="w-4 h-4" aria-hidden="true" />
         </button>
         <button
           disabled={!canGoForward}
           onClick={onGoForward}
-          className="w-8 h-8 rounded-lg bg-oled-card border border-brand-border text-brand-muted hover:text-white disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center transition-colors focus-visible:outline-none"
+          className="min-w-[44px] min-h-[44px] rounded-lg bg-oled-card border border-brand-border text-brand-muted hover:text-white disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center transition-colors focus-visible:outline-none"
           aria-label="Go forward"
         >
-          <ChevronRight className="w-4 h-4" />
+          <ChevronRight className="w-4 h-4" aria-hidden="true" />
         </button>
       </div>
 
       {/* Global Fuzzy Search Bar */}
-      <div ref={searchContainerRef} className="relative flex-1 max-w-xl">
+      <div
+        ref={searchContainerRef}
+        className="relative flex-1 max-w-xl"
+        aria-expanded={isDropdownOpen && Boolean(debouncedQuery.trim())}
+      >
         <div className="relative flex items-center">
-          <Search className="absolute left-3.5 w-4 h-4 text-brand-muted pointer-events-none" />
+          <Search className="absolute left-3.5 w-4 h-4 text-brand-muted pointer-events-none" aria-hidden="true" />
           <input
             ref={searchInputRef}
             type="text"
@@ -137,7 +141,7 @@ export const Header: React.FC<HeaderProps> = ({
             }}
             onFocus={() => setIsDropdownOpen(true)}
             placeholder={t('search_placeholder', settings.language)}
-            className="w-full h-10 bg-oled-card border border-brand-border text-brand-foreground placeholder-brand-muted text-xs sm:text-sm rounded-xl pl-10 pr-10 focus:border-brand-secondary focus:bg-oled-hover focus-visible:outline-none transition-all shadow-inner"
+            className="w-full h-11 bg-oled-card border border-brand-border text-brand-foreground placeholder-brand-muted text-xs sm:text-sm rounded-xl pl-10 pr-11 focus:border-brand-secondary focus:bg-oled-hover focus-visible:outline-none transition-all shadow-inner"
           />
           {searchQuery && (
             <button
@@ -145,9 +149,10 @@ export const Header: React.FC<HeaderProps> = ({
                 setSearchQuery('');
                 setIsDropdownOpen(false);
               }}
-              className="absolute right-3 p-1 text-brand-muted hover:text-brand-foreground rounded focus-visible:outline-none"
+              className="absolute right-1 min-w-[44px] min-h-[44px] flex items-center justify-center text-brand-muted hover:text-brand-foreground rounded-lg focus-visible:outline-none"
+              aria-label="Clear search query"
             >
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           )}
         </div>
@@ -178,7 +183,7 @@ export const Header: React.FC<HeaderProps> = ({
                           className="flex items-center justify-between p-2 rounded-lg hover:bg-oled-hover cursor-pointer transition-colors"
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
-                            <Music className="w-4 h-4 text-brand-accent shrink-0" />
+                            <Music className="w-4 h-4 text-brand-accent shrink-0" aria-hidden="true" />
                             <div className="flex flex-col min-w-0">
                               <span className="text-xs font-medium text-brand-foreground truncate">
                                 {tr.title}
@@ -210,7 +215,7 @@ export const Header: React.FC<HeaderProps> = ({
                           }}
                           className="flex items-center gap-2.5 p-2 rounded-lg hover:bg-oled-hover cursor-pointer transition-colors"
                         >
-                          <Disc className="w-4 h-4 text-indigo-400 shrink-0" />
+                          <Disc className="w-4 h-4 text-indigo-400 shrink-0" aria-hidden="true" />
                           <div className="flex flex-col min-w-0">
                             <span className="text-xs font-medium text-brand-foreground truncate">
                               {al.name}
@@ -241,7 +246,7 @@ export const Header: React.FC<HeaderProps> = ({
                           }}
                           className="flex items-center gap-2.5 p-2 rounded-lg hover:bg-oled-hover cursor-pointer transition-colors"
                         >
-                          <User className="w-4 h-4 text-brand-muted shrink-0" />
+                          <User className="w-4 h-4 text-brand-muted shrink-0" aria-hidden="true" />
                           <span className="text-xs font-medium text-brand-foreground truncate">
                             {ar.name}
                           </span>
@@ -261,7 +266,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Scanning progress badge */}
         {scanProgress && scanProgress.is_scanning && (
           <div className="flex items-center gap-2 px-3 py-1 bg-brand-primary/60 border border-brand-border rounded-full text-xs text-brand-accent animate-pulse">
-            <FolderSync className="w-3.5 h-3.5 animate-spin" />
+            <FolderSync className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
             <span className="hidden md:inline">
               Scanning ({scanProgress.scanned_files}/{scanProgress.total_files})
             </span>
@@ -271,21 +276,21 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Rescan Button */}
         <button
           onClick={() => scanDirectory()}
-          className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg bg-oled-card border border-brand-border text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
+          className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-oled-card border border-brand-border text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
           title={t('settings_btn_rescan', settings.language)}
           aria-label={t('settings_btn_rescan', settings.language)}
         >
-          <FolderSync className="w-4 h-4" />
+          <FolderSync className="w-4 h-4" aria-hidden="true" />
         </button>
 
         {/* Language Switcher */}
         <button
           onClick={() => setLanguage(settings.language === 'vi' ? 'en' : 'vi')}
-          className="min-h-[40px] px-3 flex items-center gap-1.5 rounded-lg bg-oled-card border border-brand-border text-xs font-semibold text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
+          className="min-h-[44px] px-3.5 flex items-center gap-1.5 rounded-lg bg-oled-card border border-brand-border text-xs font-semibold text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
           title="Toggle Language (VI / EN)"
           aria-label="Toggle language"
         >
-          <Globe className="w-3.5 h-3.5" />
+          <Globe className="w-3.5 h-3.5" aria-hidden="true" />
           <span>{settings.language.toUpperCase()}</span>
         </button>
 
@@ -295,11 +300,16 @@ export const Header: React.FC<HeaderProps> = ({
             const nextTheme = settings.theme === 'oled' ? 'midnight' : settings.theme === 'midnight' ? 'slate' : settings.theme === 'slate' ? 'light' : 'oled';
             setTheme(nextTheme);
           }}
-          className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg bg-oled-card border border-brand-border text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
+          className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-oled-card border border-brand-border text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
           title={`Theme: ${settings.theme}`}
           aria-label="Toggle theme"
+          aria-pressed={settings.theme === 'light'}
         >
-          {settings.theme === 'light' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
+          {settings.theme === 'light' ? (
+            <Sun className="w-4 h-4 text-amber-400" aria-hidden="true" />
+          ) : (
+            <Moon className="w-4 h-4" aria-hidden="true" />
+          )}
         </button>
       </div>
     </header>

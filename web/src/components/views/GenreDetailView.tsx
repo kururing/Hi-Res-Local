@@ -78,7 +78,7 @@ export const GenreDetailView: React.FC<GenreDetailViewProps> = ({
 
       {/* Track List */}
       <div className="rounded-xl border border-brand-border bg-oled-card/60 overflow-hidden divide-y divide-brand-border/30">
-        {genreTracks.map((tr, idx) => {
+        {genreTracks.map(tr => {
           const isPlaying = status.current_track?.id === tr.id;
           return (
             <div
@@ -91,12 +91,13 @@ export const GenreDetailView: React.FC<GenreDetailViewProps> = ({
               <div className="flex items-center gap-3 min-w-0 pr-2">
                 <button
                   onClick={() => playTrack(tr, genreTracks)}
-                  className="w-7 h-7 rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all"
+                  className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all focus-visible:outline-none"
+                  aria-label={`Play ${tr.title}`}
                 >
                   {isPlaying ? (
                     <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
                   ) : (
-                    <span className="font-mono text-brand-muted">{idx + 1}</span>
+                    <Play className="w-3.5 h-3.5 fill-current ml-0.5" aria-hidden="true" />
                   )}
                 </button>
                 <div className="flex flex-col min-w-0">

@@ -300,7 +300,7 @@ export const MOCK_TRACKS: Track[] = [
 export const MOCK_PLAYLISTS: Playlist[] = [
   {
     id: 'pl-1',
-    name: '🌟 Masterpiece Hi-Res Audio',
+    name: 'Masterpiece Hi-Res Audio',
     description: 'Bộ sưu tập nhạc chất lượng cao FLAC 24-bit/96kHz & 192kHz',
     track_ids: ['track-1', 'track-3', 'track-5', 'track-6', 'track-8', 'track-12'],
     created_at: '2025-02-01T10:00:00Z',
@@ -309,7 +309,7 @@ export const MOCK_PLAYLISTS: Playlist[] = [
   },
   {
     id: 'pl-2',
-    name: '🇻🇳 Giai Điệu Việt Nam Tuyển Chọn',
+    name: 'Giai Điệu Việt Nam Tuyển Chọn',
     description: 'Những ca khúc V-Pop và Indie được yêu thích nhất',
     track_ids: ['track-1', 'track-2', 'track-10', 'track-11'],
     created_at: '2025-02-05T14:00:00Z',
@@ -318,7 +318,7 @@ export const MOCK_PLAYLISTS: Playlist[] = [
   },
   {
     id: 'pl-smart-1',
-    name: '⚡ Smart: 5-Star Favorites',
+    name: 'Smart: 5-Star Favorites',
     description: 'Tự động tổng hợp bài hát đánh giá 5 sao',
     track_ids: ['track-1', 'track-3', 'track-5', 'track-6', 'track-8', 'track-9', 'track-11', 'track-12'],
     created_at: '2025-02-01T00:00:00Z',
@@ -328,7 +328,7 @@ export const MOCK_PLAYLISTS: Playlist[] = [
   },
   {
     id: 'pl-smart-2',
-    name: '📻 Smart: Classic & Acoustic Rock',
+    name: 'Smart: Classic & Acoustic Rock',
     description: 'Tự động lọc theo thể loại Rock & Acoustic',
     track_ids: ['track-3', 'track-4', 'track-5'],
     created_at: '2025-02-01T00:00:00Z',

@@ -114,8 +114,10 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
             onClick={() => toggleFavoriteTrack(track.id)}
             className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
             aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
+            aria-pressed={isFav}
           >
             <Heart
+              aria-hidden="true"
               className={`w-5 h-5 transition-transform active:scale-125 ${
                 isFav ? 'text-rose-500 fill-rose-500' : 'text-brand-muted hover:text-rose-400'
               }`}
@@ -137,8 +139,9 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
                 : 'text-brand-muted hover:text-brand-foreground'
             }`}
             aria-label={status.shuffle ? t('player_shuffle_off', settings.language) : t('player_shuffle_on', settings.language)}
+            aria-pressed={status.shuffle}
           >
-            <Shuffle className="w-4 h-4" />
+            <Shuffle className="w-4 h-4" aria-hidden="true" />
           </button>
 
           {/* Previous */}
@@ -147,19 +150,19 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
             className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full text-brand-foreground hover:bg-oled-hover hover:text-brand-accent transition-colors active:scale-95 focus-visible:outline-none"
             aria-label={t('player_prev', settings.language)}
           >
-            <SkipBack className="w-5 h-5 fill-current" />
+            <SkipBack className="w-5 h-5 fill-current" aria-hidden="true" />
           </button>
 
           {/* Play / Pause */}
           <button
             onClick={togglePlayPause}
-            className="w-11 h-11 rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-105 active:scale-95 transition-all focus-visible:outline-none"
+            className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-105 active:scale-95 transition-all focus-visible:outline-none"
             aria-label={status.state === 'playing' ? t('player_pause', settings.language) : t('player_play', settings.language)}
           >
             {status.state === 'playing' ? (
-              <Pause className="w-5 h-5 fill-oled-base" />
+              <Pause className="w-5 h-5 fill-oled-base" aria-hidden="true" />
             ) : (
-              <Play className="w-5 h-5 fill-oled-base ml-0.5" />
+              <Play className="w-5 h-5 fill-oled-base ml-0.5" aria-hidden="true" />
             )}
           </button>
 
@@ -169,7 +172,7 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
             className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full text-brand-foreground hover:bg-oled-hover hover:text-brand-accent transition-colors active:scale-95 focus-visible:outline-none"
             aria-label={t('player_next', settings.language)}
           >
-            <SkipForward className="w-5 h-5 fill-current" />
+            <SkipForward className="w-5 h-5 fill-current" aria-hidden="true" />
           </button>
 
           {/* Repeat */}
@@ -181,11 +184,12 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
                 : 'text-brand-muted hover:text-brand-foreground'
             }`}
             aria-label={`Repeat mode: ${status.loop_mode}`}
+            aria-pressed={status.loop_mode !== 'off'}
           >
             {status.loop_mode === 'track' ? (
-              <Repeat1 className="w-4 h-4" />
+              <Repeat1 className="w-4 h-4" aria-hidden="true" />
             ) : (
-              <Repeat className="w-4 h-4" />
+              <Repeat className="w-4 h-4" aria-hidden="true" />
             )}
           </button>
         </div>
@@ -220,7 +224,7 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
             aria-label={t('player_lyrics', settings.language)}
             title={t('player_lyrics', settings.language)}
           >
-            <FileText className="w-4 h-4" />
+            <FileText className="w-4 h-4" aria-hidden="true" />
           </button>
         )}
 
@@ -234,8 +238,9 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
           }`}
           aria-label={t('player_equalizer', settings.language)}
           title={t('player_equalizer', settings.language)}
+          aria-expanded={isEqualizerOpen}
         >
-          <Sliders className="w-4 h-4" />
+          <Sliders className="w-4 h-4" aria-hidden="true" />
         </button>
 
         {/* Queue Drawer Button */}
@@ -248,8 +253,9 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
           }`}
           aria-label={t('player_queue', settings.language)}
           title={t('player_queue', settings.language)}
+          aria-expanded={isQueueDrawerOpen}
         >
-          <ListMusic className="w-4 h-4" />
+          <ListMusic className="w-4 h-4" aria-hidden="true" />
           {queue.length > 0 && (
             <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-brand-accent" />
           )}
@@ -260,11 +266,12 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
           onClick={toggleMute}
           className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
           aria-label={status.is_muted ? t('player_unmute', settings.language) : t('player_mute', settings.language)}
+          aria-pressed={status.is_muted}
         >
           {status.is_muted || status.volume === 0 ? (
-            <VolumeX className="w-4 h-4 text-rose-400" />
+            <VolumeX className="w-4 h-4 text-rose-400" aria-hidden="true" />
           ) : (
-            <Volume2 className="w-4 h-4" />
+            <Volume2 className="w-4 h-4" aria-hidden="true" />
           )}
         </button>
 

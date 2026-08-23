@@ -74,33 +74,36 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
       <div className="flex items-center gap-2 border-b border-brand-border/60 pb-3">
         <button
           onClick={() => setActiveTab('tracks')}
-          className={`px-4 py-2 rounded-lg text-xs font-semibold transition-colors focus-visible:outline-none ${
+          className={`min-h-[44px] px-4 py-2 rounded-lg text-xs font-semibold transition-colors focus-visible:outline-none ${
             activeTab === 'tracks'
               ? 'bg-brand-secondary text-white shadow-sm'
               : 'text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
           }`}
+          aria-pressed={activeTab === 'tracks'}
         >
           {t('tab_favorite_tracks', settings.language, { count: favTracks.length })}
         </button>
 
         <button
           onClick={() => setActiveTab('albums')}
-          className={`px-4 py-2 rounded-lg text-xs font-semibold transition-colors focus-visible:outline-none ${
+          className={`min-h-[44px] px-4 py-2 rounded-lg text-xs font-semibold transition-colors focus-visible:outline-none ${
             activeTab === 'albums'
               ? 'bg-brand-secondary text-white shadow-sm'
               : 'text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
           }`}
+          aria-pressed={activeTab === 'albums'}
         >
           {t('tab_favorite_albums', settings.language, { count: favAlbums.length })}
         </button>
 
         <button
           onClick={() => setActiveTab('artists')}
-          className={`px-4 py-2 rounded-lg text-xs font-semibold transition-colors focus-visible:outline-none ${
+          className={`min-h-[44px] px-4 py-2 rounded-lg text-xs font-semibold transition-colors focus-visible:outline-none ${
             activeTab === 'artists'
               ? 'bg-brand-secondary text-white shadow-sm'
               : 'text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
           }`}
+          aria-pressed={activeTab === 'artists'}
         >
           {t('tab_favorite_artists', settings.language, { count: favArtists.length })}
         </button>
@@ -128,7 +131,8 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                     <div className="flex items-center gap-3 min-w-0 pr-2">
                       <button
                         onClick={() => playTrack(tr, favTracks)}
-                        className="w-7 h-7 rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all"
+                        className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all focus-visible:outline-none"
+                        aria-label={`Play ${tr.title}`}
                       >
                         {isPlaying ? (
                           <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
@@ -144,13 +148,15 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                       <Badge track={tr} />
                       <button
                         onClick={() => toggleFavoriteTrack(tr.id)}
-                        className="p-1 rounded text-rose-500 hover:text-rose-400 focus-visible:outline-none"
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-rose-500 hover:text-rose-400 focus-visible:outline-none"
+                        aria-label="Remove from favorites"
+                        aria-pressed={true}
                       >
-                        <Heart className="w-4 h-4 fill-current" />
+                        <Heart className="w-4 h-4 fill-current" aria-hidden="true" />
                       </button>
                     </div>
                   </div>

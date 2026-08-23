@@ -211,14 +211,15 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                 <div className="col-span-1 text-center font-mono flex items-center justify-center">
                   <button
                     onClick={() => playTrack(tr, playlistTracks)}
-                    className="w-7 h-7 rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base transition-all"
+                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base transition-all focus-visible:outline-none"
+                    aria-label={`Play ${tr.title}`}
                   >
                     {isPlaying ? (
                       <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
                     ) : (
                       <>
                         <span className="group-hover:hidden text-brand-muted">{idx + 1}</span>
-                        <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" />
+                        <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" aria-hidden="true" />
                       </>
                     )}
                   </button>
@@ -238,7 +239,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                   {tr.album}
                 </div>
 
-                <div className="col-span-6 sm:col-span-3 flex items-center justify-end gap-1.5">
+                <div className="col-span-6 sm:col-span-3 flex items-center justify-end gap-1">
                   {!playlist.is_smart && (
                     <>
                       <button
@@ -247,10 +248,10 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                           e.stopPropagation();
                           reorderPlaylist(playlist.id, idx, idx - 1);
                         }}
-                        className="p-1 rounded text-brand-muted hover:bg-white/10 disabled:opacity-20 transition-opacity"
-                        aria-label="Move track up"
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:bg-white/10 disabled:opacity-20 transition-opacity focus-visible:outline-none"
+                        aria-label={`Move ${tr.title} up`}
                       >
-                        <ArrowUp className="w-3.5 h-3.5" />
+                        <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
                       </button>
                       <button
                         disabled={idx === playlistTracks.length - 1}
@@ -258,20 +259,20 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                           e.stopPropagation();
                           reorderPlaylist(playlist.id, idx, idx + 1);
                         }}
-                        className="p-1 rounded text-brand-muted hover:bg-white/10 disabled:opacity-20 transition-opacity"
-                        aria-label="Move track down"
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:bg-white/10 disabled:opacity-20 transition-opacity focus-visible:outline-none"
+                        aria-label={`Move ${tr.title} down`}
                       >
-                        <ArrowDown className="w-3.5 h-3.5" />
+                        <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
                       </button>
                       <button
                         onClick={e => {
                           e.stopPropagation();
                           removeTrackFromPlaylist(playlist.id, tr.id);
                         }}
-                        className="p-1 rounded text-brand-muted hover:text-rose-400 hover:bg-white/10 transition-colors"
-                        aria-label="Remove from playlist"
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-rose-400 hover:bg-white/10 transition-colors focus-visible:outline-none"
+                        aria-label={`Remove ${tr.title} from playlist`}
                       >
-                        <X className="w-3.5 h-3.5" />
+                        <X className="w-3.5 h-3.5" aria-hidden="true" />
                       </button>
                     </>
                   )}
@@ -281,9 +282,12 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                       e.stopPropagation();
                       toggleFavoriteTrack(tr.id);
                     }}
-                    className="p-1 rounded text-brand-muted hover:text-rose-400"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-rose-400 focus-visible:outline-none"
+                    aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                    aria-pressed={isFav}
                   >
                     <Heart
+                      aria-hidden="true"
                       className={`w-4 h-4 ${
                         isFav ? 'text-rose-500 fill-rose-500' : 'text-brand-muted'
                       }`}

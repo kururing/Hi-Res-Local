@@ -127,6 +127,14 @@ export const AppShell: React.FC = () => {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-oled-base text-brand-foreground font-sans selection:bg-brand-secondary selection:text-white">
+      {/* Skip to Main Content Link for Accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2.5 focus:bg-brand-accent focus:text-oled-base focus:font-bold focus:rounded-lg focus:shadow-glow-accent focus:outline-none"
+      >
+        Skip to main content
+      </a>
+
       {/* Left Sidebar */}
       <Sidebar currentView={currentView} onNavigate={navigate} />
 
@@ -143,7 +151,7 @@ export const AppShell: React.FC = () => {
         />
 
         {/* Scrollable View Content */}
-        <main className="flex-1 overflow-y-auto pb-28">
+        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto pb-28 focus:outline-none">
           {renderCurrentView()}
         </main>
 

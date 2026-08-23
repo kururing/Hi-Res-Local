@@ -125,9 +125,10 @@ export const SettingsView: React.FC = () => {
                   <span className="font-mono text-brand-foreground truncate pr-4">{folder}</span>
                   <button
                     onClick={() => removeMusicFolder(folder)}
-                    className="p-1 rounded text-brand-muted hover:text-rose-400 focus-visible:outline-none"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-rose-400 focus-visible:outline-none"
+                    aria-label={`Remove folder ${folder}`}
                   >
-                    <Trash2 className="w-4 h-4" />
+                    <Trash2 className="w-4 h-4" aria-hidden="true" />
                   </button>
                 </div>
               ))}

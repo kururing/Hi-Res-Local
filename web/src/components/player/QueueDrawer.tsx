@@ -52,29 +52,29 @@ export const QueueDrawer: React.FC = () => {
             <>
               <button
                 onClick={handleSaveQueueAsPlaylist}
-                className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-accent hover:bg-oled-hover transition-colors focus-visible:outline-none"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-accent hover:bg-oled-hover transition-colors focus-visible:outline-none"
                 title={t('queue_save_as_playlist', settings.language)}
                 aria-label={t('queue_save_as_playlist', settings.language)}
               >
-                <Save className="w-4 h-4" />
+                <Save className="w-4 h-4" aria-hidden="true" />
               </button>
               <button
                 onClick={clearQueue}
-                className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg text-brand-muted hover:text-rose-400 hover:bg-oled-hover transition-colors focus-visible:outline-none"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-rose-400 hover:bg-oled-hover transition-colors focus-visible:outline-none"
                 title={t('queue_clear', settings.language)}
                 aria-label={t('queue_clear', settings.language)}
               >
-                <Trash2 className="w-4 h-4" />
+                <Trash2 className="w-4 h-4" aria-hidden="true" />
               </button>
             </>
           )}
 
           <button
             onClick={() => setIsQueueDrawerOpen(false)}
-            className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
             aria-label="Close queue drawer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -83,7 +83,7 @@ export const QueueDrawer: React.FC = () => {
       <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
         {queue.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-brand-muted gap-2 py-12">
-            <Music2 className="w-10 h-10 stroke-1" />
+            <Music2 className="w-10 h-10 stroke-1" aria-hidden="true" />
             <p className="text-sm">{t('queue_empty', settings.language)}</p>
           </div>
         ) : (
@@ -129,29 +129,29 @@ export const QueueDrawer: React.FC = () => {
                   <button
                     disabled={idx === 0}
                     onClick={() => reorderQueue(idx, idx - 1)}
-                    className="p-1.5 rounded hover:bg-white/10 text-brand-muted disabled:opacity-20 transition-opacity focus-visible:outline-none"
-                    aria-label="Move up in queue"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 text-brand-muted disabled:opacity-20 transition-opacity focus-visible:outline-none"
+                    aria-label={`Move ${track.title} up in queue`}
                   >
-                    <ArrowUp className="w-3.5 h-3.5" />
+                    <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
 
                   {/* Move Down */}
                   <button
                     disabled={idx === queue.length - 1}
                     onClick={() => reorderQueue(idx, idx + 1)}
-                    className="p-1.5 rounded hover:bg-white/10 text-brand-muted disabled:opacity-20 transition-opacity focus-visible:outline-none"
-                    aria-label="Move down in queue"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 text-brand-muted disabled:opacity-20 transition-opacity focus-visible:outline-none"
+                    aria-label={`Move ${track.title} down in queue`}
                   >
-                    <ArrowDown className="w-3.5 h-3.5" />
+                    <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
 
                   {/* Remove */}
                   <button
                     onClick={() => removeFromQueue(idx)}
-                    className="p-1.5 rounded hover:bg-rose-950/50 text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
-                    aria-label="Remove from queue"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-rose-950/50 text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
+                    aria-label={`Remove ${track.title} from queue`}
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
                 </div>
               </div>

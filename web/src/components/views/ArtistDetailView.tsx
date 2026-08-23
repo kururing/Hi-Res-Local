@@ -85,8 +85,10 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
               onClick={() => toggleFavoriteArtist(artist.name)}
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-oled-card border border-brand-border text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
               aria-label="Toggle favorite artist"
+              aria-pressed={isFav}
             >
               <Heart
+                aria-hidden="true"
                 className={`w-5 h-5 ${
                   isFav ? 'text-rose-500 fill-rose-500' : 'text-brand-muted'
                 }`}
@@ -116,7 +118,8 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
                 <div className="flex items-center gap-3 min-w-0 pr-2">
                   <button
                     onClick={() => playTrack(tr, artistTracks)}
-                    className="w-7 h-7 rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all"
+                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all focus-visible:outline-none"
+                    aria-label={`Play ${tr.title}`}
                   >
                     {isPlaying ? (
                       <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
@@ -154,16 +157,17 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
               className="group p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col shadow-card-elevated"
             >
               <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-indigo-950 to-slate-900 border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
-                <Disc className="w-14 h-14 text-indigo-400/40 group-hover:rotate-90 transition-transform duration-700" />
+                <Disc className="w-14 h-14 text-indigo-400/40 group-hover:rotate-90 transition-transform duration-700" aria-hidden="true" />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <button
                     onClick={e => {
                       e.stopPropagation();
-                      if (album.tracks.length > 0) playQueue(album.tracks, 0);
+                      playQueue(album.tracks, 0);
                     }}
-                    className="w-10 h-10 rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-110 active:scale-95 transition-all"
+                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-105 transition-transform focus-visible:outline-none"
+                    aria-label={`Play ${album.name}`}
                   >
-                    <Play className="w-4 h-4 fill-current ml-0.5" />
+                    <Play className="w-5 h-5 fill-oled-base ml-0.5" aria-hidden="true" />
                   </button>
                 </div>
               </div>

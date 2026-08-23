@@ -42,7 +42,7 @@ export const Button: React.FC<ButtonProps> = ({
       disabled={disabled}
       {...props}
     >
-      {icon && <span className="shrink-0 flex items-center">{icon}</span>}
+      {icon && <span className="shrink-0 flex items-center" aria-hidden="true">{icon}</span>}
       {children}
     </button>
   );

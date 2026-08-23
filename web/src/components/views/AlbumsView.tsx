@@ -39,16 +39,17 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({ onNavigate }) => {
             >
               {/* Artwork Box */}
               <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-indigo-950 to-slate-900 border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
-                <Disc className="w-16 h-16 text-indigo-400/40 group-hover:rotate-90 transition-transform duration-700" />
+                <Disc className="w-16 h-16 text-indigo-400/40 group-hover:rotate-90 transition-transform duration-700" aria-hidden="true" />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <button
                     onClick={e => {
                       e.stopPropagation();
                       if (album.tracks.length > 0) playQueue(album.tracks, 0);
                     }}
-                    className="w-11 h-11 rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-110 active:scale-95 transition-all"
+                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-105 active:scale-95 transition-all focus-visible:outline-none"
+                    aria-label={`Play ${album.name}`}
                   >
-                    <Play className="w-5 h-5 fill-current ml-0.5" />
+                    <Play className="w-5 h-5 fill-current ml-0.5" aria-hidden="true" />
                   </button>
                 </div>
               </div>

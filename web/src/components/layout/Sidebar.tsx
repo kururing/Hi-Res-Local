@@ -61,14 +61,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
   };
 
   const navItems = [
-    { id: 'home', label: t('nav_home', settings.language), icon: <Home className="w-4 h-4" /> },
-    { id: 'tracks', label: t('nav_tracks', settings.language), icon: <Music2 className="w-4 h-4" />, count: stats.total_tracks },
-    { id: 'albums', label: t('nav_albums', settings.language), icon: <Disc className="w-4 h-4" />, count: stats.total_albums },
-    { id: 'artists', label: t('nav_artists', settings.language), icon: <Users className="w-4 h-4" />, count: stats.total_artists },
-    { id: 'genres', label: t('nav_genres', settings.language), icon: <Radio className="w-4 h-4" /> },
-    { id: 'favorites', label: t('nav_favorites', settings.language), icon: <Heart className="w-4 h-4 text-rose-400" /> },
-    { id: 'history', label: t('nav_history', settings.language), icon: <History className="w-4 h-4" /> },
-    { id: 'lyrics', label: t('nav_lyrics', settings.language), icon: <FileText className="w-4 h-4" /> },
+    { id: 'home', label: t('nav_home', settings.language), icon: <Home className="w-4 h-4" aria-hidden="true" /> },
+    { id: 'tracks', label: t('nav_tracks', settings.language), icon: <Music2 className="w-4 h-4" aria-hidden="true" />, count: stats.total_tracks },
+    { id: 'albums', label: t('nav_albums', settings.language), icon: <Disc className="w-4 h-4" aria-hidden="true" />, count: stats.total_albums },
+    { id: 'artists', label: t('nav_artists', settings.language), icon: <Users className="w-4 h-4" aria-hidden="true" />, count: stats.total_artists },
+    { id: 'genres', label: t('nav_genres', settings.language), icon: <Radio className="w-4 h-4" aria-hidden="true" /> },
+    { id: 'favorites', label: t('nav_favorites', settings.language), icon: <Heart className="w-4 h-4 text-rose-400" aria-hidden="true" /> },
+    { id: 'history', label: t('nav_history', settings.language), icon: <History className="w-4 h-4" aria-hidden="true" /> },
+    { id: 'lyrics', label: t('nav_lyrics', settings.language), icon: <FileText className="w-4 h-4" aria-hidden="true" /> },
   ];
 
   return (
@@ -81,7 +81,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
           className="flex items-center gap-3 px-2 cursor-pointer group"
         >
           <div className="w-9 h-9 rounded-xl bg-brand-primary border border-brand-border flex items-center justify-center shadow-glow-indigo group-hover:scale-105 transition-transform">
-            <Music2 className="w-5 h-5 text-brand-accent" />
+            <Music2 className="w-5 h-5 text-brand-accent" aria-hidden="true" />
           </div>
           <div className="flex flex-col">
             <span className="font-display text-base tracking-wide text-white group-hover:text-brand-accent transition-colors">
@@ -125,12 +125,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
         <div className="flex flex-col gap-2 pt-2 border-t border-brand-border/60">
           <div className="flex items-center justify-between px-2 text-xs font-semibold text-brand-muted uppercase tracking-wider">
             <span>{t('playlists_title', settings.language)}</span>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-0.5">
               <label
-                className="p-1 text-brand-muted hover:text-brand-foreground hover:bg-oled-hover rounded cursor-pointer transition-colors"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center text-brand-muted hover:text-brand-foreground hover:bg-oled-hover rounded-lg cursor-pointer transition-colors"
                 title={t('btn_import_m3u', settings.language)}
+                aria-label={t('btn_import_m3u', settings.language)}
               >
-                <Upload className="w-3.5 h-3.5" />
+                <Upload className="w-4 h-4" aria-hidden="true" />
                 <input
                   type="file"
                   accept=".m3u,.m3u8"
@@ -140,11 +141,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
               </label>
               <button
                 onClick={() => setIsCreateModalOpen(true)}
-                className="p-1 text-brand-muted hover:text-brand-foreground hover:bg-oled-hover rounded transition-colors focus-visible:outline-none"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center text-brand-muted hover:text-brand-foreground hover:bg-oled-hover rounded-lg transition-colors focus-visible:outline-none"
                 title={t('btn_create_playlist', settings.language)}
                 aria-label={t('btn_create_playlist', settings.language)}
               >
-                <Plus className="w-3.5 h-3.5" />
+                <Plus className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -152,22 +153,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
           {/* Playlist Links */}
           <div className="flex flex-col gap-0.5 max-h-48 overflow-y-auto pr-1">
             {playlists.map(pl => {
-              const isActive = currentView === 'playlist_detail' && (pl as unknown as { selected?: boolean });
               return (
                 <button
                   key={pl.id}
                   onClick={() => onNavigate('playlist_detail', pl)}
-                  className={`min-h-[38px] flex items-center justify-between px-3 rounded-lg text-xs transition-colors text-left truncate focus-visible:outline-none ${
-                    isActive
+                  className={`min-h-[44px] flex items-center justify-between px-3 rounded-lg text-xs transition-colors text-left truncate focus-visible:outline-none ${
+                    currentView === 'playlist_detail'
                       ? 'bg-oled-hover text-brand-accent font-medium'
                       : 'text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
                   }`}
                 >
                   <div className="flex items-center gap-2.5 truncate">
                     {pl.is_smart ? (
-                      <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
                     ) : (
-                      <ListMusic className="w-3.5 h-3.5 text-brand-muted shrink-0" />
+                      <ListMusic className="w-3.5 h-3.5 text-brand-muted shrink-0" aria-hidden="true" />
                     )}
                     <span className="truncate">{pl.name}</span>
                   </div>

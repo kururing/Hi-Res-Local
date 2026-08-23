@@ -145,8 +145,10 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
               onClick={() => toggleFavoriteAlbum(album.id)}
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-oled-card border border-brand-border text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
               aria-label="Toggle album favorite"
+              aria-pressed={isAlbumFav}
             >
               <Heart
+                aria-hidden="true"
                 className={`w-5 h-5 ${
                   isAlbumFav ? 'text-rose-500 fill-rose-500' : 'text-brand-muted'
                 }`}
@@ -162,7 +164,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
           <div key={discNum} className="space-y-3">
             {discGroups.length > 1 && (
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-brand-muted px-2">
-                <Disc className="w-3.5 h-3.5" />
+                <Disc className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>{t('disc_number', settings.language, { disc: discNum })}</span>
               </div>
             )}
@@ -189,7 +191,8 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                           e.stopPropagation();
                           playTrack(tr, album.tracks);
                         }}
-                        className="w-7 h-7 rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base transition-all focus-visible:outline-none"
+                        className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base transition-all focus-visible:outline-none"
+                        aria-label={`Play ${tr.title}`}
                       >
                         {isPlaying ? (
                           <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
@@ -198,7 +201,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                             <span className="group-hover:hidden text-brand-muted">
                               {tr.track_number || index + 1}
                             </span>
-                            <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" />
+                            <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" aria-hidden="true" />
                           </>
                         )}
                       </button>
@@ -213,7 +216,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="col-span-5 flex items-center justify-end gap-3">
+                    <div className="col-span-5 flex items-center justify-end gap-1">
                       <Rating
                         value={tr.rating || 0}
                         onChange={r => setTrackRating(tr.id, r)}
@@ -225,9 +228,12 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                           e.stopPropagation();
                           toggleFavoriteTrack(tr.id);
                         }}
-                        className="p-1.5 rounded hover:bg-white/10 text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
+                        className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
+                        aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                        aria-pressed={isFav}
                       >
                         <Heart
+                          aria-hidden="true"
                           className={`w-4 h-4 ${
                             isFav ? 'text-rose-500 fill-rose-500' : 'text-brand-muted'
                           }`}
@@ -243,9 +249,10 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                           e.stopPropagation();
                           handleContextMenu(e, tr);
                         }}
-                        className="p-1 rounded text-brand-muted hover:text-brand-foreground hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity focus-visible:outline-none"
+                        className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-brand-foreground hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity focus-visible:outline-none"
+                        aria-label="More actions"
                       >
-                        <MoreVertical className="w-4 h-4" />
+                        <MoreVertical className="w-4 h-4" aria-hidden="true" />
                       </button>
                     </div>
                   </div>

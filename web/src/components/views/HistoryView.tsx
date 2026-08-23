@@ -71,12 +71,13 @@ export const HistoryView: React.FC<HistoryViewProps> = () => {
                 <div className="flex items-center gap-3 min-w-0 pr-2">
                   <button
                     onClick={() => playTrack(track)}
-                    className="w-7 h-7 rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all"
+                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all focus-visible:outline-none"
+                    aria-label={`Play ${track.title}`}
                   >
                     {isPlaying ? (
                       <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
                     ) : (
-                      <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                      <Play className="w-3.5 h-3.5 fill-current ml-0.5" aria-hidden="true" />
                     )}
                   </button>
                   <div className="flex flex-col min-w-0">

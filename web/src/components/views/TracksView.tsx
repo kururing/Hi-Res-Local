@@ -224,14 +224,15 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
                         e.stopPropagation();
                         playTrack(tr, sortedTracks);
                       }}
-                      className="w-7 h-7 rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base transition-all focus-visible:outline-none"
+                      className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base transition-all focus-visible:outline-none"
+                      aria-label={`Play ${tr.title}`}
                     >
                       {isPlaying ? (
                         <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
                       ) : (
                         <>
                           <span className="group-hover:hidden text-brand-muted">{index + 1}</span>
-                          <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" />
+                          <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" aria-hidden="true" />
                         </>
                       )}
                     </button>
@@ -261,7 +262,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
                   </div>
 
                   {/* Duration, Rating, Favorite & Context Menu */}
-                  <div className="col-span-2 sm:col-span-2 flex items-center justify-end gap-2">
+                  <div className="col-span-2 sm:col-span-2 flex items-center justify-end gap-1">
                     <div className="hidden lg:block">
                       <Rating
                         value={tr.rating || 0}
@@ -275,10 +276,12 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
                         e.stopPropagation();
                         toggleFavoriteTrack(tr.id);
                       }}
-                      className="p-1.5 min-h-[36px] min-w-[36px] flex items-center justify-center rounded hover:bg-white/10 transition-colors focus-visible:outline-none"
-                      aria-label="Toggle favorite"
+                      className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 transition-colors focus-visible:outline-none"
+                      aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                      aria-pressed={isFav}
                     >
                       <Heart
+                        aria-hidden="true"
                         className={`w-4 h-4 ${
                           isFav ? 'text-rose-500 fill-rose-500' : 'text-brand-muted hover:text-rose-400'
                         }`}
@@ -294,10 +297,10 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
                         e.stopPropagation();
                         handleContextMenu(e, tr);
                       }}
-                      className="p-1 min-h-[36px] min-w-[36px] flex items-center justify-center rounded text-brand-muted hover:text-brand-foreground hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity focus-visible:outline-none"
+                      className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-brand-foreground hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity focus-visible:outline-none"
                       aria-label="More actions"
                     >
-                      <MoreVertical className="w-4 h-4" />
+                      <MoreVertical className="w-4 h-4" aria-hidden="true" />
                     </button>
                   </div>
                 </div>

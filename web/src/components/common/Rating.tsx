@@ -42,6 +42,7 @@ export const Rating: React.FC<RatingProps> = ({
           return (
             <Star
               key={starIdx}
+              aria-hidden="true"
               className={`${starSize} ${
                 isFilled ? 'text-amber-400 fill-amber-400' : 'text-slate-600'
               }`}
@@ -53,12 +54,13 @@ export const Rating: React.FC<RatingProps> = ({
           <button
             key={starIdx}
             type="button"
-            className="p-1 min-h-[32px] min-w-[32px] flex items-center justify-center rounded hover:scale-110 transition-transform focus-visible:outline-none"
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:scale-110 transition-transform focus-visible:outline-none"
             onClick={() => handleClick(starIdx)}
             onMouseEnter={() => setHoverValue(starIdx)}
             aria-label={`${starIdx} star`}
           >
             <Star
+              aria-hidden="true"
               className={`${starSize} transition-colors ${
                 isFilled ? 'text-amber-400 fill-amber-400' : 'text-slate-600 hover:text-amber-300'
               }`}
