@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::db::queries_settings::{
     get_app_settings as db_get_settings, save_app_settings as db_save_settings,
@@ -19,4 +19,10 @@ pub async fn update_settings(
 ) -> Result<(), String> {
     let conn = state.db.lock();
     db_save_settings(&conn, &settings).map_err(|e| e.to_string())
+}
+
+/// Exit the whole application, including the tray event loop.
+#[tauri::command]
+pub fn quit_app(app_handle: AppHandle) {
+    app_handle.exit(0);
 }

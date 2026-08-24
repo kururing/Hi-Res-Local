@@ -27,12 +27,23 @@ export function VirtualList<T>({
     const el = parentRef.current;
     if (!el) return;
 
-    const update = () => setViewportHeight(el.clientHeight);
+    let frameId: number | undefined;
+    const update = () => {
+      if (frameId !== undefined) return;
+      frameId = window.requestAnimationFrame(() => {
+        const nextHeight = el.clientHeight;
+        setViewportHeight(current => current === nextHeight ? current : nextHeight);
+        frameId = undefined;
+      });
+    };
     update();
 
     const observer = new ResizeObserver(update);
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (frameId !== undefined) window.cancelAnimationFrame(frameId);
+    };
   }, []);
 
   const totalHeight = items.length * rowHeight;

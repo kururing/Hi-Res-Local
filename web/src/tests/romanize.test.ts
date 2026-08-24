@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createRomanizedLrc, romanizeText } from '../services/romanize';
+import {
+  containsNonLatinLetters,
+  createRomanizedLrc,
+  createRomanizedLrcAsync,
+  romanizeText,
+  romanizeTextAsync,
+} from '../services/romanize';
 
 describe('local romanization', () => {
   it('romanizes Korean and suppresses unchanged Latin text', () => {
@@ -30,4 +36,32 @@ describe('local romanization', () => {
       })
     ).toBeNull();
   });
+
+  it('romanizes Japanese kana and kanji without leaving mixed scripts', async () => {
+    const output = await romanizeTextAsync('言葉にすれば消えちゃう関係なら');
+    expect(output).toMatch(/kotoba/i);
+    expect(output).not.toMatch(/[\u3040-\u30ff]|\p{Script=Han}/u);
+  }, 15_000);
+
+  it('romanizes multiple writing systems inside the same lyric line', async () => {
+    const output = await romanizeTextAsync('言葉にすれば 사랑해 мир مرحبا', true);
+    expect(output).toMatch(/kotoba/i);
+    expect(output).toMatch(/sarang/i);
+    expect(output).toMatch(/mir/i);
+    expect(containsNonLatinLetters(output ?? '')).toBe(false);
+  }, 15_000);
+
+  it('keeps Chinese pinyin distinct from Japanese readings in one lyric', async () => {
+    const output = await createRomanizedLrcAsync({
+      is_synced: true,
+      lines: [
+        { timestamp: 1, text: '心は進化するよ' },
+        { timestamp: 2, text: '我爱你' },
+      ],
+    });
+
+    expect(output).toMatch(/kokoro/i);
+    expect(output).toMatch(/wǒ/i);
+    expect(output).not.toMatch(/waga/i);
+  }, 15_000);
 });

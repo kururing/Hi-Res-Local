@@ -62,7 +62,12 @@ fn write_cover_resized(data: &[u8], target_path: &Path) -> bool {
     let written = match image::load_from_memory(data) {
         Ok(img) if img.width() > MAX_COVER_DIM || img.height() > MAX_COVER_DIM => {
             let thumb = img.thumbnail(MAX_COVER_DIM, MAX_COVER_DIM);
-            thumb.save(&tmp_path).is_ok() || fs::write(&tmp_path, data).is_ok()
+            let format = target_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .and_then(image::ImageFormat::from_extension)
+                .unwrap_or(image::ImageFormat::Jpeg);
+            thumb.save_with_format(&tmp_path, format).is_ok() || fs::write(&tmp_path, data).is_ok()
         }
         _ => fs::write(&tmp_path, data).is_ok(),
     };
@@ -149,4 +154,30 @@ pub fn extract_and_cache_cover(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn resized_png_keeps_a_decodable_png_format() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("cover.png");
+        let image = image::DynamicImage::new_rgb8(1024, 768);
+        let mut encoded = Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+
+        assert!(write_cover_resized(encoded.get_ref(), &target));
+        let cached = image::open(&target).unwrap();
+        assert!(cached.width() <= MAX_COVER_DIM);
+        assert!(cached.height() <= MAX_COVER_DIM);
+        assert_eq!(
+            image::ImageFormat::from_path(&target).unwrap(),
+            image::ImageFormat::Png
+        );
+    }
 }

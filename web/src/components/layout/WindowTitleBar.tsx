@@ -5,13 +5,17 @@ import { isTauri } from '../../services/ipc';
 import { useSettings } from '../../context/SettingsContext';
 import { t } from '../../i18n';
 
-const runWindowAction = (action: 'minimize' | 'maximize' | 'close') => {
+const runWindowAction = (
+  action: 'minimize' | 'maximize' | 'close',
+  closeToTray = false
+) => {
   if (!isTauri()) return;
 
   const appWindow = getCurrentWindow();
   if (action === 'minimize') void appWindow.minimize();
   else if (action === 'maximize') void appWindow.toggleMaximize();
-  else void appWindow.close();
+  else if (closeToTray) void appWindow.hide();
+  else void import('@tauri-apps/api/core').then(({ invoke }) => invoke('quit_app'));
 };
 
 export const WindowTitleBar: React.FC = () => {
@@ -20,25 +24,28 @@ export const WindowTitleBar: React.FC = () => {
   return (
     <div
       className="window-titlebar flex h-10 shrink-0 items-stretch text-brand-foreground"
-      data-tauri-drag-region="deep"
-      onDoubleClick={() => runWindowAction('maximize')}
+      onDoubleClick={event => {
+        if ((event.target as HTMLElement).closest('button')) return;
+        runWindowAction('maximize');
+      }}
     >
       <div
         className="flex min-w-0 flex-1 items-center px-3"
-        data-tauri-drag-region="deep"
+        data-tauri-drag-region
       >
         <span
           className="min-w-0 truncate text-[12px] font-semibold tracking-[-0.01em]"
-          data-tauri-drag-region="deep"
+          data-tauri-drag-region
         >
           {t('app_title', settings.language)}
         </span>
       </div>
 
-      <div className="flex" data-tauri-drag-region="false">
+      <div className="relative z-10 flex shrink-0">
         <button
           type="button"
           onClick={() => runWindowAction('minimize')}
+          onMouseDown={event => event.stopPropagation()}
           className="window-control"
           aria-label="Thu nhỏ cửa sổ"
           title="Thu nhỏ"
@@ -48,6 +55,7 @@ export const WindowTitleBar: React.FC = () => {
         <button
           type="button"
           onClick={() => runWindowAction('maximize')}
+          onMouseDown={event => event.stopPropagation()}
           className="window-control"
           aria-label="Phóng to hoặc khôi phục cửa sổ"
           title="Phóng to / Khôi phục"
@@ -56,7 +64,8 @@ export const WindowTitleBar: React.FC = () => {
         </button>
         <button
           type="button"
-          onClick={() => runWindowAction('close')}
+          onClick={() => runWindowAction('close', settings.close_to_tray)}
+          onMouseDown={event => event.stopPropagation()}
           className="window-control window-control-close"
           aria-label="Đóng cửa sổ"
           title="Đóng"

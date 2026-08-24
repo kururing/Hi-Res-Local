@@ -259,6 +259,12 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
       return undefined as IpcCommands[K]['return'];
     }
 
+    case 'set_muted': {
+      const muted = (args as { muted: boolean }).muted;
+      browserAudioEngine.setMuted(muted);
+      return undefined as IpcCommands[K]['return'];
+    }
+
     case 'toggle_mute': {
       return browserAudioEngine.toggleMute() as IpcCommands[K]['return'];
     }
@@ -316,8 +322,8 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
     }
 
     case 'get_track_lyrics': {
-      const payload = args as { track_id: string };
-      const track = mockTracks.find(t => t.id === payload.track_id);
+      const payload = args as { trackId: string };
+      const track = mockTracks.find(t => t.id === payload.trackId);
       if (!track || !track.lyrics) {
         return null as IpcCommands[K]['return'];
       }
@@ -335,12 +341,16 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
     }
 
     case 'save_romanized_lyrics': {
-      const payload = args as { track_id: string; content: string };
-      const track = mockTracks.find(t => t.id === payload.track_id);
+      const payload = args as { trackId: string; content: string };
+      const track = mockTracks.find(t => t.id === payload.trackId);
       if (!track) throw new Error('Track not found');
       if (!payload.content.trim()) throw new Error('Romanized lyrics file is empty');
       mockRomanizedLyrics.set(track.id, payload.content);
       return parseLrc(track.lyrics || '', payload.content) as IpcCommands[K]['return'];
+    }
+
+    case 'quit_app': {
+      return undefined as IpcCommands[K]['return'];
     }
 
     default:

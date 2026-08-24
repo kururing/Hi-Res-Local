@@ -1,6 +1,8 @@
 use crate::audio::decoder::AudioDecoder;
 use crate::audio::dsp::CrossfadeProcessor;
-use crate::audio::dto::{AudioTrack, CrossfadeConfig, CrossfadeCurve, QualityBadge, ReplayGainInfo};
+use crate::audio::dto::{
+    AudioTrack, CrossfadeConfig, CrossfadeCurve, QualityBadge, ReplayGainInfo,
+};
 use crate::audio::error::{AudioError, AudioResult};
 
 /// High-quality linear / fractional resampler for multi-channel audio
@@ -10,6 +12,8 @@ pub struct LinearResampler {
     to_rate: u32,
     channels: u16,
     phase: f64,
+    tail_frame: Vec<f32>,
+    input_scratch: Vec<f32>,
 }
 
 impl LinearResampler {
@@ -19,6 +23,8 @@ impl LinearResampler {
             to_rate,
             channels,
             phase: 0.0,
+            tail_frame: Vec::new(),
+            input_scratch: Vec::new(),
         }
     }
 
@@ -32,9 +38,17 @@ impl LinearResampler {
             return;
         }
 
-        let ch = self.channels as usize;
-        let num_input_frames = input.len() / ch;
+        let ch = self.channels.max(1) as usize;
+        self.input_scratch.clear();
+        if !self.tail_frame.is_empty() {
+            self.input_scratch.extend_from_slice(&self.tail_frame);
+        }
+        self.input_scratch.extend_from_slice(input);
+        let num_input_frames = self.input_scratch.len() / ch;
         if num_input_frames < 2 {
+            self.tail_frame.clear();
+            self.tail_frame
+                .extend_from_slice(&self.input_scratch[..num_input_frames * ch]);
             return;
         }
 
@@ -51,8 +65,8 @@ impl LinearResampler {
             let frac = (self.phase - idx0 as f64) as f32;
 
             for c in 0..ch {
-                let s0 = input[idx0 * ch + c];
-                let s1 = input[idx1 * ch + c];
+                let s0 = self.input_scratch[idx0 * ch + c];
+                let s1 = self.input_scratch[idx1 * ch + c];
                 let interpolated = s0 + (s1 - s0) * frac;
                 output.push(interpolated);
             }
@@ -64,11 +78,73 @@ impl LinearResampler {
         if self.phase < 0.0 {
             self.phase = 0.0;
         }
+        self.tail_frame.clear();
+        self.tail_frame.extend_from_slice(
+            &self.input_scratch[(num_input_frames - 1) * ch..num_input_frames * ch],
+        );
     }
 
     pub fn reset(&mut self) {
         self.phase = 0.0;
+        self.tail_frame.clear();
+        self.input_scratch.clear();
     }
+}
+
+/// Convert decoded interleaved PCM into the output channel layout before resampling.
+/// The six-channel path assumes the conventional FL, FR, FC, LFE, SL, SR order.
+#[allow(clippy::manual_repeat_n)] // `repeat_n` would raise the project's Rust 1.80 MSRV.
+pub fn mix_channels(
+    input: &[f32],
+    source_channels: u16,
+    output_channels: u16,
+    output: &mut Vec<f32>,
+) {
+    let source_channels = source_channels.max(1) as usize;
+    let output_channels = output_channels.max(1) as usize;
+    output.clear();
+    let frames = input.len() / source_channels;
+    output.reserve(frames.saturating_mul(output_channels));
+
+    if source_channels == output_channels {
+        output.extend_from_slice(&input[..frames * source_channels]);
+        return;
+    }
+
+    for frame in input[..frames * source_channels].chunks_exact(source_channels) {
+        match (source_channels, output_channels) {
+            (1, _) => output.extend(std::iter::repeat(frame[0]).take(output_channels)),
+            (_, 1) => output.push(frame.iter().copied().sum::<f32>() / source_channels as f32),
+            (6, 2) => {
+                let left = frame[0] + 0.707 * frame[2] + 0.5 * frame[3] + 0.707 * frame[4];
+                let right = frame[1] + 0.707 * frame[2] + 0.5 * frame[3] + 0.707 * frame[5];
+                output.push(left * 0.5);
+                output.push(right * 0.5);
+            }
+            (2, n) => {
+                output.push(frame[0]);
+                output.push(frame[1]);
+                for channel in 2..n {
+                    output.push(if channel == 2 {
+                        (frame[0] + frame[1]) * 0.5
+                    } else {
+                        0.0
+                    });
+                }
+            }
+            (_, n) => {
+                for channel in 0..n {
+                    output.push(frame[channel.min(source_channels - 1)]);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PcmTransition {
+    pub track: AudioTrack,
+    pub sample_offset: usize,
 }
 
 /// A decoded or preloaded track source ready for gapless playback
@@ -144,6 +220,7 @@ pub struct GaplessController {
     crossfade: CrossfadeConfig,
     fading_out: Option<FadingOutSource>,
     fade_scratch: Vec<f32>,
+    channel_scratch: Vec<f32>,
 }
 
 impl GaplessController {
@@ -160,6 +237,7 @@ impl GaplessController {
             crossfade: CrossfadeConfig::default(),
             fading_out: None,
             fade_scratch: Vec::new(),
+            channel_scratch: Vec::new(),
         }
     }
 
@@ -185,6 +263,21 @@ impl GaplessController {
             }
         }
         self.resampler = None;
+    }
+
+    fn normalize_packet(
+        raw: &[f32],
+        source_channels: u16,
+        output_channels: u16,
+        resampler: Option<&mut LinearResampler>,
+        channel_scratch: &mut Vec<f32>,
+        output: &mut Vec<f32>,
+    ) {
+        mix_channels(raw, source_channels, output_channels, channel_scratch);
+        match resampler {
+            Some(resampler) => resampler.resample(channel_scratch, output),
+            None => output.extend_from_slice(channel_scratch),
+        }
     }
 
     pub fn load_track(&mut self, track: AudioTrack) -> AudioResult<()> {
@@ -368,18 +461,27 @@ impl GaplessController {
 
             if !fading.source.predecoded_samples.is_empty() {
                 let raw = std::mem::take(&mut fading.source.predecoded_samples);
-                match fading.resampler.as_mut() {
-                    Some(resampler) => resampler.resample(&raw, &mut fading.buffer),
-                    None => fading.buffer.extend_from_slice(&raw),
-                }
+                Self::normalize_packet(
+                    &raw,
+                    fading.source.channels(),
+                    self.output_channels,
+                    fading.resampler.as_mut(),
+                    &mut self.channel_scratch,
+                    &mut fading.buffer,
+                );
                 continue;
             }
 
+            let source_channels = fading.source.channels();
             match fading.source.decoder.decode_next_packet() {
-                Ok(Some(packet)) => match fading.resampler.as_mut() {
-                    Some(resampler) => resampler.resample(packet, &mut fading.buffer),
-                    None => fading.buffer.extend_from_slice(packet),
-                },
+                Ok(Some(packet)) => Self::normalize_packet(
+                    packet,
+                    source_channels,
+                    self.output_channels,
+                    fading.resampler.as_mut(),
+                    &mut self.channel_scratch,
+                    &mut fading.buffer,
+                ),
                 // EOF or decode error on the dying track: stop pulling from it.
                 Ok(None) | Err(_) => break,
             }
@@ -424,9 +526,12 @@ impl GaplessController {
     pub fn read_samples(
         &mut self,
         output: &mut [f32],
-    ) -> AudioResult<(usize, Option<AudioTrack>, bool)> {
+    ) -> AudioResult<(usize, Option<PcmTransition>, bool)> {
         let mut samples_written = 0;
-        let mut track_transitioned = self.maybe_start_crossfade();
+        let mut track_transitioned = self.maybe_start_crossfade().map(|track| PcmTransition {
+            track,
+            sample_offset: 0,
+        });
 
         let mut is_eof = false;
         while samples_written < output.len() {
@@ -453,27 +558,37 @@ impl GaplessController {
             if let Some(ref mut source) = self.current_source {
                 if !source.predecoded_samples.is_empty() {
                     let raw_samples = std::mem::take(&mut source.predecoded_samples);
-                    if let Some(ref mut resampler) = self.resampler {
-                        resampler.resample(&raw_samples, &mut self.predecode_buffer);
-                    } else {
-                        self.predecode_buffer.extend_from_slice(&raw_samples);
-                    }
+                    Self::normalize_packet(
+                        &raw_samples,
+                        source.channels(),
+                        self.output_channels,
+                        self.resampler.as_mut(),
+                        &mut self.channel_scratch,
+                        &mut self.predecode_buffer,
+                    );
                     continue;
                 }
 
+                let source_channels = source.channels();
                 match source.decoder.decode_next_packet()? {
                     Some(packet) => {
-                        if let Some(ref mut resampler) = self.resampler {
-                            resampler.resample(packet, &mut self.predecode_buffer);
-                        } else {
-                            self.predecode_buffer.extend_from_slice(packet);
-                        }
+                        Self::normalize_packet(
+                            packet,
+                            source_channels,
+                            self.output_channels,
+                            self.resampler.as_mut(),
+                            &mut self.channel_scratch,
+                            &mut self.predecode_buffer,
+                        );
                     }
                     None => {
                         // EOF on current track
                         source.is_eof = true;
                         if let Some(next) = self.next_preloaded.take() {
-                            track_transitioned = Some(next.track.clone());
+                            track_transitioned = Some(PcmTransition {
+                                track: next.track.clone(),
+                                sample_offset: samples_written,
+                            });
                             self.samples_played = 0;
                             self.current_source = Some(next);
                             self.update_resampler();
@@ -519,5 +634,41 @@ mod tests {
         resampler.resample(&input, &mut output);
         // Should produce approximately 2x samples
         assert!(output.len() >= 3);
+    }
+
+    #[test]
+    fn mixes_mono_to_stereo() {
+        let mut output = Vec::new();
+        mix_channels(&[0.25, -0.5], 1, 2, &mut output);
+        assert_eq!(output, vec![0.25, 0.25, -0.5, -0.5]);
+    }
+
+    #[test]
+    fn preserves_stereo_layout() {
+        let input = [0.1, 0.2, 0.3, 0.4];
+        let mut output = Vec::new();
+        mix_channels(&input, 2, 2, &mut output);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn downmixes_five_point_one_to_stereo() {
+        let mut output = Vec::new();
+        // FL, FR, FC, LFE, SL, SR
+        mix_channels(&[1.0, 0.5, 0.25, 0.1, 0.2, -0.2], 6, 2, &mut output);
+        assert_eq!(output.len(), 2);
+        assert!(output[0] > output[1]);
+        assert!(output.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn streaming_resampler_keeps_packet_boundary() {
+        let mut resampler = LinearResampler::new(44_100, 48_000, 1);
+        let mut output = Vec::new();
+        resampler.resample(&[0.0, 0.5, 1.0], &mut output);
+        let first_len = output.len();
+        resampler.resample(&[1.0, 0.5, 0.0], &mut output);
+        assert!(output.len() > first_len);
+        assert!(output.iter().all(|sample| sample.is_finite()));
     }
 }

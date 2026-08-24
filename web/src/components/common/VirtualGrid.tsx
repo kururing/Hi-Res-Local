@@ -41,12 +41,26 @@ export function VirtualGrid<T>({
     const el = parentRef.current;
     if (!el) return;
 
-    const update = () => setViewport({ width: el.clientWidth, height: el.clientHeight });
+    let frameId: number | undefined;
+    const update = () => {
+      if (frameId !== undefined) return;
+      frameId = window.requestAnimationFrame(() => {
+        const width = el.clientWidth;
+        const height = el.clientHeight;
+        setViewport(current => (
+          current.width === width && current.height === height ? current : { width, height }
+        ));
+        frameId = undefined;
+      });
+    };
     update();
 
     const observer = new ResizeObserver(update);
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (frameId !== undefined) window.cancelAnimationFrame(frameId);
+    };
   }, []);
 
   const width = viewport.width || minColumnWidth * 2 + gap;

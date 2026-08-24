@@ -4,6 +4,7 @@ import {
   findActiveLyricIndex,
   normalizeLyricsData,
   computeEffectiveLyricsMode,
+  hasCompleteRomanizedLyrics,
 } from '../services/lrc';
 
 describe('LRC Parser & Sync Engine', () => {
@@ -30,6 +31,12 @@ describe('LRC Parser & Sync Engine', () => {
     expect(data.lines[0].text).toBe('First line');
     expect(data.lines[1].timestamp).toBeCloseTo(6.0, 2);
     expect(data.lines[1].text).toBe('Second line');
+  });
+
+  it('applies a global offset even when declared after lyric lines', () => {
+    const data = parseLrc('[00:01.00]First\n[00:02:50]Second\n[offset:+500]');
+    expect(data.lines[0].timestamp).toBe(1.5);
+    expect(data.lines[1].timestamp).toBe(3.0);
   });
 
   it('correctly finds active lyric line index based on current playback timestamp', () => {
@@ -170,5 +177,19 @@ describe('LRC Parser & Sync Engine', () => {
     expect(computeEffectiveLyricsMode(bothData, 'both')).toBe('both');
     expect(computeEffectiveLyricsMode(bothData, 'original')).toBe('original');
     expect(computeEffectiveLyricsMode(bothData, 'romanized')).toBe('romanized');
+  });
+
+  it('rejects a companion that still mixes Japanese original lines into romaji', () => {
+    const partial = parseLrc('[00:01.00]言葉にすれば\n[00:02.00]Demo sonnanja dame');
+    const lyrics = parseLrc('[00:01.00]言葉にすれば\n[00:02.00]でもそんなんじゃだめ');
+    lyrics.romanized = partial;
+    expect(hasCompleteRomanizedLyrics(lyrics)).toBe(false);
+    expect(computeEffectiveLyricsMode(lyrics, 'romanized')).toBe('original');
+  });
+
+  it('rejects incomplete romanization from non-CJK scripts too', () => {
+    const lyrics = parseLrc('[00:01.00]Привет мир');
+    lyrics.romanized = parseLrc('[00:01.00]Привет mir');
+    expect(hasCompleteRomanizedLyrics(lyrics)).toBe(false);
   });
 });

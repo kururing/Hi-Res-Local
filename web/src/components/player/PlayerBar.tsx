@@ -95,14 +95,14 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
     <footer
       role="region"
       aria-label="Audio player controls"
-      className="app-player h-24 rounded-[26px] border border-brand-border/70 px-4 md:px-6 grid grid-cols-[minmax(200px,1fr)_minmax(320px,2fr)_minmax(200px,1fr)] items-center z-40 relative select-none"
+      className="app-player player-bar h-24 rounded-[26px] border border-brand-border/70 px-4 md:px-6 grid items-center z-40 relative select-none"
     >
       {/* Left: Track Details */}
-      <div className="flex min-w-0 items-center gap-3.5">
+      <div className="player-track flex min-w-0 items-center gap-3.5">
         {/* Cover Art */}
         <div
           onClick={() => track && onNavigateNowPlaying?.()}
-          className="relative w-14 h-14 rounded-lg bg-brand-accent/12 border border-brand-accent/30 overflow-hidden flex items-center justify-center shrink-0 cursor-pointer group shadow-sm"
+          className="player-artwork relative w-14 h-14 rounded-lg bg-brand-accent/12 border border-brand-accent/30 overflow-hidden flex items-center justify-center shrink-0 cursor-pointer group shadow-sm"
           title={track ? 'Expand Now Playing' : 'No track loaded'}
         >
           <TrackArtwork
@@ -146,7 +146,7 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
         {track && (
           <button
             onClick={() => toggleFavoriteTrack(track.id)}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
+            className="player-favorite min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
             aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
             aria-pressed={isFav}
           >
@@ -161,13 +161,13 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
       </div>
 
       {/* Center: Controls & Seekbar */}
-      <div className="mx-auto flex w-full max-w-xl translate-y-1 flex-col items-center justify-center px-3">
+      <div className="player-transport mx-auto flex w-full max-w-xl translate-y-1 flex-col items-center justify-center px-3">
         {/* Buttons */}
         <div className="flex h-11 items-center justify-center gap-3">
           {/* Shuffle */}
           <button
             onClick={toggleShuffle}
-            className={`min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full transition-colors focus-visible:outline-none ${
+            className={`player-secondary-transport min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full transition-colors focus-visible:outline-none ${
               status.shuffle
                 ? 'text-brand-accent'
                 : 'text-brand-muted hover:text-brand-foreground'
@@ -212,7 +212,7 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
           {/* Repeat */}
           <button
             onClick={cycleLoopMode}
-            className={`min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full transition-colors focus-visible:outline-none ${
+            className={`player-secondary-transport min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full transition-colors focus-visible:outline-none ${
               status.loop_mode !== 'off'
                 ? 'text-brand-accent'
                 : 'text-brand-muted hover:text-brand-foreground'
@@ -233,12 +233,12 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
       </div>
 
       {/* Right: Auxiliary & Volume Controls */}
-      <div className="flex min-w-0 items-center justify-end gap-2">
+      <div className="player-actions flex min-w-0 items-center justify-end gap-2">
         {/* Now Playing Button */}
         {onNavigateNowPlaying && (
           <button
             onClick={onNavigateNowPlaying}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
+            className="player-action-now-playing min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
             aria-label={t('player_now_playing', settings.language)}
             title={t('player_now_playing', settings.language)}
           >
@@ -249,7 +249,7 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
         {/* Equalizer Button */}
         <button
           onClick={() => setIsEqualizerOpen(!isEqualizerOpen)}
-          className={`min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg transition-colors focus-visible:outline-none ${
+          className={`player-action-equalizer min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg transition-colors focus-visible:outline-none ${
             isEqualizerOpen || settings.eq_enabled
               ? 'text-brand-accent bg-oled-hover'
               : 'text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
@@ -264,7 +264,7 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
         {/* Queue Drawer Button */}
         <button
           onClick={() => setIsQueueDrawerOpen(!isQueueDrawerOpen)}
-          className={`min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg transition-colors relative focus-visible:outline-none ${
+          className={`player-action-queue min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg transition-colors relative focus-visible:outline-none ${
             isQueueDrawerOpen
               ? 'text-brand-accent bg-oled-hover'
               : 'text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
@@ -294,7 +294,7 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
         </button>
 
         {/* Volume Slider */}
-        <div className="w-20 hidden sm:block">
+        <div className="player-volume-slider w-20 hidden sm:block">
           <Slider
             value={status.is_muted ? 0 : status.volume}
             min={0}

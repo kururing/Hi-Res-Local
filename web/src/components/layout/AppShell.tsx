@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { WindowTitleBar } from './WindowTitleBar';
@@ -24,6 +24,7 @@ import { SettingsView } from '../views/SettingsView';
 
 import { Album, Artist, Genre, Track } from '../../types/library';
 import { Playlist } from '../../types/playlist';
+import { isTauri } from '../../services/ipc';
 
 interface HistoryEntry {
   view: string;
@@ -36,6 +37,42 @@ export const AppShell: React.FC = () => {
 
   const [selectedTrackDetails, setSelectedTrackDetails] = useState<Track | null>(null);
   const [isTrackDetailsOpen, setIsTrackDetailsOpen] = useState(false);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    let settleTimer: number | undefined;
+    let unlistenNativeResize: (() => void) | undefined;
+    let disposed = false;
+
+    const handleResize = () => {
+      root.classList.add('is-window-resizing');
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(() => {
+        root.classList.remove('is-window-resizing');
+        settleTimer = undefined;
+      }, 120);
+    };
+
+    window.addEventListener('resize', handleResize, { passive: true });
+
+    if (isTauri()) {
+      void import('@tauri-apps/api/window')
+        .then(({ getCurrentWindow }) => getCurrentWindow().onResized(handleResize))
+        .then(unlisten => {
+          if (disposed) unlisten();
+          else unlistenNativeResize = unlisten;
+        })
+        .catch(error => console.warn('Failed to subscribe to native resize events', error));
+    }
+
+    return () => {
+      disposed = true;
+      window.removeEventListener('resize', handleResize);
+      unlistenNativeResize?.();
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer);
+      root.classList.remove('is-window-resizing');
+    };
+  }, []);
 
   const currentEntry = history[historyIndex] || { view: 'home' };
   const currentView = currentEntry.view;
@@ -170,7 +207,7 @@ export const AppShell: React.FC = () => {
         </main>
 
         {/* Player owns its space so scrollable content can never run underneath it. */}
-        <div className="relative z-30 shrink-0 px-3 pb-3 pt-2">
+        <div className="player-bar-shell relative z-30 shrink-0 px-3 pb-3 pt-2">
           <PlayerBar onNavigateNowPlaying={() => navigate('lyrics')} />
         </div>
       </div>

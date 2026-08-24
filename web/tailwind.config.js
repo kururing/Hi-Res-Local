@@ -25,8 +25,8 @@ export default {
         }
       },
       fontFamily: {
-        sans: ['Poppins', 'Segoe UI', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'Roboto', 'sans-serif'],
-        display: ['Poppins', 'Segoe UI Variable Display', 'Segoe UI', 'sans-serif'],
+        sans: ['var(--font-ui)', 'sans-serif'],
+        display: ['var(--font-display)', 'sans-serif'],
       },
       minHeight: {
         touch: '44px',

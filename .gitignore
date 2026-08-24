@@ -13,6 +13,7 @@ dist
 # Tauri
 src-tauri/target
 **/src-tauri/target
+.tmp
 
 # Worktrees & Git
 /.worktrees/
@@ -20,6 +21,7 @@ src-tauri/target
 # IDE & OS
 .vscode/*
 !.vscode/extensions.json
+!.vscode/settings.json
 .idea
 .DS_Store
 *.suo

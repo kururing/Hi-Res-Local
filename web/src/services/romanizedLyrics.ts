@@ -1,14 +1,8 @@
 import { LyricData } from '../types/lyrics';
-import { parseLrc } from './lrc';
-import { createRomanizedLrc } from './romanize';
+import { hasCompleteRomanizedLyrics, parseLrc } from './lrc';
+import { createRomanizedLrcAsync } from './romanize';
 
 const storageKey = (trackId: string) => `nghenhacpromax:romanized:${trackId}`;
-
-const hasRomanizedLyrics = (lyrics: LyricData): boolean => Boolean(
-  (lyrics.romanized &&
-    ((lyrics.romanized.plain_text?.trim().length ?? 0) > 0 || lyrics.romanized.lines.length > 0)) ||
-    lyrics.lines.some(line => Boolean(line.romanized?.trim()))
-);
 
 const attachRomanizedLyrics = (original: LyricData, content: string): LyricData => {
   const romanized = parseLrc(content);
@@ -23,12 +17,25 @@ const attachRomanizedLyrics = (original: LyricData, content: string): LyricData 
 };
 
 /** Restores an imported version first, otherwise derives romanization from the original lyrics. */
-export const hydrateRomanizedLyrics = (trackId: string, lyrics: LyricData): LyricData => {
-  if (hasRomanizedLyrics(lyrics)) return lyrics;
+export const hydrateRomanizedLyrics = async (trackId: string, lyrics: LyricData): Promise<LyricData> => {
+  if (hasCompleteRomanizedLyrics(lyrics)) return lyrics;
 
   const saved = localStorage.getItem(storageKey(trackId));
-  if (saved?.trim()) return attachRomanizedLyrics(lyrics, saved);
+  if (saved?.trim()) {
+    const restored = attachRomanizedLyrics(lyrics, saved);
+    if (hasCompleteRomanizedLyrics(restored)) return restored;
+  }
 
-  const generated = createRomanizedLrc(lyrics);
-  return generated ? attachRomanizedLyrics(lyrics, generated) : lyrics;
+  const generated = await createRomanizedLrcAsync(lyrics);
+  if (!generated) return lyrics;
+
+  const hydrated = attachRomanizedLyrics(lyrics, generated);
+  if (hasCompleteRomanizedLyrics(hydrated)) {
+    try {
+      localStorage.setItem(storageKey(trackId), generated);
+    } catch (error) {
+      console.warn('Could not cache generated romanized lyrics', error);
+    }
+  }
+  return hydrated;
 };

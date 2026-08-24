@@ -4,7 +4,7 @@ pub mod metadata;
 pub mod walker;
 pub mod watcher;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -90,39 +90,41 @@ pub fn scan_library_roots(
             .collect()
     };
 
+    // Stream metadata extraction and SQLite writes in bounded batches. We retain
+    // one Track per file only because duplicate detection needs a library-wide view.
+    const SCAN_BATCH_SIZE: usize = 500;
     let mut tracks: Vec<Track> = Vec::with_capacity(total);
-    let mut to_extract: Vec<PathBuf> = Vec::new();
-    for file_path in &all_audio_files {
-        let path_str = file_path.to_string_lossy().to_string();
-        match existing_by_path.remove(&path_str) {
-            Some(db_track) if is_file_unchanged(file_path, &db_track) => tracks.push(db_track),
-            _ => to_extract.push(file_path.clone()),
-        }
-    }
-
-    let skipped = tracks.len();
-    if skipped > 0 {
-        if let Some(first) = all_audio_files.first() {
-            emit_progress(app_handle, skipped, total, first);
-        }
-    }
-
-    // Extract metadata for changed/new files in parallel.
     let progress_counter = AtomicUsize::new(0);
-    let extracted: Vec<Track> = to_extract
-        .par_iter()
-        .map(|file_path| {
-            let track = extract_metadata_safe(file_path);
-            let done = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
-            if done % 10 == 0 || skipped + done == total {
-                emit_progress(app_handle, skipped + done, total, file_path);
+    for file_batch in all_audio_files.chunks(SCAN_BATCH_SIZE) {
+        let mut unchanged = Vec::with_capacity(file_batch.len());
+        let mut changed = Vec::with_capacity(file_batch.len());
+        for file_path in file_batch {
+            let path_str = file_path.to_string_lossy().to_string();
+            match existing_by_path.remove(&path_str) {
+                Some(db_track) if is_file_unchanged(file_path, &db_track) => {
+                    unchanged.push(db_track)
+                }
+                _ => changed.push(file_path),
             }
-            track
-        })
-        .collect();
+        }
 
-    let extracted_paths: HashSet<String> = extracted.iter().map(|t| t.path.clone()).collect();
-    tracks.extend(extracted);
+        let extracted: Vec<Track> = changed
+            .par_iter()
+            .map(|file_path| extract_metadata_safe(file_path))
+            .collect();
+        if !extracted.is_empty() {
+            let mut conn = db.lock();
+            upsert_tracks_batch(&mut conn, &extracted)?;
+        }
+        tracks.extend(unchanged);
+        tracks.extend(extracted);
+
+        let done =
+            progress_counter.fetch_add(file_batch.len(), Ordering::Relaxed) + file_batch.len();
+        if let Some(last) = file_batch.last() {
+            emit_progress(app_handle, done.min(total), total, last);
+        }
+    }
 
     // Run duplicate detection across all tracks (reused + freshly extracted)
     detect_and_assign_duplicates(&mut tracks);
@@ -130,13 +132,6 @@ pub fn scan_library_roots(
     // Batch upsert into database
     {
         let mut conn = db.lock();
-
-        let changed_tracks: Vec<Track> = tracks
-            .iter()
-            .filter(|t| extracted_paths.contains(&t.path))
-            .cloned()
-            .collect();
-        upsert_tracks_batch(&mut conn, &changed_tracks)?;
 
         // Update duplicate status for every track in one transaction.
         {

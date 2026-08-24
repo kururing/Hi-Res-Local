@@ -85,6 +85,7 @@ export interface IpcCommands {
   'stop_playback': { args: Record<string, never>; return: void };
   'seek_playback': { args: { positionSecs: number }; return: void };
   'set_volume': { args: { volume: number }; return: void };
+  'set_muted': { args: { muted: boolean }; return: void };
   'toggle_mute': { args: Record<string, never>; return: boolean };
   'set_loop_mode': { args: { mode: LoopMode }; return: void };
   'set_shuffle': { args: { shuffle: boolean }; return: void };
@@ -125,9 +126,10 @@ export interface IpcCommands {
   'set_replay_gain': { args: { mode: string; preamp_db: number; prevent_clipping: boolean }; return: void };
 
   // Lyrics Commands
-  'get_track_lyrics': { args: { track_id: string }; return: LyricData | null };
+  'get_track_lyrics': { args: { trackId: string }; return: LyricData | null };
   'parse_lrc_content': { args: { content: string }; return: LyricData };
-  'save_romanized_lyrics': { args: { track_id: string; content: string }; return: LyricData };
+  'save_romanized_lyrics': { args: { trackId: string; content: string }; return: LyricData };
+  'quit_app': { args: undefined; return: void };
 }
 
 /**
@@ -139,6 +141,7 @@ export interface IpcEvents {
   'audio://track_changed': Track | null;
   'audio://track_ended': Record<string, never>;
   'audio://error': { message: string };
+  'audio://underrun': { count: number; missing_samples: number };
   'library://scan_progress': ScanProgress;
   'library://scan_finished': { total: number; success: boolean };
 }

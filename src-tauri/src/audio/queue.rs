@@ -266,7 +266,10 @@ impl PlaybackQueue {
 
         let current = self.current_index;
 
-        let planned = self.planned_next.take().filter(|&idx| idx < self.tracks.len());
+        let planned = self
+            .planned_next
+            .take()
+            .filter(|&idx| idx < self.tracks.len());
         let next_idx = if let Some(planned_idx) = planned {
             Some(planned_idx)
         } else if self.shuffle_enabled {
@@ -670,5 +673,25 @@ mod tests {
             picked_counts[0] < 5,
             "Immediate repeat in shuffle should be rare"
         );
+    }
+
+    #[test]
+    fn stress_rapid_next_previous_navigation() {
+        let mut queue = PlaybackQueue::new();
+        for index in 0..64 {
+            queue.add_track(create_test_track(&index.to_string(), "Stress"));
+        }
+        queue.set_repeat_mode(RepeatMode::All);
+        queue.set_current_index(0).unwrap();
+        for index in 0..20_000 {
+            if index % 3 == 0 {
+                let _ = queue.previous();
+            } else {
+                let _ = queue.next();
+            }
+            assert!(queue
+                .current_index()
+                .is_some_and(|current| current < queue.len()));
+        }
     }
 }

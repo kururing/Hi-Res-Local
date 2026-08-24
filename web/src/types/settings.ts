@@ -2,6 +2,7 @@ import { ReplayGainMode } from './audio';
 
 export type AppTheme = 'oled' | 'midnight' | 'slate' | 'light' | 'custom';
 export type AppLanguage = 'vi' | 'en';
+export type AppFont = 'poppins' | 'inter' | 'manrope' | 'nunito' | 'lora' | 'system';
 
 export interface CustomImageTheme {
   id?: string;
@@ -35,6 +36,7 @@ export interface AppSettings {
   replay_gain_preamp: number; // -12 to +12 dB
   language: AppLanguage;
   theme: AppTheme;
+  font_family: AppFont;
   custom_image_theme?: CustomImageTheme;
   custom_image_themes: CustomImageTheme[];
   custom_theme_blur: boolean;
@@ -57,6 +59,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   replay_gain_preamp: 0,
   language: 'vi',
   theme: 'oled',
+  font_family: 'poppins',
   custom_image_theme: undefined,
   custom_image_themes: [],
   custom_theme_blur: true,

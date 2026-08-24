@@ -1,6 +1,7 @@
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::models::lyrics::{LyricsData, LyricsSource, SyncedLyricLine};
 
@@ -8,11 +9,23 @@ use crate::models::lyrics::{LyricsData, LyricsSource, SyncedLyricLine};
 pub fn parse_lrc(content: &str, source: LyricsSource) -> LyricsData {
     let lines: Vec<&str> = content.lines().collect();
     let mut synced_lines: Vec<SyncedLyricLine> = Vec::new();
-    let mut offset_ms: i64 = 0;
-
-    let time_tag_regex =
-        Regex::new(r"\[(\d{1,2}):(\d{2})(?:(?:\.|:)(\d{2,3}))?\]").expect("Invalid regex");
-    let offset_regex = Regex::new(r"\[offset:\s*([+-]?\d+)\s*\]").expect("Invalid regex");
+    static TIME_TAG_REGEX: OnceLock<Regex> = OnceLock::new();
+    static OFFSET_REGEX: OnceLock<Regex> = OnceLock::new();
+    let time_tag_regex = TIME_TAG_REGEX.get_or_init(|| {
+        Regex::new(r"\[(\d{1,3}):(\d{2})(?:(?:\.|:)(\d{1,3}))?\]")
+            .expect("constant LRC timestamp regex must compile")
+    });
+    let offset_regex = OFFSET_REGEX.get_or_init(|| {
+        Regex::new(r"(?i)\[offset:\s*([+-]?\d+)\s*\]")
+            .expect("constant LRC offset regex must compile")
+    });
+    // Offset is global according to the LRC format and may appear after lyric lines.
+    let offset_ms = lines
+        .iter()
+        .filter_map(|line| offset_regex.captures(line))
+        .filter_map(|caps| caps.get(1)?.as_str().parse::<i64>().ok())
+        .next_back()
+        .unwrap_or(0);
 
     for line in &lines {
         let trimmed = line.trim();
@@ -21,12 +34,7 @@ pub fn parse_lrc(content: &str, source: LyricsSource) -> LyricsData {
         }
 
         // Check for offset tag
-        if let Some(caps) = offset_regex.captures(trimmed) {
-            if let Some(m) = caps.get(1) {
-                if let Ok(val) = m.as_str().parse::<i64>() {
-                    offset_ms = val;
-                }
-            }
+        if offset_regex.is_match(trimmed) {
             continue;
         }
 
@@ -117,13 +125,18 @@ pub fn match_romanized_lines(
     romanized_lines: &[SyncedLyricLine],
 ) -> Vec<SyncedLyricLine> {
     let mut matched = original_lines.to_vec();
+    let mut used = vec![false; romanized_lines.len()];
     for orig in &mut matched {
         let best_match = romanized_lines
             .iter()
-            .filter(|rom| (orig.timestamp_ms as i64 - rom.timestamp_ms as i64).abs() <= 1000)
-            .min_by_key(|rom| (orig.timestamp_ms as i64 - rom.timestamp_ms as i64).abs());
+            .enumerate()
+            .filter(|(index, rom)| {
+                !used[*index] && (orig.timestamp_ms as i64 - rom.timestamp_ms as i64).abs() <= 1000
+            })
+            .min_by_key(|(_, rom)| (orig.timestamp_ms as i64 - rom.timestamp_ms as i64).abs());
 
-        if let Some(rom) = best_match {
+        if let Some((index, rom)) = best_match {
+            used[index] = true;
             orig.romanized = Some(rom.text.clone());
         }
     }
@@ -140,7 +153,7 @@ pub fn load_lyrics_for_track(
     let mut original_lyrics: Option<LyricsData> = None;
     let lrc_path = audio_file_path.with_extension("lrc");
     if lrc_path.is_file() {
-        if let Ok(content) = fs::read_to_string(&lrc_path) {
+        if let Ok(content) = read_lyrics_file(&lrc_path) {
             let parsed = parse_lrc(&content, LyricsSource::LrcFile);
             if parsed.is_synced || !parsed.plain_text.trim().is_empty() {
                 original_lyrics = Some(parsed);
@@ -159,7 +172,7 @@ pub fn load_lyrics_for_track(
     // 2. Discover companion romanized lyrics
     let mut romanized_lyrics: Option<LyricsData> = None;
     if let Some(rom_path) = find_romanized_lrc_path(audio_file_path) {
-        if let Ok(content) = fs::read_to_string(&rom_path) {
+        if let Ok(content) = read_lyrics_file(&rom_path) {
             let parsed = parse_lrc(&content, LyricsSource::LrcFile);
             if parsed.is_synced || !parsed.plain_text.trim().is_empty() {
                 romanized_lyrics = Some(parsed);
@@ -189,6 +202,29 @@ pub fn load_lyrics_for_track(
         }
         (None, None) => None,
     }
+}
+
+#[allow(clippy::chunks_exact_to_as_chunks)] // Keep the project's Rust 1.80 MSRV.
+fn read_lyrics_file(path: &Path) -> std::io::Result<String> {
+    let bytes = fs::read(path)?;
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let words = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16(&words)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error));
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let words = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16(&words)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error));
+    }
+    let utf8 = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+    Ok(String::from_utf8_lossy(utf8).into_owned())
 }
 
 #[cfg(test)]
@@ -403,5 +439,30 @@ mod tests {
         assert_eq!(rom2.lines[0].text, "Romaji Alone");
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn offset_is_global_even_when_declared_last() {
+        let data = parse_lrc(
+            "[00:01.00]First\n[00:02.00]Second\n[offset:+500]",
+            LyricsSource::LrcFile,
+        );
+        assert_eq!(data.lines[0].timestamp_ms, 1_500);
+        assert_eq!(data.lines[1].timestamp_ms, 2_500);
+    }
+
+    #[test]
+    fn reads_utf16_little_endian_lrc() {
+        let temp_dir = std::env::temp_dir().join(format!("lrc_utf16_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let path = temp_dir.join("utf16.lrc");
+        let content = "[00:01.00]Xin chào";
+        let mut bytes = vec![0xFF, 0xFE];
+        for word in content.encode_utf16() {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(read_lyrics_file(&path).unwrap(), content);
+        let _ = fs::remove_dir_all(temp_dir);
     }
 }

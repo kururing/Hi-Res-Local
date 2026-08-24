@@ -68,14 +68,15 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const { showToast } = useToast();
   const { settings } = useSettings();
   const { tracks, isLoading: isLibraryLoading } = useLibrary();
+  const initialAudioState = useMemo(() => Storage.getAudioState(), []);
 
   const [status, setStatus] = useState<PlaybackStatus>({
     state: 'stopped',
     current_track: null,
     position: 0,
     duration: 0,
-    volume: 0.85,
-    is_muted: false,
+    volume: initialAudioState.volume,
+    is_muted: initialAudioState.isMuted,
     loop_mode: 'off',
     shuffle: false,
   });
@@ -126,6 +127,13 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   });
   const lastPlaybackSavedAtRef = useRef(0);
 
+  useEffect(() => {
+    void Promise.all([
+      IpcService.invoke('set_volume', { volume: initialAudioState.volume }),
+      IpcService.invoke('set_muted', { muted: initialAudioState.isMuted }),
+    ]).catch(error => console.warn('Failed to restore saved audio state', error));
+  }, [initialAudioState]);
+
   const persistLastPlayback = useCallback((trackId: string, position: number, force = false) => {
     const now = Date.now();
     if (!force && now - lastPlaybackSavedAtRef.current < LAST_PLAYBACK_SAVE_MS) {
@@ -159,9 +167,10 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let unlistenState: (() => void) | undefined;
     let unlistenTrack: (() => void) | undefined;
     let unlistenEnded: (() => void) | undefined;
+    let disposed = false;
 
     (async () => {
-      unlistenPos = await IpcService.listen('audio://position', ({ position_secs, duration_secs }) => {
+      const disposePos = await IpcService.listen('audio://position', ({ position_secs, duration_secs }) => {
         const progressValue = normalizePlaybackProgress(
           position_secs,
           duration_secs,
@@ -178,8 +187,13 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           persistLastPlayback(statusRef.current.current_track.id, progressValue.position);
         }
       });
+      if (disposed) {
+        disposePos();
+        return;
+      }
+      unlistenPos = disposePos;
 
-      unlistenState = await IpcService.listen('audio://state_changed', ({ state }) => {
+      const disposeState = await IpcService.listen('audio://state_changed', ({ state }) => {
         if (state === 'ended') {
           // Backend queue: auto-advance happens in Rust; either a
           // track_changed or a stopped event follows immediately.
@@ -190,8 +204,13 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         setStatus(prev => ({ ...prev, state: state as PlaybackState }));
       });
+      if (disposed) {
+        disposeState();
+        return;
+      }
+      unlistenState = disposeState;
 
-      unlistenTrack = await IpcService.listen('audio://track_changed', nativeTrack => {
+      const disposeTrack = await IpcService.listen('audio://track_changed', nativeTrack => {
         if (!nativeTrack) return;
         const nextIndex = queueRef.current.findIndex(track =>
           track.id === nativeTrack.id || track.path === nativeTrack.path
@@ -226,15 +245,26 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             .catch(error => console.warn('Failed to record transitioned track', error));
         }
       });
+      if (disposed) {
+        disposeTrack();
+        return;
+      }
+      unlistenTrack = disposeTrack;
 
-      unlistenEnded = await IpcService.listen('audio://track_ended', () => {
+      const disposeEnded = await IpcService.listen('audio://track_ended', () => {
         if (!useBackendQueue) {
           handleTrackEndedRef.current();
         }
       });
+      if (disposed) {
+        disposeEnded();
+        return;
+      }
+      unlistenEnded = disposeEnded;
     })();
 
     return () => {
+      disposed = true;
       if (unlistenPos) unlistenPos();
       if (unlistenState) unlistenState();
       if (unlistenTrack) unlistenTrack();
@@ -276,15 +306,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       await IpcService.invoke('play_track', { track });
     }
     if (requestId !== playRequestIdRef.current) return;
-    void IpcService.invoke('record_play', {
-      input: {
-        track_id: track.id,
-        completed_duration_ms: 0,
-        fully_played: false,
-      },
-    })
-      .then(() => window.dispatchEvent(new Event('nghenhac:history-updated')))
-      .catch(error => console.warn('Failed to record listening history', error));
     if (targetPosition > 0) {
       await IpcService.invoke('seek_playback', { positionSecs: targetPosition });
     }
@@ -446,14 +467,19 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const setVolume = useCallback(async (vol: number) => {
     const clamped = Math.max(0, Math.min(1, vol));
+    Storage.saveAudioState(clamped, false);
     setStatus(prev => ({ ...prev, volume: clamped, is_muted: false }));
-    await IpcService.invoke('set_volume', { volume: clamped });
+    await Promise.all([
+      IpcService.invoke('set_volume', { volume: clamped }),
+      IpcService.invoke('set_muted', { muted: false }),
+    ]);
   }, []);
 
   const toggleMute = useCallback(async () => {
     const newMute = !statusRef.current.is_muted;
+    Storage.saveAudioState(statusRef.current.volume, newMute);
     setStatus(prev => ({ ...prev, is_muted: newMute }));
-    await IpcService.invoke('toggle_mute');
+    await IpcService.invoke('set_muted', { muted: newMute });
   }, []);
 
   const setLoopMode = useCallback(async (mode: LoopMode) => {

@@ -37,7 +37,9 @@ nghenhacpromax/
 │   │   ├── components/    # UI views, player controls, sidebar, modals
 │   │   ├── services/      # Typed Tauri IPC bindings & event listeners
 │   │   └── types/         # Domain TypeScript models matching Rust DTOs
-└── src/                   # Legacy Iced architecture (preserved)
+├── scripts/               # Tauri launcher and Windows build environment setup
+├── package.json           # Root development commands and Tauri CLI
+└── README.md
 ```
 
 ## Getting Started

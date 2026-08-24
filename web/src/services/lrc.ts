@@ -1,4 +1,25 @@
 import { LyricData, LyricLine, LyricsMode } from '../types/lyrics';
+import { containsNonLatinLetters } from './romanize';
+
+export function hasCompleteRomanizedLyrics(lyrics: LyricData): boolean {
+  const companion = lyrics.romanized;
+  if (companion?.lines.length) {
+    const coversTimeline = lyrics.lines.length === 0 || companion.lines.length >= lyrics.lines.length;
+    return coversTimeline && companion.lines.every(line => !containsNonLatinLetters(line.text));
+  }
+  if (companion?.plain_text?.trim()) {
+    return !containsNonLatinLetters(companion.plain_text);
+  }
+
+  let foundRomanized = false;
+  const complete = lyrics.lines.every(line => {
+    if (!containsNonLatinLetters(line.text)) return true;
+    if (!line.romanized?.trim() || containsNonLatinLetters(line.romanized)) return false;
+    foundRomanized = true;
+    return true;
+  });
+  return complete && foundRomanized;
+}
 
 /**
  * Normalizes backend IPC LyricsData response (which uses timestamp_ms) into frontend LyricData.
@@ -53,8 +74,14 @@ export function parseLrc(content: string, romanizedContent?: string): LyricData 
   let offset = 0; // ms offset
 
   const rawLines = content.split(/\r?\n/);
-  const timeRegex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
+  const timeRegex = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
   const metaRegex = /\[([a-zA-Z]+):([^\]]+)\]/;
+
+  // LRC offset is global even when the tag appears after timestamped lines.
+  for (const rawLine of rawLines) {
+    const match = rawLine.match(/\[offset:\s*([+-]?\d+)\s*\]/i);
+    if (match) offset = parseInt(match[1], 10) || 0;
+  }
 
   for (const rawLine of rawLines) {
     const line = rawLine.trim();
@@ -66,9 +93,6 @@ export function parseLrc(content: string, romanizedContent?: string): LyricData 
       const tag = metaMatch[1].toLowerCase();
       const val = metaMatch[2].trim();
       metadata[tag] = val;
-      if (tag === 'offset') {
-        offset = parseInt(val, 10) || 0;
-      }
       continue;
     }
 
@@ -167,12 +191,7 @@ export function computeEffectiveLyricsMode(
       (lyricsData.lines && lyricsData.lines.length > 0)
   );
 
-  const hasRomanized = Boolean(
-    (lyricsData.romanized &&
-      ((lyricsData.romanized.plain_text && lyricsData.romanized.plain_text.trim().length > 0) ||
-        (lyricsData.romanized.lines && lyricsData.romanized.lines.length > 0))) ||
-      lyricsData.lines?.some(l => l.romanized && l.romanized.trim().length > 0)
-  );
+  const hasRomanized = hasCompleteRomanizedLyrics(lyricsData);
 
   if (!hasRomanized) {
     return 'original';

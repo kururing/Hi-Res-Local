@@ -5,7 +5,14 @@ use crate::audio::device::{convert_f32_to_i16, convert_f32_to_u16};
 use crate::audio::dsp::{CrossfadeProcessor, EqualizerProcessor, ReplayGainProcessor};
 use crate::audio::dto::*;
 use crate::audio::gapless::LinearResampler;
+use crate::audio::player::AudioPlayer;
 use crate::audio::queue::PlaybackQueue;
+
+#[test]
+fn audio_player_is_send_and_sync_without_unsafe_impls() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AudioPlayer>();
+}
 
 fn mock_track(id: &str, title: &str, duration_ms: u64) -> AudioTrack {
     AudioTrack {

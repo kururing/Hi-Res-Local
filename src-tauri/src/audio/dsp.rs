@@ -92,6 +92,7 @@ pub struct EqualizerProcessor {
     channels: u16,
     filters: Vec<BiquadFilter>,
     enabled: bool,
+    config: EqConfig,
 }
 
 impl EqualizerProcessor {
@@ -101,18 +102,25 @@ impl EqualizerProcessor {
             channels,
             filters: Vec::new(),
             enabled: config.enabled,
+            config: config.clone(),
         };
         processor.update_config(config);
         processor
     }
 
-    pub fn set_sample_rate(&mut self, sample_rate: u32) {
-        if self.sample_rate != sample_rate {
-            self.sample_rate = sample_rate;
+    pub fn set_output_spec(&mut self, sample_rate: u32, channels: u16) {
+        if self.sample_rate == sample_rate && self.channels == channels {
+            return;
         }
+        self.sample_rate = sample_rate;
+        self.channels = channels.max(1);
+        let config = self.config.clone();
+        self.update_config(&config);
+        self.reset();
     }
 
     pub fn update_config(&mut self, config: &EqConfig) {
+        self.config = config.clone();
         self.enabled = config.enabled;
         let sr = self.sample_rate as f32;
 
@@ -351,6 +359,22 @@ mod tests {
         for sample in buffer {
             assert!(sample.is_finite());
         }
+    }
+
+    #[test]
+    fn equalizer_rebuilds_for_changed_device_spec() {
+        let mut config = EqConfig {
+            enabled: true,
+            ..EqConfig::default()
+        };
+        config.apply_preset(EqPreset::Vocal);
+        let mut eq = EqualizerProcessor::new(44_100, 2, &config);
+        eq.set_output_spec(96_000, 6);
+        assert_eq!(eq.sample_rate, 96_000);
+        assert_eq!(eq.channels, 6);
+        let mut buffer = vec![0.25; 6 * 128];
+        eq.process_interleaved(&mut buffer);
+        assert!(buffer.iter().all(|sample| sample.is_finite()));
     }
 
     #[test]

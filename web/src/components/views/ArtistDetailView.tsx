@@ -1,5 +1,5 @@
 import React from 'react';
-import { User, Disc, Play, Heart, ArrowLeft } from 'lucide-react';
+import { User, Disc, Play, Heart, ArrowLeft, ChevronDown, ChevronUp } from 'lucide-react';
 import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
@@ -21,6 +21,8 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
+const TOP_TRACK_LIMIT = 5;
+
 export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
   artist,
   onNavigate,
@@ -28,10 +30,19 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
   const { tracks, toggleFavoriteArtist, favoriteArtistNames } = useLibrary();
   const { playTrack, playQueue, status } = usePlayer();
   const { settings } = useSettings();
+  const [showAllTracks, setShowAllTracks] = React.useState(false);
 
   const artistTracks = React.useMemo(() => {
     return tracks.filter(t => t.artist.toLowerCase() === artist.name.toLowerCase());
   }, [tracks, artist.name]);
+
+  React.useEffect(() => {
+    setShowAllTracks(false);
+  }, [artist.name]);
+
+  const visibleTracks = showAllTracks
+    ? artistTracks
+    : artistTracks.slice(0, TOP_TRACK_LIMIT);
 
   const isFav = favoriteArtistNames.has(artist.name);
 
@@ -100,12 +111,38 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
 
       {/* Top Tracks by Artist */}
       <section className="space-y-4">
-        <h2 className="text-lg font-bold font-display text-brand-foreground">
-          {t('artist_top_tracks', settings.language)}
-        </h2>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-lg font-bold font-display text-brand-foreground">
+            {t('artist_top_tracks', settings.language)}
+          </h2>
 
-        <div className="rounded-xl border border-brand-border bg-oled-card/60 overflow-hidden divide-y divide-brand-border/30">
-          {artistTracks.slice(0, 5).map((tr, idx) => {
+          {artistTracks.length > TOP_TRACK_LIMIT && (
+            <button
+              type="button"
+              onClick={() => setShowAllTracks(current => !current)}
+              className="min-h-[44px] inline-flex items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-brand-accent hover:bg-brand-accent/10 transition-colors focus-visible:outline-none"
+              aria-expanded={showAllTracks}
+              aria-controls="artist-track-list"
+            >
+              <span>
+                {showAllTracks
+                  ? t('artist_collapse_tracks', settings.language)
+                  : t('artist_view_all_tracks', settings.language, { count: artistTracks.length })}
+              </span>
+              {showAllTracks ? (
+                <ChevronUp className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <ChevronDown className="h-4 w-4" aria-hidden="true" />
+              )}
+            </button>
+          )}
+        </div>
+
+        <div
+          id="artist-track-list"
+          className="rounded-xl border border-brand-border bg-oled-card/60 overflow-hidden divide-y divide-brand-border/30"
+        >
+          {visibleTracks.map((tr, idx) => {
             const isPlaying = status.current_track?.id === tr.id;
             return (
               <div

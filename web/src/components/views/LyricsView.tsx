@@ -10,11 +10,13 @@ import {
   normalizeLyricsData,
   findActiveLyricIndex,
   computeEffectiveLyricsMode,
+  hasCompleteRomanizedLyrics,
 } from '../../services/lrc';
 import { IpcService } from '../../services/ipc';
 import { LyricData, LyricLine, LyricsMode } from '../../types/lyrics';
 import { t } from '../../i18n';
 import { hydrateRomanizedLyrics } from '../../services/romanizedLyrics';
+import { Storage } from '../../services/storage';
 
 const capitalizeFirstLetter = (text: string): string =>
   text.replace(/\p{L}/u, letter => letter.toLocaleUpperCase());
@@ -32,9 +34,14 @@ export const LyricsView: React.FC = () => {
   const track = status.current_track;
   const isFavorite = track ? favoriteTrackIds.has(track.id) : false;
   const [lyricsData, setLyricsData] = useState<LyricData | null>(null);
-  const [preferredMode, setPreferredMode] = useState<LyricsMode>('both');
+  const [preferredMode, setPreferredMode] = useState<LyricsMode>(() => Storage.getLyricsMode());
   const [loading, setLoading] = useState<boolean>(false);
   const [isFollowingLyrics, setIsFollowingLyrics] = useState(true);
+
+  const selectLyricsMode = (mode: LyricsMode) => {
+    setPreferredMode(mode);
+    Storage.saveLyricsMode(mode);
+  };
 
   // Fetch track lyrics via IPC with stale request cancellation
   useEffect(() => {
@@ -46,22 +53,24 @@ export const LyricsView: React.FC = () => {
     let isCurrent = true;
     setLoading(true);
 
-    IpcService.invoke('get_track_lyrics', { track_id: track.id })
-      .then(res => {
+    IpcService.invoke('get_track_lyrics', { trackId: track.id })
+      .then(async res => {
         if (!isCurrent) return;
+        let hydrated: LyricData | null = null;
         if (res) {
           const normalized = normalizeLyricsData(res);
-          setLyricsData(normalized ? hydrateRomanizedLyrics(track.id, normalized) : null);
+          hydrated = normalized ? await hydrateRomanizedLyrics(track.id, normalized) : null;
         } else if (track.lyrics) {
-          setLyricsData(hydrateRomanizedLyrics(track.id, parseLrc(track.lyrics)));
-        } else {
-          setLyricsData(null);
+          hydrated = await hydrateRomanizedLyrics(track.id, parseLrc(track.lyrics));
         }
+        if (isCurrent) setLyricsData(hydrated);
       })
-      .catch(() => {
+      .catch(async error => {
         if (!isCurrent) return;
+        console.warn('Failed to load lyrics', error);
         if (track.lyrics) {
-          setLyricsData(hydrateRomanizedLyrics(track.id, parseLrc(track.lyrics)));
+          const hydrated = await hydrateRomanizedLyrics(track.id, parseLrc(track.lyrics));
+          if (isCurrent) setLyricsData(hydrated);
         } else {
           setLyricsData(null);
         }
@@ -83,13 +92,7 @@ export const LyricsView: React.FC = () => {
 
   // Check if romanized lyrics and original lyrics are both present
   const hasRomanized = useMemo(() => {
-    if (!lyricsData) return false;
-    return Boolean(
-      (lyricsData.romanized &&
-        ((lyricsData.romanized.plain_text && lyricsData.romanized.plain_text.trim().length > 0) ||
-          (lyricsData.romanized.lines && lyricsData.romanized.lines.length > 0))) ||
-        lyricsData.lines?.some(l => l.romanized && l.romanized.trim().length > 0)
-    );
+    return lyricsData ? hasCompleteRomanizedLyrics(lyricsData) : false;
   }, [lyricsData]);
 
   const hasOriginal = useMemo(() => {
@@ -203,7 +206,7 @@ export const LyricsView: React.FC = () => {
                 <button
                   type="button"
                   aria-pressed={lyricsMode === 'original'}
-                  onClick={() => setPreferredMode('original')}
+                  onClick={() => selectLyricsMode('original')}
                   className={`min-h-[44px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:outline-none ${
                     lyricsMode === 'original'
                       ? 'bg-brand-accent text-oled-base shadow-sm'
@@ -215,7 +218,7 @@ export const LyricsView: React.FC = () => {
                 <button
                   type="button"
                   aria-pressed={lyricsMode === 'romanized'}
-                  onClick={() => setPreferredMode('romanized')}
+                  onClick={() => selectLyricsMode('romanized')}
                   className={`min-h-[44px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:outline-none ${
                     lyricsMode === 'romanized'
                       ? 'bg-brand-accent text-oled-base shadow-sm'
@@ -227,7 +230,7 @@ export const LyricsView: React.FC = () => {
                 <button
                   type="button"
                   aria-pressed={lyricsMode === 'both'}
-                  onClick={() => setPreferredMode('both')}
+                  onClick={() => selectLyricsMode('both')}
                   className={`min-h-[44px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:outline-none ${
                     lyricsMode === 'both'
                       ? 'bg-brand-accent text-oled-base shadow-sm'
@@ -270,32 +273,36 @@ export const LyricsView: React.FC = () => {
                   key={idx}
                   type="button"
                   onClick={() => seek(line.timestamp)}
-                  className={`w-full py-3 px-6 rounded-2xl transition-all duration-300 flex flex-col items-center gap-1 focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:outline-none cursor-pointer ${
-                    isActive
-                      ? 'scale-[1.04] bg-brand-accent/20 shadow-sm'
-                      : 'hover:bg-oled-hover/50'
-                  }`}
+                  className="group flex min-h-[52px] w-full cursor-pointer items-center justify-center px-3 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                 >
                   <span
-                    className={`transition-colors duration-200 ${
+                    className={`inline-flex max-w-full flex-col items-center gap-1 rounded-[1.6rem] px-5 py-3 transition-[color,background-color,box-shadow,transform] duration-300 sm:px-8 ${
                       isActive
-                        ? 'text-brand-foreground font-bold text-2xl sm:text-3xl'
-                        : 'text-brand-foreground/72 hover:text-brand-foreground text-base sm:text-lg'
+                        ? 'scale-[1.015] bg-gradient-to-r from-transparent via-brand-accent/15 to-transparent shadow-[0_10px_30px_rgba(0,0,0,0.12)]'
+                        : 'group-hover:bg-oled-hover/35'
                     }`}
                   >
-                    {capitalizeFirstLetter(line.text)}
-                  </span>
-                  {hasSub && (
                     <span
                       className={`transition-colors duration-200 ${
                         isActive
-                          ? 'text-brand-foreground/85 font-semibold text-base sm:text-lg'
-                          : 'text-brand-foreground/60 text-xs sm:text-sm'
+                          ? 'text-brand-foreground font-bold text-2xl sm:text-3xl'
+                          : 'text-brand-foreground/72 group-hover:text-brand-foreground text-base sm:text-lg'
                       }`}
                     >
-                      {capitalizeFirstLetter(line.romanized ?? '')}
+                      {capitalizeFirstLetter(line.text)}
                     </span>
-                  )}
+                    {hasSub && (
+                      <span
+                        className={`transition-colors duration-200 ${
+                          isActive
+                            ? 'text-brand-foreground/85 font-semibold text-base sm:text-lg'
+                            : 'text-brand-foreground/60 text-xs sm:text-sm'
+                        }`}
+                      >
+                        {capitalizeFirstLetter(line.romanized ?? '')}
+                      </span>
+                    )}
+                  </span>
                 </button>
               );
             })

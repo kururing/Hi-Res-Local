@@ -332,6 +332,36 @@ fn test_play_history_and_counters() {
 }
 
 #[test]
+fn duplicate_play_start_events_are_idempotent() {
+    let db = Database::open_in_memory().expect("Failed to open DB");
+    let conn = db.lock();
+    let track = create_sample_track("dedupe", "Dedupe Track", "Artist", "Album", "flac");
+    upsert_track(&conn, &track).unwrap();
+    let input = RecordPlayInput {
+        track_id: track.id,
+        completed_duration_ms: 0,
+        fully_played: false,
+    };
+
+    for _ in 0..4 {
+        record_play_history(&conn, &input).unwrap();
+    }
+
+    let history = get_play_history(&conn, 10, 0).unwrap();
+    assert_eq!(history.len(), 1);
+
+    // Simulate duplicate rows left by an older app version. Reads collapse
+    // them without destructively rewriting the user's history database.
+    conn.execute(
+        "INSERT INTO play_history (track_id, played_at, completed_duration_ms, fully_played) VALUES (?1, ?2, 0, 0)",
+        rusqlite::params![input.track_id, history[0].played_at],
+    )
+    .unwrap();
+    let collapsed = get_play_history(&conn, 10, 0).unwrap();
+    assert_eq!(collapsed.len(), 1);
+}
+
+#[test]
 fn test_duplicate_detection_ranking() {
     let mut tracks = vec![
         create_sample_track("t1", "Imagine", "John Lennon", "Imagine", "mp3"),

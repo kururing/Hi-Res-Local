@@ -26,6 +26,7 @@ import { AudioCapabilities, AudioOutputDevice } from '../../types/audio';
 import { t } from '../../i18n';
 import { applyImageThemeAccent, createImageTheme } from '../../services/imageTheme';
 import { AppSettings, AppTheme } from '../../types/settings';
+import { APP_FONT_OPTIONS } from '../../services/fonts';
 
 interface SettingsSwitchProps {
   checked: boolean;
@@ -700,6 +701,47 @@ export const SettingsView: React.FC = () => {
               <option value="vi">Tiếng Việt (Vietnamese)</option>
               <option value="en">English (US)</option>
             </select>
+          </div>
+
+          {/* Font Selector */}
+          <div className="flex flex-col gap-3 sm:col-span-2">
+            <div>
+              <span className="text-xs font-semibold text-brand-muted uppercase tracking-wider">
+                {t('settings_font', settings.language)}
+              </span>
+              <p className="mt-1 text-xs text-brand-muted">
+                {t('settings_font_desc', settings.language)}
+              </p>
+            </div>
+            <div
+              role="radiogroup"
+              aria-label={t('settings_font', settings.language)}
+              className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+            >
+              {APP_FONT_OPTIONS.map(font => {
+                const isSelected = settings.font_family === font.id;
+                return (
+                  <button
+                    key={font.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={isSelected}
+                    onClick={() => updateSettings({ font_family: font.id })}
+                    style={{ fontFamily: font.stack }}
+                    className={`min-h-[60px] rounded-xl border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent ${
+                      isSelected
+                        ? 'border-brand-accent bg-brand-accent/10 text-brand-accent'
+                        : 'border-brand-border bg-oled-base text-brand-foreground hover:bg-oled-hover'
+                    }`}
+                  >
+                    <span className="block text-sm font-bold">{font.label}</span>
+                    <span className="mt-0.5 block truncate text-xs opacity-75">
+                      {t('settings_font_preview', settings.language)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 

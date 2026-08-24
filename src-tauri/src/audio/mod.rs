@@ -17,6 +17,7 @@
 //! - Bit-perfect exclusive mode and OS Media Controls (Windows SMTC, macOS Now Playing, MPRIS) adapters with fallback.
 
 pub mod adapters;
+mod control;
 pub mod decoder;
 pub mod device;
 pub mod dsp;

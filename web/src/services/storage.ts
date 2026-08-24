@@ -1,6 +1,7 @@
 import { AppSettings, DEFAULT_SETTINGS } from '../types/settings';
 import { Playlist } from '../types/playlist';
 import { EqualizerPreset } from '../types/audio';
+import { LyricsMode } from '../types/lyrics';
 
 const STORAGE_KEYS = {
   SETTINGS: 'nghenhac_settings_v2',
@@ -12,6 +13,9 @@ const STORAGE_KEYS = {
   EQ_PRESETS: 'nghenhac_eq_presets_v2',
   LAST_PLAYED_TRACK: 'nghenhac_last_track_v2',
   LAST_PLAYED_POSITION: 'nghenhac_last_pos_v2',
+  LAST_VOLUME: 'nghenhac_last_volume_v2',
+  LAST_MUTED: 'nghenhac_last_muted_v2',
+  LYRICS_MODE: 'nghenhac_lyrics_mode_v2',
 };
 
 export interface HistoryItem {
@@ -180,6 +184,34 @@ export const Storage = {
       localStorage.setItem(STORAGE_KEYS.LAST_PLAYED_TRACK, trackId);
       localStorage.setItem(STORAGE_KEYS.LAST_PLAYED_POSITION, position.toString());
     }
+  },
+
+  getAudioState(): { volume: number; isMuted: boolean } {
+    const rawVolume = localStorage.getItem(STORAGE_KEYS.LAST_VOLUME);
+    const savedVolume = rawVolume === null ? Number.NaN : Number(rawVolume);
+    return {
+      volume: Number.isFinite(savedVolume)
+        ? Math.max(0, Math.min(1, savedVolume))
+        : 0.85,
+      isMuted: localStorage.getItem(STORAGE_KEYS.LAST_MUTED) === 'true',
+    };
+  },
+
+  saveAudioState(volume: number, isMuted: boolean): void {
+    const safeVolume = Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 0.85;
+    localStorage.setItem(STORAGE_KEYS.LAST_VOLUME, safeVolume.toString());
+    localStorage.setItem(STORAGE_KEYS.LAST_MUTED, isMuted.toString());
+  },
+
+  getLyricsMode(): LyricsMode {
+    const savedMode = localStorage.getItem(STORAGE_KEYS.LYRICS_MODE);
+    return savedMode === 'original' || savedMode === 'romanized' || savedMode === 'both'
+      ? savedMode
+      : 'both';
+  },
+
+  saveLyricsMode(mode: LyricsMode): void {
+    localStorage.setItem(STORAGE_KEYS.LYRICS_MODE, mode);
   },
 
   exportBackup(): string {

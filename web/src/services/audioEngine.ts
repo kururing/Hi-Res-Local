@@ -131,6 +131,13 @@ class BrowserAudioEngine {
     return this.isMuted;
   }
 
+  public setMuted(muted: boolean): void {
+    this.isMuted = muted;
+    if (this.gainNode) {
+      this.gainNode.gain.value = this.isMuted ? 0 : this.volume;
+    }
+  }
+
   public setLoopMode(mode: LoopMode): void {
     this.loopMode = mode;
   }

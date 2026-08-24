@@ -1,22 +1,17 @@
-use cpal::traits::{DeviceTrait, StreamTrait};
-use cpal::{BufferSize, SampleFormat, Stream, StreamConfig};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread::JoinHandle;
 use tokio::sync::broadcast;
 
-use crate::audio::device::{convert_f32_to_i16, convert_f32_to_u16, OutputDeviceManager};
+use crate::audio::control::AudioControlHandle;
 use crate::audio::dto::{
     AudioDeviceDTO, AudioEvent, AudioTrack, CrossfadeConfig, EqConfig, EqPreset, PlaybackProgress,
     PlaybackState, PlayerSnapshot, RepeatMode, ReplayGainConfig,
 };
 use crate::audio::error::{AudioError, AudioResult};
-use crate::audio::pipeline::{
-    device_buffer_frames, realtime_fill, spawn_decode_thread, AudioPipeline, DecodeCommand,
-};
+use crate::audio::pipeline::{spawn_decode_thread, AudioPipeline, DecodeCommand};
 use crate::audio::queue::PlaybackQueue;
 use crate::sync_util::{recover_mutex, recover_rw_read, recover_rw_write};
-
-use ringbuf::HeapCons;
 
 #[derive(Debug)]
 pub enum AudioCommand {
@@ -63,16 +58,12 @@ struct InnerPlayerState {
 
 pub struct AudioPlayer {
     inner: Arc<RwLock<InnerPlayerState>>,
-    device_manager: Arc<Mutex<OutputDeviceManager>>,
     event_sender: broadcast::Sender<AudioEvent>,
-    active_stream: Arc<Mutex<Option<Stream>>>,
-    pending_cons: Mutex<Option<HeapCons<f32>>>,
     pipeline: Arc<AudioPipeline>,
     decode_tx: crossbeam_channel::Sender<DecodeCommand>,
+    decode_thread: Mutex<Option<JoinHandle<()>>>,
+    audio_control: AudioControlHandle,
 }
-
-unsafe impl Send for AudioPlayer {}
-unsafe impl Sync for AudioPlayer {}
 
 impl Default for AudioPlayer {
     fn default() -> Self {
@@ -100,17 +91,22 @@ impl AudioPlayer {
             quality_badge: None,
         };
 
-        let (pipeline, cons, decode_tx, decode_rx) = AudioPipeline::create();
-        spawn_decode_thread(Arc::clone(&pipeline), decode_rx, event_sender.clone());
+        let (pipeline, _initial_cons, decode_tx, decode_rx) = AudioPipeline::create();
+        let decode_thread =
+            spawn_decode_thread(Arc::clone(&pipeline), decode_rx, event_sender.clone());
+        let audio_control = AudioControlHandle::spawn(
+            Arc::clone(&pipeline),
+            decode_tx.clone(),
+            event_sender.clone(),
+        );
 
         Self {
             inner: Arc::new(RwLock::new(inner_state)),
-            device_manager: Arc::new(Mutex::new(OutputDeviceManager::new())),
             event_sender,
-            active_stream: Arc::new(Mutex::new(None)),
-            pending_cons: Mutex::new(Some(cons)),
             pipeline,
             decode_tx,
+            decode_thread: Mutex::new(decode_thread),
+            audio_control,
         }
     }
 
@@ -246,11 +242,7 @@ impl AudioPlayer {
             if advanced_id.as_deref() != Some(track.id.as_str()) {
                 // Queue mutated after the preload was issued; align to what is
                 // actually playing if it is still present in the queue.
-                let idx = inner
-                    .queue
-                    .tracks()
-                    .iter()
-                    .position(|t| t.id == track.id);
+                let idx = inner.queue.tracks().iter().position(|t| t.id == track.id);
                 if let Some(idx) = idx {
                     let _ = inner.queue.set_current_index(idx);
                 }
@@ -324,10 +316,7 @@ impl AudioPlayer {
 
     pub fn seek(&self, position_ms: u64) -> AudioResult<()> {
         let generation = self.pipeline.generation.load(Ordering::SeqCst);
-        self.send_decode(DecodeCommand::Seek {
-            position_ms,
-            generation,
-        });
+        self.pipeline.request_seek(position_ms, generation);
         Ok(())
     }
 
@@ -337,8 +326,7 @@ impl AudioPlayer {
             inner.queue.next().cloned()
         };
 
-        if let Some(track) = next_track {
-            self.emit_event(AudioEvent::TrackChanged(Some(track)));
+        if next_track.is_some() {
             self.start_playback_for_current()
         } else {
             self.stop()
@@ -356,8 +344,7 @@ impl AudioPlayer {
             inner.queue.previous().cloned()
         };
 
-        if let Some(track) = prev_track {
-            self.emit_event(AudioEvent::TrackChanged(Some(track)));
+        if prev_track.is_some() {
             self.start_playback_for_current()
         } else {
             self.seek(0)
@@ -560,13 +547,12 @@ impl AudioPlayer {
     }
 
     pub fn enumerate_devices(&self) -> AudioResult<Vec<AudioDeviceDTO>> {
-        recover_mutex(&self.device_manager).enumerate_devices()
+        self.audio_control.enumerate_devices()
     }
 
     pub fn select_output_device(&self, device_name: Option<String>) -> AudioResult<()> {
-        recover_mutex(&self.device_manager).select_device(device_name);
         let is_playing = self.pipeline.is_playing.load(Ordering::SeqCst);
-        self.recreate_cpal_stream()?;
+        self.audio_control.select_device(device_name)?;
         if is_playing {
             self.pipeline.is_playing.store(true, Ordering::SeqCst);
         }
@@ -613,143 +599,19 @@ impl AudioPlayer {
         }
         self.pipeline.is_playing.store(true, Ordering::SeqCst);
         self.pipeline.position_ms.store(0, Ordering::SeqCst);
-        self.emit_event(AudioEvent::TrackChanged(Some(track.clone())));
         self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
         self.send_decode(DecodeCommand::OpenTrack { track, generation });
         self.check_and_preload_next();
-        self.init_cpal_stream()?;
+        self.audio_control.ensure_stream()?;
         Ok(())
     }
 
-    fn recreate_cpal_stream(&self) -> AudioResult<()> {
-        {
-            let mut stream_lock = recover_mutex(&self.active_stream);
-            *stream_lock = None;
-        }
-        let cons = self.pipeline.recreate_ring();
-        *recover_mutex(&self.pending_cons) = Some(cons);
-        self.init_cpal_stream()
+    pub fn take_audible_transition(&self) -> Option<crate::audio::pipeline::ScheduledTransition> {
+        self.pipeline.take_audible_transition()
     }
 
-    fn init_cpal_stream(&self) -> AudioResult<()> {
-        let mut stream_lock = recover_mutex(&self.active_stream);
-        if stream_lock.is_some() {
-            return Ok(());
-        }
-
-        let cons = recover_mutex(&self.pending_cons)
-            .take()
-            .unwrap_or_else(|| self.pipeline.recreate_ring());
-
-        let device = recover_mutex(&self.device_manager).get_active_device()?;
-        let supported_config = OutputDeviceManager::get_best_output_config(&device)?;
-        let sample_format = supported_config.sample_format();
-        let mut config: StreamConfig = supported_config.into();
-        let sample_rate = config.sample_rate.0;
-        let channels = config.channels;
-        config.buffer_size = BufferSize::Fixed(device_buffer_frames(sample_rate));
-
-        self.pipeline
-            .sample_rate
-            .store(sample_rate, Ordering::Relaxed);
-        self.pipeline
-            .channels
-            .store(channels as u32, Ordering::Relaxed);
-        self.send_decode(DecodeCommand::SetOutputSpec {
-            sample_rate,
-            channels,
-        });
-
-        let pipeline = Arc::clone(&self.pipeline);
-        let err_event_sender = self.event_sender.clone();
-        let err_fn = move |err: cpal::StreamError| {
-            tracing::error!("CPAL audio stream error: {}", err);
-            let _ = err_event_sender.send(AudioEvent::DeviceLost(err.to_string()));
-        };
-
-        let stream =
-            match self.build_stream(&device, &config, sample_format, cons, pipeline, err_fn) {
-                Ok(stream) => stream,
-                Err(_) if matches!(config.buffer_size, BufferSize::Fixed(_)) => {
-                    config.buffer_size = BufferSize::Default;
-                    let pipeline = Arc::clone(&self.pipeline);
-                    let err_event_sender = self.event_sender.clone();
-                    let err_fn = move |err: cpal::StreamError| {
-                        tracing::error!("CPAL audio stream error: {}", err);
-                        let _ = err_event_sender.send(AudioEvent::DeviceLost(err.to_string()));
-                    };
-                    let cons = self.pipeline.recreate_ring();
-                    self.build_stream(&device, &config, sample_format, cons, pipeline, err_fn)?
-                }
-                Err(err) => return Err(err),
-            };
-
-        stream
-            .play()
-            .map_err(|e| AudioError::StreamError(e.to_string()))?;
-        *stream_lock = Some(stream);
-        Ok(())
-    }
-
-    fn build_stream<E>(
-        &self,
-        device: &cpal::Device,
-        config: &StreamConfig,
-        sample_format: SampleFormat,
-        mut cons: HeapCons<f32>,
-        pipeline: Arc<AudioPipeline>,
-        err_fn: E,
-    ) -> AudioResult<Stream>
-    where
-        E: FnMut(cpal::StreamError) + Send + 'static,
-    {
-        let stream = match sample_format {
-            SampleFormat::F32 => device.build_output_stream(
-                config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    realtime_fill(data, &mut cons, &pipeline);
-                },
-                err_fn,
-                None,
-            ),
-            SampleFormat::I16 => device.build_output_stream(
-                config,
-                move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    let mut tmp = [0.0f32; 512];
-                    for chunk in data.chunks_mut(512) {
-                        let sl = &mut tmp[..chunk.len()];
-                        realtime_fill(sl, &mut cons, &pipeline);
-                        for (out, &sample) in chunk.iter_mut().zip(sl.iter()) {
-                            *out = convert_f32_to_i16(sample);
-                        }
-                    }
-                },
-                err_fn,
-                None,
-            ),
-            SampleFormat::U16 => device.build_output_stream(
-                config,
-                move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                    let mut tmp = [0.0f32; 512];
-                    for chunk in data.chunks_mut(512) {
-                        let sl = &mut tmp[..chunk.len()];
-                        realtime_fill(sl, &mut cons, &pipeline);
-                        for (out, &sample) in chunk.iter_mut().zip(sl.iter()) {
-                            *out = convert_f32_to_u16(sample);
-                        }
-                    }
-                },
-                err_fn,
-                None,
-            ),
-            _ => {
-                return Err(AudioError::StreamInitialization(
-                    "Unsupported CPAL sample format".to_string(),
-                ));
-            }
-        }
-        .map_err(|e| AudioError::StreamInitialization(e.to_string()))?;
-        Ok(stream)
+    pub fn underrun_stats(&self) -> (u64, u64) {
+        self.pipeline.underrun_stats()
     }
 }
 
@@ -757,7 +619,9 @@ impl Drop for AudioPlayer {
     fn drop(&mut self) {
         self.pipeline.is_playing.store(false, Ordering::SeqCst);
         let _ = self.decode_tx.send(DecodeCommand::Shutdown);
-        let mut stream = recover_mutex(&self.active_stream);
-        *stream = None;
+        self.audio_control.shutdown();
+        if let Some(handle) = recover_mutex(&self.decode_thread).take() {
+            let _ = handle.join();
+        }
     }
 }

@@ -13,9 +13,13 @@
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-autostart": "^2.5.1",
+    "any-ascii": "^0.3.3",
     "clsx": "^2.1.1",
     "hangul-romanization": "^1.0.1",
+    "kuroshiro": "^1.2.0",
+    "kuroshiro-analyzer-kuromoji": "^1.1.0",
     "lucide-react": "^0.475.0",
+    "path-browserify": "^1.0.1",
     "pinyin-pro": "^3.29.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

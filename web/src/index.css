@@ -3,6 +3,8 @@
 @tailwind utilities;
 
 :root {
+  --font-ui: 'Poppins', 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-display: 'Poppins', 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
   /* Soft organic lavender — calm, warm and intentionally unlike TIDAL. */
   --color-oled-base: 245 241 250;
   --color-oled-card: 255 253 255;
@@ -70,7 +72,7 @@
 }
 
 body {
-  font-family: 'Poppins', 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+  font-family: var(--font-ui);
   background-color: rgb(var(--color-oled-base));
   color: rgb(var(--color-foreground));
   margin: 0;
@@ -189,11 +191,15 @@ body {
 .window-control {
   display: inline-flex;
   width: 46px;
+  min-width: 44px;
   height: auto;
   align-self: stretch;
   align-items: center;
   justify-content: center;
   color: rgb(var(--color-muted));
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
   transition: color 140ms ease, background-color 140ms ease;
 }
 
@@ -213,6 +219,82 @@ body {
 
 .window-control-close:active {
   background: #aa344c;
+}
+
+/* PlayerBar responds to the space left after the sidebar, not the viewport. */
+.player-bar-shell {
+  container-name: playerbar;
+  container-type: inline-size;
+}
+
+.player-bar {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 1.6fr) minmax(0, 1fr);
+  column-gap: 0.5rem;
+}
+
+@container playerbar (max-width: 1040px) {
+  .player-bar {
+    grid-template-columns: minmax(150px, 1fr) minmax(280px, 1.55fr) auto;
+    padding-inline: 0.75rem;
+  }
+
+  .player-action-now-playing,
+  .player-volume-slider {
+    display: none;
+  }
+}
+
+@container playerbar (max-width: 760px) {
+  .player-bar {
+    grid-template-columns: minmax(130px, 1fr) minmax(220px, 1.45fr) auto;
+    column-gap: 0.25rem;
+  }
+
+  .player-track {
+    gap: 0.5rem;
+  }
+
+  .player-artwork {
+    width: 3rem;
+    height: 3rem;
+  }
+
+  .player-favorite,
+  .player-secondary-transport,
+  .player-action-equalizer,
+  .player-action-queue {
+    display: none;
+  }
+
+  .player-transport {
+    padding-inline: 0.25rem;
+  }
+}
+
+@container playerbar (max-width: 560px) {
+  .player-bar {
+    height: 8rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 3.5rem 3.5rem;
+    padding-block: 0.5rem;
+  }
+
+  .player-track {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .player-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .player-transport {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    max-width: none;
+    transform: none;
+  }
 }
 
 .app-shell::before,
@@ -280,6 +362,30 @@ body {
   border-radius: 26px 26px 0 0;
   background: rgba(var(--color-oled-base) / 0.42);
   scroll-behavior: smooth;
+}
+
+/* Keep native window resizing responsive on Windows WebView2. Expensive glass
+   effects return shortly after the resize gesture ends, without a React render. */
+.is-window-resizing body {
+  background-attachment: scroll;
+}
+
+.is-window-resizing *,
+.is-window-resizing *::before,
+.is-window-resizing *::after {
+  animation-play-state: paused !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+  transition: none !important;
+}
+
+.is-window-resizing .custom-theme-backdrop {
+  filter: none !important;
+}
+
+.is-window-resizing .app-main,
+.is-window-resizing [class*="overflow-y-auto"] {
+  scroll-behavior: auto !important;
 }
 
 .brand-orb {
@@ -456,8 +562,7 @@ input[type="range"]::-moz-range-thumb {
   transition: transform 0.15s ease;
 }
 
-/* Righteous font class */
 .font-display {
-  font-family: 'Poppins', 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+  font-family: var(--font-display);
   letter-spacing: -0.02em;
 }

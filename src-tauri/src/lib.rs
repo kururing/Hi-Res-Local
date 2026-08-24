@@ -186,8 +186,17 @@ pub fn run() {
             let app_handle_ticker = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+                let mut tick_count = 0u32;
+                let mut last_underrun_count = 0u64;
                 loop {
                     interval.tick().await;
+                    if let Some(transition) = player_ticker.take_audible_transition() {
+                        player_ticker.handle_track_transitioned(&transition.track);
+                        let _ = app_handle_ticker
+                            .emit("audio://track_changed", &Some(&transition.track));
+                        let _ = app_handle_ticker
+                            .emit("audio://quality_updated", &transition.quality_badge);
+                    }
                     if let Some((position_ms, duration_ms)) = player_ticker.get_progress_tick() {
                         let _ = app_handle_ticker.emit(
                             "audio://position",
@@ -196,6 +205,21 @@ pub fn run() {
                                 "duration_secs": (duration_ms as f64) / 1000.0
                             }),
                         );
+                    }
+                    tick_count += 1;
+                    if tick_count >= 10 {
+                        tick_count = 0;
+                        let (count, missing_samples) = player_ticker.underrun_stats();
+                        if count != last_underrun_count {
+                            let _ = app_handle_ticker.emit(
+                                "audio://underrun",
+                                serde_json::json!({
+                                    "count": count,
+                                    "missing_samples": missing_samples
+                                }),
+                            );
+                            last_underrun_count = count;
+                        }
                     }
                 }
             });
@@ -331,6 +355,7 @@ pub fn run() {
             // Settings
             get_settings,
             update_settings,
+            quit_app,
             set_discord_presence,
             // Backup & Restore
             backup_database,

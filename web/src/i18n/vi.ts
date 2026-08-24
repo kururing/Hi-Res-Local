@@ -57,6 +57,8 @@ export const vi = {
   album_tracks_count: '{count} bài hát',
   artist_albums_count: '{count} album',
   artist_top_tracks: 'Bài hát nổi bật',
+  artist_view_all_tracks: 'Xem tất cả {count} bài hát',
+  artist_collapse_tracks: 'Thu gọn',
   artist_discography: 'Tuyển tập Album',
   disc_number: 'Đĩa {disc}',
 
@@ -161,6 +163,9 @@ export const vi = {
   settings_eq_preset: 'Cấu hình EQ có sẵn',
   settings_interface_section: 'Giao diện & Ngôn ngữ',
   settings_theme: 'Chủ đề giao diện',
+  settings_font: 'Phông chữ giao diện',
+  settings_font_desc: 'Chọn kiểu chữ áp dụng cho toàn bộ ứng dụng.',
+  settings_font_preview: 'Âm nhạc của bạn',
   settings_theme_oled: 'Hồng Sữa (Mặc định)',
   settings_theme_midnight: 'Midnight Indigo',
   settings_theme_slate: 'Obsidian Slate',

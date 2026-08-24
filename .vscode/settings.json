@@ -1,0 +1,12 @@
+{
+  "rust-analyzer.cargo.extraEnv": {
+    "TMP": "D:\\App\\nghenhacpromax\\.tmp",
+    "TEMP": "D:\\App\\nghenhacpromax\\.tmp",
+    "TMPDIR": "D:\\App\\nghenhacpromax\\.tmp"
+  },
+  "rust-analyzer.server.extraEnv": {
+    "TMP": "D:\\App\\nghenhacpromax\\.tmp",
+    "TEMP": "D:\\App\\nghenhacpromax\\.tmp",
+    "TMPDIR": "D:\\App\\nghenhacpromax\\.tmp"
+  }
+}

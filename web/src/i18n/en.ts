@@ -59,6 +59,8 @@ export const en: typeof vi = {
   album_tracks_count: '{count} tracks',
   artist_albums_count: '{count} albums',
   artist_top_tracks: 'Top Tracks',
+  artist_view_all_tracks: 'View all {count} tracks',
+  artist_collapse_tracks: 'Show less',
   artist_discography: 'Discography',
   disc_number: 'Disc {disc}',
 
@@ -163,6 +165,9 @@ export const en: typeof vi = {
   settings_eq_preset: 'EQ Preset',
   settings_interface_section: 'Appearance & Language',
   settings_theme: 'UI Theme',
+  settings_font: 'Interface font',
+  settings_font_desc: 'Choose the typeface used throughout the app.',
+  settings_font_preview: 'Your music, your way',
   settings_theme_oled: 'Milk Pink (Default)',
   settings_theme_midnight: 'Midnight Indigo',
   settings_theme_slate: 'Obsidian Slate',

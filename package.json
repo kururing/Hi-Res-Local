@@ -3,9 +3,9 @@
   "version": "2.0.0",
   "private": true,
   "scripts": {
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri": "node scripts/run-tauri.mjs",
+    "tauri:dev": "node scripts/run-tauri.mjs dev",
+    "tauri:build": "node scripts/run-tauri.mjs build",
     "dev": "npm --prefix web run dev",
     "build": "npm --prefix web run build",
     "test": "npm --prefix web run test",
