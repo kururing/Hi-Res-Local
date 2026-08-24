@@ -76,6 +76,7 @@ pub struct Track {
     pub sample_rate: Option<u32>,
     pub bitrate: Option<u32>,
     pub channels: Option<u16>,
+    pub bit_depth: Option<u8>,
     pub date_added: chrono::DateTime<chrono::Utc>,
 }
 
@@ -95,6 +96,7 @@ impl Default for Track {
             sample_rate: None,
             bitrate: None,
             channels: None,
+            bit_depth: None,
             date_added: chrono::Utc::now(),
         }
     }
@@ -883,6 +885,7 @@ mod tests {
             sample_rate: Some(96000),
             bitrate: Some(1411),
             channels: Some(2),
+            bit_depth: Some(24),
             date_added: chrono::Utc::now(),
         }
     }

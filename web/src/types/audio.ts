@@ -21,6 +21,14 @@ export interface AudioOutputDevice {
   sample_rates?: number[];
 }
 
+export interface AudioCapabilities {
+  exclusive_mode_supported: boolean;
+  media_controls_supported: boolean;
+  gapless_supported: boolean;
+  replay_gain_supported: boolean;
+  equalizer_supported: boolean;
+}
+
 export interface EqualizerBand {
   frequency: number; // e.g. 31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000
   label: string; // e.g. "31Hz", "1kHz"

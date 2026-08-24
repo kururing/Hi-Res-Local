@@ -288,6 +288,9 @@ pub struct PlayerSnapshot {
 pub enum AudioEvent {
     StateChanged(PlaybackState),
     TrackChanged(Option<AudioTrack>),
+    /// The decode thread moved to the preloaded next track (gapless/crossfade).
+    /// The player must advance its queue index and preload the following track.
+    TrackTransitioned(AudioTrack),
     ProgressUpdated(PlaybackProgress),
     VolumeChanged {
         volume: f32,

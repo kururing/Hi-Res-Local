@@ -8,7 +8,6 @@ import {
   Heart,
   ListMusic,
   History,
-  FileText,
   Settings,
   Plus,
   Sparkles,
@@ -68,23 +67,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
     { id: 'genres', label: t('nav_genres', settings.language), icon: <Radio className="w-4 h-4" aria-hidden="true" /> },
     { id: 'favorites', label: t('nav_favorites', settings.language), icon: <Heart className="w-4 h-4 text-rose-400" aria-hidden="true" /> },
     { id: 'history', label: t('nav_history', settings.language), icon: <History className="w-4 h-4" aria-hidden="true" /> },
-    { id: 'lyrics', label: t('nav_lyrics', settings.language), icon: <FileText className="w-4 h-4" aria-hidden="true" /> },
   ];
 
   return (
-    <aside className="w-64 bg-oled-base border-r border-brand-border flex flex-col justify-between shrink-0 select-none overflow-y-auto">
+    <aside className="app-sidebar relative z-20 m-3 mr-0 w-64 shrink-0 select-none overflow-y-auto rounded-[28px] border border-brand-border/70 flex flex-col justify-between">
       {/* Top: Branding & Navigation */}
       <div className="flex flex-col p-4 gap-6">
         {/* Brand */}
         <div
           onClick={() => onNavigate('home')}
-          className="flex items-center gap-3 px-2 cursor-pointer group"
+          className="flex items-center gap-3 px-2 cursor-pointer group rounded-2xl"
         >
-          <div className="w-9 h-9 rounded-xl bg-brand-primary border border-brand-border flex items-center justify-center shadow-glow-indigo group-hover:scale-105 transition-transform">
+          <div className="brand-orb w-10 h-10 rounded-2xl flex items-center justify-center group-hover:scale-105 transition-transform duration-300">
             <Music2 className="w-5 h-5 text-brand-accent" aria-hidden="true" />
           </div>
           <div className="flex flex-col">
-            <span className="font-display text-base tracking-wide text-white group-hover:text-brand-accent transition-colors">
+            <span className="font-display text-base tracking-wide text-brand-foreground group-hover:text-brand-accent transition-colors">
               Nghe Nhac Pro Max
             </span>
             <span className="text-[10px] text-brand-muted tracking-wider uppercase font-semibold">
@@ -101,10 +99,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
               <button
                 key={item.id}
                 onClick={() => onNavigate(item.id)}
-                className={`min-h-[44px] flex items-center justify-between px-3.5 rounded-xl font-medium text-xs sm:text-sm transition-all focus-visible:outline-none ${
+                className={`soft-nav-item min-h-[44px] flex items-center justify-between px-3.5 rounded-2xl font-medium text-xs sm:text-sm transition-all duration-300 focus-visible:outline-none ${
                   isActive
-                    ? 'bg-brand-secondary text-white shadow-sm shadow-glow-indigo font-semibold'
-                    : 'text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
+                    ? 'is-active text-white font-semibold'
+                    : 'text-brand-muted hover:text-brand-foreground hover:bg-white/55'
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -184,8 +182,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
           onClick={() => onNavigate('settings')}
           className={`min-h-[44px] flex items-center gap-3 px-3.5 rounded-xl font-medium text-xs sm:text-sm transition-all focus-visible:outline-none ${
             currentView === 'settings'
-              ? 'bg-brand-secondary text-white'
-              : 'text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
+              ? 'is-active bg-brand-secondary text-white shadow-soft-button'
+              : 'text-brand-muted hover:text-brand-foreground hover:bg-white/55'
           }`}
         >
           <Settings className="w-4 h-4" />

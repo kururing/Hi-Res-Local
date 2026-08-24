@@ -1,5 +1,6 @@
 import React from 'react';
 import { Track } from '../../types/library';
+import { formatQualityLabel } from '../../services/trackPresentation';
 
 interface BadgeProps {
   track?: Track;
@@ -14,7 +15,6 @@ interface BadgeProps {
 export const Badge: React.FC<BadgeProps> = ({
   track,
   format,
-  bitrate,
   sampleRate,
   bitsPerSample,
   variant = 'quality',
@@ -22,26 +22,25 @@ export const Badge: React.FC<BadgeProps> = ({
 }) => {
   const f = format || track?.format || (track?.path.endsWith('.flac') ? 'FLAC' : track?.path.endsWith('.wav') ? 'WAV' : 'MP3');
   const sr = sampleRate ?? track?.sample_rate;
-  const br = bitrate ?? track?.bitrate;
-  const bits = bitsPerSample ?? track?.bits_per_sample;
+  const bits = bitsPerSample ?? track?.bit_depth ?? track?.bits_per_sample;
 
   const isHiRes = (sr && sr >= 88200) || (bits && bits >= 24) || f === 'DSD';
+  const isLossless = ['FLAC', 'WAV', 'ALAC', 'AIFF', 'APE', 'DSD'].includes(f.toUpperCase());
 
-  let text = f;
-  if (isHiRes) {
-    const srKhz = sr ? `${Math.round(sr / 1000)}kHz` : '';
-    const bitsText = bits ? `${bits}B` : '';
-    text = `HI-RES • ${f} ${bitsText} ${srKhz}`.trim();
-  } else if (f === 'FLAC') {
-    text = 'FLAC LOSSLESS';
-  } else if (br) {
-    text = `${f} ${br}kbps`;
-  }
+  const text = variant === 'quality' && track
+    ? formatQualityLabel(track)
+    : f || 'Audio';
+  const qualityText = variant === 'quality' ? (
+    <span className="whitespace-nowrap">
+      <span className="quality-badge-compact">{f.toUpperCase()}</span>
+      <span className="quality-badge-full">{text}</span>
+    </span>
+  ) : text;
 
   if (variant === 'accent') {
     return (
       <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold tracking-wide bg-brand-accent/20 text-brand-accent border border-brand-accent/40 ${className}`}>
-        {text}
+        {qualityText}
       </span>
     );
   }
@@ -49,18 +48,34 @@ export const Badge: React.FC<BadgeProps> = ({
   if (isHiRes) {
     return (
       <span
-        title="High-Resolution Audio Lossless Master"
-        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase bg-amber-500/15 text-amber-300 border border-amber-500/40 shadow-sm ${className}`}
+        title={`${f.toUpperCase()} · ${text}`}
+        aria-label={`${f.toUpperCase()} · ${text}`}
+        className={`inline-flex items-center rounded-md border border-cyan-400 bg-cyan-100 px-1.5 py-0.5 text-[10px] font-bold tracking-normal text-cyan-950 shadow-sm ${className}`}
       >
-        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 mr-1.5 animate-pulse" />
-        {text}
+        {qualityText}
+      </span>
+    );
+  }
+
+  if (isLossless) {
+    return (
+      <span
+        title={`${f.toUpperCase()} · ${text}`}
+        aria-label={`${f.toUpperCase()} · ${text}`}
+        className={`inline-flex items-center rounded-md border border-emerald-400 bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold tracking-normal text-emerald-950 shadow-sm ${className}`}
+      >
+        {qualityText}
       </span>
     );
   }
 
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium tracking-wider uppercase bg-indigo-950/80 text-brand-muted border border-brand-border/60 ${className}`}>
-      {text}
+    <span
+      title={`${f.toUpperCase()} · ${text}`}
+      aria-label={`${f.toUpperCase()} · ${text}`}
+      className={`inline-flex items-center rounded-md border border-amber-400 bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold tracking-normal text-amber-950 shadow-sm ${className}`}
+    >
+      {qualityText}
     </span>
   );
 };

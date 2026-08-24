@@ -111,7 +111,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
         }}
         className="flex items-center gap-2.5 px-3 py-2 hover:bg-oled-hover text-left transition-colors"
       >
-        <Radio className="w-4 h-4 text-indigo-400" />
+        <Radio className="w-4 h-4 text-brand-accent" />
         <span>{t('menu_play_next', settings.language)}</span>
       </button>
 

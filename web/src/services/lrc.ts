@@ -1,10 +1,53 @@
-import { LyricData, LyricLine } from '../types/lyrics';
+import { LyricData, LyricLine, LyricsMode } from '../types/lyrics';
+
+/**
+ * Normalizes backend IPC LyricsData response (which uses timestamp_ms) into frontend LyricData.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeLyricsData(raw: any): LyricData | null {
+  if (!raw) return null;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const convertLines = (lines: any[]): LyricLine[] => {
+    if (!Array.isArray(lines)) return [];
+    return lines.map(line => {
+      const ts =
+        typeof line.timestamp === 'number'
+          ? line.timestamp
+          : typeof line.timestamp_ms === 'number'
+          ? line.timestamp_ms / 1000
+          : 0;
+
+      return {
+        timestamp: Math.max(0, ts),
+        text: line.text || '',
+        romanized: line.romanized || undefined,
+        translation: line.translation || undefined,
+      };
+    });
+  };
+
+  const lines = convertLines(raw.lines || []);
+  const romanized = raw.romanized ? normalizeLyricsData(raw.romanized) || undefined : undefined;
+
+  return {
+    title: raw.title,
+    artist: raw.artist,
+    album: raw.album,
+    by: raw.by,
+    offset: raw.offset,
+    lines,
+    is_synced: raw.is_synced ?? lines.length > 0,
+    plain_text: raw.plain_text,
+    romanized,
+  };
+}
 
 /**
  * Parses raw LRC string content into structured LyricData.
  * Supports multiple timestamps per line, milliseconds, centiseconds, and metadata tags.
  */
-export function parseLrc(content: string): LyricData {
+export function parseLrc(content: string, romanizedContent?: string): LyricData {
   const lines: LyricLine[] = [];
   const metadata: Record<string, string> = {};
   let offset = 0; // ms offset
@@ -62,6 +105,22 @@ export function parseLrc(content: string): LyricData {
   // Sort lines by ascending timestamp
   lines.sort((a, b) => a.timestamp - b.timestamp);
 
+  let romanized: LyricData | undefined;
+  if (romanizedContent && romanizedContent.trim()) {
+    romanized = parseLrc(romanizedContent);
+    if (romanized.is_synced && lines.length > 0) {
+      // Match lines by timestamp
+      for (const origLine of lines) {
+        const match = romanized.lines.find(
+          rom => Math.abs(origLine.timestamp - rom.timestamp) <= 1.0
+        );
+        if (match) {
+          origLine.romanized = match.text;
+        }
+      }
+    }
+  }
+
   return {
     title: metadata['ti'],
     artist: metadata['ar'],
@@ -70,6 +129,8 @@ export function parseLrc(content: string): LyricData {
     offset,
     lines,
     is_synced: lines.length > 0,
+    plain_text: content,
+    romanized,
   };
 }
 
@@ -87,4 +148,43 @@ export function findActiveLyricIndex(lines: LyricLine[], currentSeconds: number)
   }
 
   return 0;
+}
+
+/**
+ * Computes the valid/effective lyrics mode for given lyric data.
+ * - If no romanized data is available, strictly coerced to 'original'.
+ * - If only romanized data exists (no original lines or plain text), coerced to 'romanized'.
+ * - If both exist and preferredMode is valid, preserves preferredMode; defaults to 'both'.
+ */
+export function computeEffectiveLyricsMode(
+  lyricsData: LyricData | null,
+  preferredMode?: LyricsMode
+): LyricsMode {
+  if (!lyricsData) return 'original';
+
+  const hasOriginal = Boolean(
+    (lyricsData.plain_text && lyricsData.plain_text.trim().length > 0) ||
+      (lyricsData.lines && lyricsData.lines.length > 0)
+  );
+
+  const hasRomanized = Boolean(
+    (lyricsData.romanized &&
+      ((lyricsData.romanized.plain_text && lyricsData.romanized.plain_text.trim().length > 0) ||
+        (lyricsData.romanized.lines && lyricsData.romanized.lines.length > 0))) ||
+      lyricsData.lines?.some(l => l.romanized && l.romanized.trim().length > 0)
+  );
+
+  if (!hasRomanized) {
+    return 'original';
+  }
+
+  if (!hasOriginal) {
+    return 'romanized';
+  }
+
+  if (preferredMode === 'original' || preferredMode === 'romanized' || preferredMode === 'both') {
+    return preferredMode;
+  }
+
+  return 'both';
 }

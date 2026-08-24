@@ -51,7 +51,7 @@ impl Database {
     }
 
     pub fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().expect("Database mutex poisoned")
+        crate::sync_util::recover_mutex(&self.conn)
     }
 
     pub fn db_path(&self) -> Option<&Path> {

@@ -56,7 +56,7 @@ export const Modal: React.FC<ModalProps> = ({
       />
 
       <div
-        className={`relative w-full ${maxWidthClasses[maxWidth]} bg-oled-card border border-brand-border rounded-xl shadow-card-elevated overflow-hidden z-10 flex flex-col max-h-[90vh]`}
+        className={`soft-modal relative w-full ${maxWidthClasses[maxWidth]} bg-oled-card border border-white/70 rounded-[28px] shadow-card-elevated overflow-hidden z-10 flex flex-col max-h-[90vh]`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-brand-border/60">

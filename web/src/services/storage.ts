@@ -7,7 +7,6 @@ const STORAGE_KEYS = {
   FAVORITES_TRACKS: 'nghenhac_fav_tracks_v2',
   FAVORITES_ALBUMS: 'nghenhac_fav_albums_v2',
   FAVORITES_ARTISTS: 'nghenhac_fav_artists_v2',
-  RATINGS: 'nghenhac_ratings_v2',
   PLAYLISTS: 'nghenhac_playlists_v2',
   HISTORY: 'nghenhac_history_v2',
   EQ_PRESETS: 'nghenhac_eq_presets_v2',
@@ -25,7 +24,19 @@ export const Storage = {
   getSettings(): AppSettings {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      return data ? { ...DEFAULT_SETTINGS, ...JSON.parse(data) } : DEFAULT_SETTINGS;
+      if (!data) return DEFAULT_SETTINGS;
+      const parsed = JSON.parse(data) as Partial<AppSettings>;
+      const settings = { ...DEFAULT_SETTINGS, ...parsed };
+      if (settings.custom_image_theme && settings.custom_image_themes.length === 0) {
+        const migrated = {
+          ...settings.custom_image_theme,
+          id: settings.custom_image_theme.id ?? 'legacy-image-theme',
+          name: settings.custom_image_theme.name ?? 'Theme từ ảnh',
+        };
+        settings.custom_image_theme = migrated;
+        settings.custom_image_themes = [migrated];
+      }
+      return settings;
     } catch {
       return DEFAULT_SETTINGS;
     }
@@ -96,25 +107,6 @@ export const Storage = {
     else favs.add(artistName);
     localStorage.setItem(STORAGE_KEYS.FAVORITES_ARTISTS, JSON.stringify([...favs]));
     return isFav;
-  },
-
-  getRatings(): Record<string, number> {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.RATINGS);
-      return data ? JSON.parse(data) : {};
-    } catch {
-      return {};
-    }
-  },
-
-  setRating(trackId: string, rating: number): void {
-    const ratings = this.getRatings();
-    if (rating <= 0) {
-      delete ratings[trackId];
-    } else {
-      ratings[trackId] = Math.min(5, Math.max(1, rating));
-    }
-    localStorage.setItem(STORAGE_KEYS.RATINGS, JSON.stringify(ratings));
   },
 
   getPlaylists(): Playlist[] | null {
@@ -198,7 +190,6 @@ export const Storage = {
       favorite_tracks: [...this.getFavoriteTrackIds()],
       favorite_albums: [...this.getFavoriteAlbums()],
       favorite_artists: [...this.getFavoriteArtists()],
-      ratings: this.getRatings(),
       playlists: this.getPlaylists() || [],
       history: this.getHistory(),
       eq_presets: this.getCustomEqPresets(),
@@ -213,7 +204,6 @@ export const Storage = {
       if (data.favorite_tracks) localStorage.setItem(STORAGE_KEYS.FAVORITES_TRACKS, JSON.stringify(data.favorite_tracks));
       if (data.favorite_albums) localStorage.setItem(STORAGE_KEYS.FAVORITES_ALBUMS, JSON.stringify(data.favorite_albums));
       if (data.favorite_artists) localStorage.setItem(STORAGE_KEYS.FAVORITES_ARTISTS, JSON.stringify(data.favorite_artists));
-      if (data.ratings) localStorage.setItem(STORAGE_KEYS.RATINGS, JSON.stringify(data.ratings));
       if (data.playlists) this.savePlaylists(data.playlists);
       if (data.history) localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(data.history));
       if (data.eq_presets) this.saveCustomEqPresets(data.eq_presets);

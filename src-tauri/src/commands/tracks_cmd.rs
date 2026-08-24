@@ -3,7 +3,6 @@ use tauri::State;
 use crate::db::queries_tracks::{
     delete_track as db_delete_track, get_track_by_id as db_get_track_by_id,
     get_tracks as db_get_tracks, set_track_favorite as db_set_favorite,
-    set_track_rating as db_set_rating,
 };
 use crate::models::track::{Track, TrackFilter};
 use crate::state::AppState;
@@ -40,14 +39,4 @@ pub async fn set_track_favorite(
 ) -> Result<(), String> {
     let conn = state.db.lock();
     db_set_favorite(&conn, &id, is_favorite).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn set_track_rating(
-    id: String,
-    rating: u8,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.db.lock();
-    db_set_rating(&conn, &id, rating).map_err(|e| e.to_string())
 }

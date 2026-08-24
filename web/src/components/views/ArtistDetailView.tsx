@@ -47,16 +47,16 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
       </button>
 
       {/* Artist Header Banner */}
-      <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-indigo-950/80 to-oled-card border border-brand-border shadow-card-elevated">
-        <div className="w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-gradient-to-tr from-indigo-950 to-slate-900 border-2 border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
-          <User className="w-20 h-20 text-indigo-400/60" />
+      <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-brand-primary/60 to-oled-card border border-brand-border shadow-card-elevated">
+        <div className="w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border-2 border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
+          <User className="w-20 h-20 text-brand-accent/60" />
         </div>
 
         <div className="flex flex-col gap-2 min-w-0 text-center sm:text-left flex-1">
           <span className="text-xs font-bold uppercase tracking-wider text-brand-accent">
             Artist
           </span>
-          <h1 className="text-2xl sm:text-4xl font-bold font-display text-white truncate">
+          <h1 className="text-2xl sm:text-4xl font-bold font-display text-brand-foreground truncate">
             {artist.name}
           </h1>
 
@@ -156,8 +156,8 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
               onClick={() => onNavigate('album_detail', album)}
               className="group p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col shadow-card-elevated"
             >
-              <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-indigo-950 to-slate-900 border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
-                <Disc className="w-14 h-14 text-indigo-400/40 group-hover:rotate-90 transition-transform duration-700" aria-hidden="true" />
+              <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
+                <Disc className="w-14 h-14 text-brand-accent/40 group-hover:rotate-90 transition-transform duration-700" aria-hidden="true" />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <button
                     onClick={e => {
@@ -174,7 +174,7 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
               <span className="font-semibold text-xs text-brand-foreground truncate group-hover:text-brand-accent transition-colors">
                 {album.name}
               </span>
-              <span className="text-[11px] text-indigo-300 font-mono mt-1">
+              <span className="text-[11px] text-brand-muted font-mono mt-1">
                 {album.track_count} tracks {album.year ? `• ${album.year}` : ''}
               </span>
             </div>

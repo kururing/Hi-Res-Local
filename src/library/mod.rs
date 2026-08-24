@@ -240,6 +240,7 @@ mod tests {
             sample_rate: Some(44100),
             bitrate: Some(320),
             channels: Some(2),
+            bit_depth: Some(16),
             date_added: chrono::Utc::now(),
         };
 
@@ -534,5 +535,31 @@ mod tests {
 
         let stats = manager.get_stats();
         assert_eq!(stats.total_tracks, 160);
+    }
+
+    #[test]
+    fn test_backfill_missing_bit_depth_idempotency() {
+        let manager = LibraryManager::in_memory().expect("in memory manager");
+        let track_id = TrackId::new();
+        let track = Track {
+            id: track_id,
+            title: "Old MP3 Song".to_string(),
+            path: PathBuf::from("/music/old_song.mp3"),
+            bit_depth: None,
+            ..Default::default()
+        };
+        manager.upsert_track(&track).unwrap();
+
+        // First backfill pass runs and marks 0 sentinel for missing/probed file
+        let first_count = manager
+            .with_db(|db| db.backfill_missing_bit_depth())
+            .unwrap();
+        assert_eq!(first_count, 1);
+
+        // Second backfill pass finds 0 NULL rows -> 0 work done (idempotent O(1))
+        let second_count = manager
+            .with_db(|db| db.backfill_missing_bit_depth())
+            .unwrap();
+        assert_eq!(second_count, 0);
     }
 }

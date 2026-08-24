@@ -7,7 +7,8 @@ use crate::ui::components::{
     player_bar_style, seek_slider_style, volume_slider_style, with_tooltip,
 };
 use crate::ui::helpers::{
-    audio_quality_badge, cycle_loop_mode, format_duration, loop_mode_display,
+    cycle_loop_mode, format_duration, format_sample_rate_and_bit_depth, is_hires_track,
+    loop_mode_display,
 };
 use iced::widget::{button, column, container, horizontal_space, row, slider, text};
 use iced::{Alignment, Element, Length};
@@ -22,15 +23,15 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
     // ========================================================================
     let track_info_section: Element<'_, Message> = match &status.current_track {
         Some(track) => {
-            let quality_label = audio_quality_badge(track);
-            let is_hires = quality_label.contains("LOSSLESS") || quality_label.contains("HI-RES");
+            let format_label = format_sample_rate_and_bit_depth(track);
+            let is_hires = is_hires_track(track);
 
             row![
                 artwork_placeholder(&track.title, 44.0),
                 column![
                     row![
                         text(&track.title).size(13).color(colors::TEXT_PRIMARY),
-                        badge(quality_label, is_hires),
+                        badge(format_label, is_hires),
                     ]
                     .spacing(6)
                     .align_y(Alignment::Center),
@@ -63,7 +64,7 @@ pub fn render_player(app: &App) -> Element<'_, Message> {
     };
 
     let left_container = container(track_info_section)
-        .width(Length::Fixed(220.0))
+        .width(Length::Fixed(240.0))
         .align_y(Alignment::Center);
 
     // ========================================================================

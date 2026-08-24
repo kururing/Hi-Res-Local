@@ -12,11 +12,15 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
     "clsx": "^2.1.1",
+    "hangul-romanization": "^1.0.1",
     "lucide-react": "^0.475.0",
+    "pinyin-pro": "^3.29.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^3.0.1"
+    "tailwind-merge": "^3.0.1",
+    "wanakana": "^5.3.1"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",

@@ -4,12 +4,14 @@ import { usePlayer } from '../../context/PlayerContext';
 import { usePlaylists } from '../../context/PlaylistContext';
 import { useSettings } from '../../context/SettingsContext';
 import { t } from '../../i18n';
+import { VirtualList } from '../common/VirtualList';
 
 export const QueueDrawer: React.FC = () => {
   const {
     queue,
     queueIndex,
-    playTrack,
+    status,
+    playQueue,
     removeFromQueue,
     reorderQueue,
     clearQueue,
@@ -20,13 +22,24 @@ export const QueueDrawer: React.FC = () => {
   const { createPlaylist, updatePlaylist } = usePlaylists();
   const { settings } = useSettings();
 
+  const currentTrack = status.current_track;
+  const currentTrackIndex = currentTrack
+    ? queue.findIndex(track => track.id === currentTrack.id && track.path === currentTrack.path)
+    : -1;
+  const displayedQueueIndex = currentTrackIndex >= 0 ? currentTrackIndex : queueIndex;
+  const queueStartIndex = displayedQueueIndex >= 0 ? displayedQueueIndex : 0;
+  const visibleQueue = queue.slice(queueStartIndex).map((track, visibleIndex) => ({
+    track,
+    originalIndex: queueStartIndex + visibleIndex,
+  }));
+
   if (!isQueueDrawerOpen) return null;
 
   const handleSaveQueueAsPlaylist = async () => {
-    if (queue.length === 0) return;
+    if (visibleQueue.length === 0) return;
     const name = `Queue Mix (${new Date().toLocaleDateString()})`;
     const pl = await createPlaylist(name, 'Saved from playback queue');
-    await updatePlaylist(pl.id, { track_ids: queue.map(t => t.id) });
+    await updatePlaylist(pl.id, { track_ids: visibleQueue.map(item => item.track.id) });
   };
 
   return (
@@ -34,7 +47,7 @@ export const QueueDrawer: React.FC = () => {
       role="dialog"
       aria-modal="true"
       aria-label={t('queue_title', settings.language)}
-      className="fixed inset-y-0 right-0 z-50 w-full sm:w-96 bg-oled-card/95 border-l border-brand-border backdrop-blur-xl shadow-2xl flex flex-col animate-slideInRight select-none"
+      className="absolute top-0 bottom-[7.5rem] right-0 z-50 w-full sm:w-96 overflow-hidden rounded-bl-2xl bg-oled-card/95 border-l border-b border-brand-border backdrop-blur-xl shadow-2xl flex flex-col animate-slideInRight select-none"
     >
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-brand-border/60">
@@ -43,7 +56,7 @@ export const QueueDrawer: React.FC = () => {
             {t('queue_title', settings.language)}
           </h3>
           <span className="text-xs text-brand-muted">
-            {t('queue_track_count', settings.language, { count: queue.length })}
+            {t('queue_track_count', settings.language, { count: visibleQueue.length })}
           </span>
         </div>
 
@@ -80,83 +93,82 @@ export const QueueDrawer: React.FC = () => {
       </div>
 
       {/* Queue List */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+      <div className="flex-1 min-h-0 overflow-hidden">
         {queue.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-brand-muted gap-2 py-12">
             <Music2 className="w-10 h-10 stroke-1" aria-hidden="true" />
             <p className="text-sm">{t('queue_empty', settings.language)}</p>
           </div>
         ) : (
-          queue.map((track, idx) => {
-            const isPlaying = idx === queueIndex;
-            return (
-              <div
-                key={`${track.id}-${idx}`}
-                className={`group flex items-center justify-between p-2.5 rounded-xl border transition-all ${
-                  isPlaying
-                    ? 'bg-brand-accent/10 border-brand-accent/40 shadow-sm'
-                    : 'bg-oled-base/40 border-brand-border/40 hover:bg-oled-hover'
-                }`}
-              >
-                {/* Track Info */}
+          <VirtualList
+            items={visibleQueue}
+            rowHeight={62}
+            className="h-full p-3"
+            getKey={({ track, originalIndex }) => `${track.id}-${track.path}-${originalIndex}`}
+            renderRow={({ track, originalIndex }, idx) => {
+              const isPlaying = idx === 0 && originalIndex === displayedQueueIndex;
+              return (
                 <div
-                  onClick={() => playTrack(track)}
-                  className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer pr-2"
+                  aria-current={isPlaying ? 'true' : undefined}
+                  className={`group flex h-full items-center justify-between p-2.5 rounded-xl border ${
+                    isPlaying
+                      ? 'bg-brand-accent/10 border-brand-accent/40 shadow-sm'
+                      : 'bg-oled-base/40 border-brand-border/40 hover:bg-oled-hover'
+                  }`}
                 >
-                  <div className="w-8 h-8 rounded bg-indigo-950/80 border border-brand-border flex items-center justify-center shrink-0">
-                    {isPlaying ? (
-                      <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
-                    ) : (
-                      <span className="text-xs font-mono text-brand-muted">{idx + 1}</span>
-                    )}
+                  <div
+                    onClick={() => void playQueue(queue, originalIndex)}
+                    className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer pr-2"
+                  >
+                    <div className="w-8 h-8 rounded bg-brand-primary/80 border border-brand-border flex items-center justify-center shrink-0">
+                      {isPlaying ? (
+                        <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
+                      ) : (
+                        <span className="text-xs font-mono text-brand-muted">
+                          {displayedQueueIndex >= 0 ? idx : idx + 1}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <span
+                        className={`text-sm font-medium truncate ${
+                          isPlaying ? 'text-brand-accent' : 'text-brand-foreground'
+                        }`}
+                      >
+                        {track.title}
+                      </span>
+                      <span className="text-xs text-brand-muted truncate">{track.artist}</span>
+                    </div>
                   </div>
-
-                  <div className="flex flex-col min-w-0">
-                    <span
-                      className={`text-sm font-medium truncate ${
-                        isPlaying ? 'text-brand-accent' : 'text-brand-foreground'
-                      }`}
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      disabled={isPlaying || idx <= 1}
+                      onClick={() => reorderQueue(originalIndex, originalIndex - 1)}
+                      className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-brand-accent/10 text-brand-muted disabled:opacity-20 focus-visible:outline-none"
+                      aria-label={`Move ${track.title} up in queue`}
                     >
-                      {track.title}
-                    </span>
-                    <span className="text-xs text-brand-muted truncate">{track.artist}</span>
+                      <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      disabled={isPlaying || idx === visibleQueue.length - 1}
+                      onClick={() => reorderQueue(originalIndex, originalIndex + 1)}
+                      className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-brand-accent/10 text-brand-muted disabled:opacity-20 focus-visible:outline-none"
+                      aria-label={`Move ${track.title} down in queue`}
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      onClick={() => removeFromQueue(originalIndex)}
+                      className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-rose-950/50 text-brand-muted hover:text-rose-400 focus-visible:outline-none"
+                      aria-label={`Remove ${track.title} from queue`}
+                    >
+                      <X className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
                   </div>
                 </div>
-
-                {/* Actions & Reorder */}
-                <div className="flex items-center gap-0.5 shrink-0">
-                  {/* Move Up */}
-                  <button
-                    disabled={idx === 0}
-                    onClick={() => reorderQueue(idx, idx - 1)}
-                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 text-brand-muted disabled:opacity-20 transition-opacity focus-visible:outline-none"
-                    aria-label={`Move ${track.title} up in queue`}
-                  >
-                    <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
-
-                  {/* Move Down */}
-                  <button
-                    disabled={idx === queue.length - 1}
-                    onClick={() => reorderQueue(idx, idx + 1)}
-                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 text-brand-muted disabled:opacity-20 transition-opacity focus-visible:outline-none"
-                    aria-label={`Move ${track.title} down in queue`}
-                  >
-                    <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
-
-                  {/* Remove */}
-                  <button
-                    onClick={() => removeFromQueue(idx)}
-                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-rose-950/50 text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
-                    aria-label={`Remove ${track.title} from queue`}
-                  >
-                    <X className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
-                </div>
-              </div>
-            );
-          })
+              );
+            }}
+          />
         )}
       </div>
     </div>

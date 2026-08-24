@@ -6,7 +6,9 @@ use crate::ui::components::{
     artwork_placeholder, badge, circular_play_button_style, empty_state, primary_button_style,
     secondary_button_style, track_row_button_style, with_tooltip,
 };
-use crate::ui::helpers::{audio_quality_badge, filter_tracks, format_duration};
+use crate::ui::helpers::{
+    filter_tracks, format_duration, format_sample_rate_and_bit_depth, is_hires_track,
+};
 use iced::widget::{button, column, container, row, scrollable, text, vertical_space};
 use iced::{Alignment, Element, Length};
 
@@ -71,9 +73,9 @@ pub fn render_tracks_view(app: &App) -> Element<'_, Message> {
                 .size(12)
                 .width(Length::FillPortion(3))
                 .color(colors::TEXT_MUTED),
-            text("QUALITY")
+            text("SAMPLE RATE / BIT DEPTH")
                 .size(12)
-                .width(Length::Fixed(120.0))
+                .width(Length::Fixed(150.0))
                 .color(colors::TEXT_MUTED),
             text("TIME")
                 .size(12)
@@ -107,8 +109,8 @@ pub fn render_tracks_view(app: &App) -> Element<'_, Message> {
     for (index, track) in filtered_tracks.into_iter().enumerate() {
         let is_playing = current_playing_id == Some(track.id);
         let is_selected = app.selected_track_id == Some(track.id);
-        let quality_tag = audio_quality_badge(track);
-        let is_hires = quality_tag.contains("LOSSLESS") || quality_tag.contains("HI-RES");
+        let format_tag = format_sample_rate_and_bit_depth(track);
+        let is_hires = is_hires_track(track);
 
         let number_or_icon = if is_playing {
             text("▶").size(12).color(colors::ACCENT_PRIMARY)
@@ -139,8 +141,8 @@ pub fn render_tracks_view(app: &App) -> Element<'_, Message> {
             .width(Length::FillPortion(3))
             .color(colors::TEXT_SECONDARY);
 
-        let quality_cell = container(badge(quality_tag, is_hires))
-            .width(Length::Fixed(120.0))
+        let quality_cell = container(badge(format_tag, is_hires))
+            .width(Length::Fixed(150.0))
             .align_y(Alignment::Center);
 
         let duration_cell = text(format_duration(track.duration))

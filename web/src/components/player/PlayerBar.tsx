@@ -11,16 +11,15 @@ import {
   VolumeX,
   ListMusic,
   Sliders,
-  Maximize2,
   Heart,
-  Music2,
-  FileText,
+  Disc3,
 } from 'lucide-react';
-import { usePlayer } from '../../context/PlayerContext';
+import { usePlayer, usePlaybackProgress } from '../../context/PlayerContext';
 import { useLibrary } from '../../context/LibraryContext';
 import { useSettings } from '../../context/SettingsContext';
 import { Slider } from '../common/Slider';
 import { Badge } from '../common/Badge';
+import { TrackArtwork } from '../common/TrackArtwork';
 import { t } from '../../i18n';
 
 function formatTime(seconds: number): string {
@@ -30,7 +29,39 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
-export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavigateLyrics }) => {
+/**
+ * The only part of the player bar that subscribes to the ~10Hz playback
+ * progress ticker, so the rest of the bar does not re-render on every tick.
+ */
+const PlayerSeekBar: React.FC<{ seek: (positionSecs: number) => Promise<void> }> = React.memo(
+  ({ seek }) => {
+    const { position, duration } = usePlaybackProgress();
+
+    return (
+      <div className="w-full flex items-center gap-3 text-xs text-brand-muted">
+        <span className="w-10 text-right font-mono text-[11px] tabular-nums">
+          {formatTime(position)}
+        </span>
+        <div className="flex-1">
+          <Slider
+            value={position}
+            max={duration || 180}
+            step={1}
+            onChange={seek}
+            ariaLabel="Playback seek"
+            compact
+          />
+        </div>
+        <span className="w-10 text-left font-mono text-[11px] tabular-nums">
+          {formatTime(duration)}
+        </span>
+      </div>
+    );
+  }
+);
+PlayerSeekBar.displayName = 'PlayerSeekBar';
+
+export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onNavigateNowPlaying }) => {
   const {
     status,
     togglePlayPause,
@@ -41,7 +72,6 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
     toggleMute,
     setLoopMode,
     toggleShuffle,
-    setIsNowPlayingExpanded,
     isQueueDrawerOpen,
     setIsQueueDrawerOpen,
     isEqualizerOpen,
@@ -65,19 +95,23 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
     <footer
       role="region"
       aria-label="Audio player controls"
-      className="h-24 bg-oled-card/95 border-t border-brand-border backdrop-blur-lg px-4 md:px-6 flex items-center justify-between z-40 relative select-none"
+      className="app-player h-24 rounded-[26px] border border-brand-border/70 px-4 md:px-6 grid grid-cols-[minmax(200px,1fr)_minmax(320px,2fr)_minmax(200px,1fr)] items-center z-40 relative select-none"
     >
       {/* Left: Track Details */}
-      <div className="flex items-center gap-3.5 w-1/4 min-w-[200px]">
+      <div className="flex min-w-0 items-center gap-3.5">
         {/* Cover Art */}
         <div
-          onClick={() => track && setIsNowPlayingExpanded(true)}
-          className="relative w-14 h-14 rounded-lg bg-indigo-950/80 border border-brand-border/60 overflow-hidden flex items-center justify-center shrink-0 cursor-pointer group shadow-sm"
+          onClick={() => track && onNavigateNowPlaying?.()}
+          className="relative w-14 h-14 rounded-lg bg-brand-accent/12 border border-brand-accent/30 overflow-hidden flex items-center justify-center shrink-0 cursor-pointer group shadow-sm"
           title={track ? 'Expand Now Playing' : 'No track loaded'}
         >
-          <Music2 className="w-6 h-6 text-brand-muted group-hover:scale-110 transition-transform" />
+          <TrackArtwork
+            track={track}
+            className="absolute inset-0"
+            iconClassName="w-6 h-6 text-brand-muted group-hover:scale-110 transition-transform"
+          />
           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-            <Maximize2 className="w-4 h-4 text-white" />
+            <Disc3 className="w-4 h-4 text-white" />
           </div>
         </div>
 
@@ -87,7 +121,7 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
             <>
               <div className="flex items-center gap-2">
                 <span
-                  onClick={() => setIsNowPlayingExpanded(true)}
+                  onClick={() => onNavigateNowPlaying?.()}
                   className="font-medium text-sm text-brand-foreground truncate cursor-pointer hover:underline hover:text-brand-accent transition-colors"
                   title={track.title}
                 >
@@ -127,9 +161,9 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
       </div>
 
       {/* Center: Controls & Seekbar */}
-      <div className="flex flex-col items-center justify-center w-2/4 max-w-xl px-2">
+      <div className="mx-auto flex w-full max-w-xl translate-y-1 flex-col items-center justify-center px-3">
         {/* Buttons */}
-        <div className="flex items-center gap-4 mb-1">
+        <div className="flex h-11 items-center justify-center gap-3">
           {/* Shuffle */}
           <button
             onClick={toggleShuffle}
@@ -195,36 +229,20 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
         </div>
 
         {/* Time & Slider */}
-        <div className="w-full flex items-center gap-3 text-xs text-brand-muted">
-          <span className="w-10 text-right font-mono text-[11px] tabular-nums">
-            {formatTime(status.position)}
-          </span>
-          <div className="flex-1">
-            <Slider
-              value={status.position}
-              max={status.duration || 180}
-              step={1}
-              onChange={seek}
-              ariaLabel="Playback seek"
-            />
-          </div>
-          <span className="w-10 text-left font-mono text-[11px] tabular-nums">
-            {formatTime(status.duration)}
-          </span>
-        </div>
+        <PlayerSeekBar seek={seek} />
       </div>
 
       {/* Right: Auxiliary & Volume Controls */}
-      <div className="flex items-center justify-end gap-2 w-1/4 min-w-[200px]">
-        {/* Lyrics Button */}
-        {onNavigateLyrics && (
+      <div className="flex min-w-0 items-center justify-end gap-2">
+        {/* Now Playing Button */}
+        {onNavigateNowPlaying && (
           <button
-            onClick={onNavigateLyrics}
+            onClick={onNavigateNowPlaying}
             className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
-            aria-label={t('player_lyrics', settings.language)}
-            title={t('player_lyrics', settings.language)}
+            aria-label={t('player_now_playing', settings.language)}
+            title={t('player_now_playing', settings.language)}
           >
-            <FileText className="w-4 h-4" aria-hidden="true" />
+            <Disc3 className="w-4 h-4" aria-hidden="true" />
           </button>
         )}
 
@@ -287,15 +305,6 @@ export const PlayerBar: React.FC<{ onNavigateLyrics?: () => void }> = ({ onNavig
           />
         </div>
 
-        {/* Fullscreen Expand Button */}
-        <button
-          onClick={() => setIsNowPlayingExpanded(true)}
-          className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
-          aria-label={t('player_fullscreen', settings.language)}
-          title={t('player_fullscreen', settings.language)}
-        >
-          <Maximize2 className="w-4 h-4" />
-        </button>
       </div>
     </footer>
   );

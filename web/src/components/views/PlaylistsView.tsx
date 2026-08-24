@@ -56,7 +56,7 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
         </div>
 
         <div className="flex items-center gap-3">
-          <label className="inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus-visible:outline-none min-h-[44px] px-4 py-2 text-sm gap-2 bg-brand-primary text-white hover:bg-indigo-900 border border-brand-border cursor-pointer shadow-sm">
+          <label className="inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus-visible:outline-none min-h-[44px] px-4 py-2 text-sm gap-2 bg-brand-primary text-white hover:brightness-110 border border-brand-border cursor-pointer shadow-sm">
             <Upload className="w-4 h-4" />
             <span>{t('btn_import_m3u', settings.language)}</span>
             <input
@@ -86,7 +86,7 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
           >
             <div>
               <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-indigo-950/80 border border-brand-border flex items-center justify-center">
+                <div className="w-10 h-10 rounded-xl bg-brand-primary/80 border border-brand-border flex items-center justify-center">
                   {pl.is_smart ? (
                     <Sparkles className="w-5 h-5 text-amber-400" />
                   ) : (

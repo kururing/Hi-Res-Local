@@ -322,6 +322,26 @@ pub fn get_genres(conn: &Connection) -> AppResult<Vec<GenreSummary>> {
     Ok(list)
 }
 
+pub fn get_favorite_artist_names(conn: &Connection) -> AppResult<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT artist_name FROM favorite_artists")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut names = Vec::new();
+    for row in rows {
+        names.push(row?);
+    }
+    Ok(names)
+}
+
+pub fn get_favorite_album_entries(conn: &Connection) -> AppResult<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT album_title, artist_name FROM favorite_albums")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let mut entries = Vec::new();
+    for row in rows {
+        entries.push(row?);
+    }
+    Ok(entries)
+}
+
 pub fn set_artist_favorite(
     conn: &Connection,
     artist_name: &str,

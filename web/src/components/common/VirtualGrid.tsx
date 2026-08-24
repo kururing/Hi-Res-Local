@@ -1,0 +1,99 @@
+import React, { useEffect, useRef, useState } from 'react';
+
+interface VirtualGridProps<T> {
+  items: T[];
+  /** Minimum card width in px; the column count is derived from it. */
+  minColumnWidth: number;
+  /** Gap between cards in px (both axes). */
+  gap: number;
+  /**
+   * Card height in px for a given column width (cards usually have a square
+   * artwork plus a fixed text block, so height depends on the column width).
+   */
+  getRowHeight: (columnWidth: number) => number;
+  overscan?: number;
+  className?: string;
+  style?: React.CSSProperties;
+  getKey: (item: T, index: number) => string;
+  renderItem: (item: T, index: number) => React.ReactNode;
+}
+
+/**
+ * Row-virtualized responsive card grid: only the rows near the viewport are
+ * mounted, so thousands of album/artist cards stay cheap to render.
+ */
+export function VirtualGrid<T>({
+  items,
+  minColumnWidth,
+  gap,
+  getRowHeight,
+  overscan = 3,
+  className,
+  style,
+  getKey,
+  renderItem,
+}: VirtualGridProps<T>) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el) return;
+
+    const update = () => setViewport({ width: el.clientWidth, height: el.clientHeight });
+    update();
+
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const width = viewport.width || minColumnWidth * 2 + gap;
+  const columns = Math.max(2, Math.floor((width + gap) / (minColumnWidth + gap)));
+  const columnWidth = (width - gap * (columns - 1)) / columns;
+  const rowHeight = getRowHeight(columnWidth) + gap;
+  const rowCount = Math.ceil(items.length / columns);
+
+  const totalHeight = rowCount * rowHeight;
+  const startRow = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const visibleRows = Math.ceil((viewport.height || rowHeight) / rowHeight) + overscan * 2;
+  const endRow = Math.min(rowCount, startRow + visibleRows);
+  const offsetY = startRow * rowHeight;
+
+  const rows: React.ReactNode[] = [];
+  for (let rowIdx = startRow; rowIdx < endRow; rowIdx++) {
+    const rowItems: React.ReactNode[] = [];
+    for (let col = 0; col < columns; col++) {
+      const index = rowIdx * columns + col;
+      if (index >= items.length) break;
+      const item = items[index];
+      rowItems.push(
+        <div key={getKey(item, index)} style={{ width: columnWidth }}>
+          {renderItem(item, index)}
+        </div>
+      );
+    }
+    rows.push(
+      <div
+        key={`row-${rowIdx}`}
+        style={{ height: rowHeight, display: 'flex', gap, alignItems: 'flex-start' }}
+      >
+        {rowItems}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={parentRef}
+      className={className}
+      style={{ overflowY: 'auto', ...style }}
+      onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
+    >
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        <div style={{ transform: `translateY(${offsetY}px)` }}>{rows}</div>
+      </div>
+    </div>
+  );
+}

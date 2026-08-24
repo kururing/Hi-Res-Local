@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Folder,
   FolderPlus,
@@ -10,17 +10,203 @@ import {
   Download,
   Upload,
   Sparkles,
+  Power,
+  ImagePlus,
+  LoaderCircle,
 } from 'lucide-react';
 import { useSettings } from '../../context/SettingsContext';
 import { useLibrary } from '../../context/LibraryContext';
-import { usePlayer } from '../../context/PlayerContext';
+import { usePlaybackProgress, usePlayer } from '../../context/PlayerContext';
 import { useToast } from '../../context/ToastContext';
 import { Button } from '../common/Button';
 import { Slider } from '../common/Slider';
 import { Storage } from '../../services/storage';
-import { IpcService } from '../../services/ipc';
-import { AudioOutputDevice } from '../../types/audio';
+import { IpcService, isTauri } from '../../services/ipc';
+import { AudioCapabilities, AudioOutputDevice } from '../../types/audio';
 import { t } from '../../i18n';
+import { applyImageThemeAccent, createImageTheme } from '../../services/imageTheme';
+import { AppSettings, AppTheme } from '../../types/settings';
+
+interface SettingsSwitchProps {
+  checked: boolean;
+  disabled?: boolean;
+  loading?: boolean;
+  label: string;
+  description: string;
+  onChange: (checked: boolean) => void;
+}
+
+const SettingsSwitch: React.FC<SettingsSwitchProps> = ({
+  checked,
+  disabled = false,
+  loading = false,
+  label,
+  description,
+  onChange,
+}) => (
+  <div className="flex min-h-[72px] items-center justify-between gap-6 py-4">
+    <div className="min-w-0">
+      <h3 className="text-sm font-semibold text-brand-foreground">{label}</h3>
+      <p className="mt-1 text-xs leading-relaxed text-brand-muted">{description}</p>
+    </div>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      aria-busy={loading}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="group inline-flex h-11 w-12 shrink-0 cursor-pointer items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:ring-offset-2 focus-visible:ring-offset-oled-card disabled:cursor-wait disabled:opacity-50"
+    >
+      {loading ? (
+        <LoaderCircle className="h-5 w-5 animate-spin text-brand-accent motion-reduce:animate-none" aria-hidden="true" />
+      ) : (
+        <span
+          aria-hidden="true"
+          className={`relative h-6 w-11 rounded-full border transition-colors duration-200 motion-reduce:transition-none ${
+            checked
+              ? 'border-brand-accent bg-brand-accent'
+              : 'border-brand-border bg-slate-700/80'
+          }`}
+        >
+          <span
+            className={`absolute left-[2px] top-[2px] h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform duration-200 motion-reduce:transition-none ${
+              checked ? 'translate-x-5' : 'translate-x-0'
+            }`}
+          />
+        </span>
+      )}
+    </button>
+  </div>
+);
+
+interface ImageThemeControlsProps {
+  settings: AppSettings;
+  isCreatingTheme: boolean;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onImageChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onChooseImage: () => void;
+  onSelectColor: (index: number) => void;
+  onBlurChange: (enabled: boolean) => void;
+  onBlurPercentChange: (percent: number) => void;
+}
+
+const ImageThemeControls: React.FC<ImageThemeControlsProps> = ({
+  settings,
+  isCreatingTheme,
+  inputRef,
+  onImageChange,
+  onChooseImage,
+  onSelectColor,
+  onBlurChange,
+  onBlurPercentChange,
+}) => (
+  <div className="rounded-2xl border border-brand-border/70 bg-oled-base/55 p-4 sm:p-5">
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+      {settings.custom_image_theme && (
+        <img
+          src={settings.custom_image_theme.image_data_url}
+          alt={t('settings_image_theme_preview_alt', settings.language)}
+          className="h-20 w-full shrink-0 rounded-xl object-cover sm:w-28"
+        />
+      )}
+      <div className="min-w-0 flex-1">
+        <h3 className="text-sm font-semibold text-brand-foreground">
+          {t('settings_image_theme_title', settings.language)}
+        </h3>
+        <p className="mt-1 text-xs leading-relaxed text-brand-muted">
+          {t('settings_image_theme_desc', settings.language)}
+        </p>
+        {settings.custom_image_theme && (
+          <div className="mt-3 flex items-center gap-2" aria-label={t('settings_image_theme_colors', settings.language)}>
+            {(settings.custom_image_theme.palette ?? [
+              settings.custom_image_theme.colors.base,
+              settings.custom_image_theme.colors.card,
+              settings.custom_image_theme.colors.accent,
+              settings.custom_image_theme.colors.foreground,
+            ]).map((color, index) => (
+              <button
+                type="button"
+                key={`${color}-${index}`}
+                onClick={() => onSelectColor(index)}
+                aria-label={`${t('settings_image_theme_color_choice', settings.language)} ${index + 1}`}
+                aria-pressed={(settings.custom_image_theme?.selected_palette_index ?? 0) === index}
+                className={`h-9 w-9 rounded-full border-2 p-1 transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent ${
+                  (settings.custom_image_theme?.selected_palette_index ?? 0) === index
+                    ? 'border-brand-foreground shadow-sm'
+                    : 'border-transparent'
+                }`}
+              >
+                <span
+                  aria-hidden="true"
+                  className="block h-full w-full rounded-full border border-brand-border"
+                  style={{ backgroundColor: `rgb(${color.replaceAll(' ', ', ')})` }}
+                />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="flex shrink-0 flex-wrap gap-2">
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          onChange={onImageChange}
+          className="sr-only"
+        />
+        <button
+          type="button"
+          disabled={isCreatingTheme}
+          onClick={onChooseImage}
+          className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-brand-accent px-4 text-xs font-semibold text-oled-base transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:cursor-wait disabled:opacity-60"
+        >
+          {isCreatingTheme ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ImagePlus className="h-4 w-4" aria-hidden="true" />}
+          {t('settings_image_theme_import', settings.language)}
+        </button>
+      </div>
+    </div>
+
+    {settings.custom_image_theme && (
+      <div className="mt-3 border-t border-brand-border/60">
+        <SettingsSwitch
+          checked={settings.custom_theme_blur}
+          label={t('settings_image_theme_blur', settings.language)}
+          description={t('settings_image_theme_blur_desc', settings.language)}
+          onChange={onBlurChange}
+        />
+        {settings.custom_theme_blur && (
+          <div className="pb-5" aria-labelledby="image-theme-blur-amount-label">
+            <div className="mb-2 flex items-center justify-between gap-4">
+              <label
+                id="image-theme-blur-amount-label"
+                htmlFor="image-theme-blur-amount"
+                className="text-xs font-semibold text-brand-muted"
+              >
+                {t('settings_image_theme_blur_amount', settings.language)}
+              </label>
+              <span className="min-w-12 text-right text-xs font-semibold tabular-nums text-brand-accent">
+                {settings.custom_theme_blur_percent}%
+              </span>
+            </div>
+            <input
+              id="image-theme-blur-amount"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={settings.custom_theme_blur_percent}
+              onChange={event => onBlurPercentChange(Number(event.target.value))}
+              className="w-full"
+              aria-valuetext={`${settings.custom_theme_blur_percent}%`}
+            />
+          </div>
+        )}
+      </div>
+    )}
+  </div>
+);
 
 export const SettingsView: React.FC = () => {
   const {
@@ -32,17 +218,158 @@ export const SettingsView: React.FC = () => {
   } = useSettings();
 
   const { scanDirectory, scanProgress } = useLibrary();
-  const { setIsEqualizerOpen } = usePlayer();
+  const { status, setIsEqualizerOpen } = usePlayer();
+  const playbackProgress = usePlaybackProgress();
   const { showToast } = useToast();
 
   const [outputDevices, setOutputDevices] = useState<AudioOutputDevice[]>([]);
+  const [audioCapabilities, setAudioCapabilities] = useState<AudioCapabilities | null>(null);
+  const [isUpdatingAudio, setIsUpdatingAudio] = useState(false);
+  const [isUpdatingStartup, setIsUpdatingStartup] = useState(false);
+  const [isUpdatingDiscord, setIsUpdatingDiscord] = useState(false);
+  const [isCreatingTheme, setIsCreatingTheme] = useState(false);
+  const themeImageInputRef = useRef<HTMLInputElement>(null);
+
+  const handleThemeImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setIsCreatingTheme(true);
+    try {
+      const customImageTheme = await createImageTheme(file);
+      const existingThemes = settings.custom_image_themes.length > 0
+        ? settings.custom_image_themes
+        : settings.custom_image_theme
+          ? [settings.custom_image_theme]
+          : [];
+      updateSettings({
+        custom_image_theme: customImageTheme,
+        custom_image_themes: [...existingThemes, customImageTheme],
+        theme: 'custom',
+      });
+      showToast(t('toast_image_theme_applied', settings.language), 'success');
+    } catch (error) {
+      console.error('Failed to create image theme', error);
+      showToast(t('toast_image_theme_failed', settings.language), 'error');
+    } finally {
+      setIsCreatingTheme(false);
+    }
+  };
+
+  const selectImageThemeColor = (index: number) => {
+    if (!settings.custom_image_theme) return;
+    const updatedTheme = applyImageThemeAccent(settings.custom_image_theme, index);
+    const updatedThemes = settings.custom_image_themes.map(theme =>
+      theme.id === updatedTheme.id ? updatedTheme : theme
+    );
+    updateSettings({ custom_image_theme: updatedTheme, custom_image_themes: updatedThemes });
+  };
+
+  const handleThemeSelection = (value: string) => {
+    if (value.startsWith('custom:')) {
+      const id = value.slice('custom:'.length);
+      const selected = settings.custom_image_themes.find(theme => theme.id === id);
+      if (selected) updateSettings({ theme: 'custom', custom_image_theme: selected });
+      return;
+    }
+    setTheme(value as AppTheme);
+  };
 
   useEffect(() => {
     (async () => {
       const devices = await IpcService.invoke('get_audio_output_devices');
       if (devices) setOutputDevices(devices);
+      const capabilities = await IpcService.invoke('get_audio_capabilities');
+      if (capabilities) setAudioCapabilities(capabilities);
     })();
   }, []);
+
+  const applyAudioSetting = async (
+    action: () => Promise<void>,
+    partial: Partial<typeof settings>
+  ) => {
+    setIsUpdatingAudio(true);
+    try {
+      await action();
+      updateSettings(partial);
+      showToast(t('toast_audio_setting_applied', settings.language), 'success');
+    } catch (error) {
+      console.error('Failed to apply audio setting', error);
+      showToast(t('toast_audio_setting_failed', settings.language), 'error');
+    } finally {
+      setIsUpdatingAudio(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    void import('@tauri-apps/plugin-autostart')
+      .then(({ isEnabled }) => isEnabled())
+      .then(enabled => {
+        if (enabled !== settings.launch_on_startup) {
+          updateSettings({ launch_on_startup: enabled });
+        }
+      })
+      .catch(error => console.error('Failed to read startup setting', error));
+    // Read the operating-system value once when this settings view opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (audioCapabilities?.exclusive_mode_supported === false && settings.bit_perfect) {
+      updateSettings({ bit_perfect: false });
+    }
+  }, [audioCapabilities?.exclusive_mode_supported, settings.bit_perfect, updateSettings]);
+
+  const handleStartupChange = async (enabled: boolean) => {
+    if (!isTauri()) {
+      updateSettings({ launch_on_startup: enabled });
+      return;
+    }
+
+    setIsUpdatingStartup(true);
+    try {
+      const autostart = await import('@tauri-apps/plugin-autostart');
+      if (enabled) await autostart.enable();
+      else await autostart.disable();
+      updateSettings({ launch_on_startup: enabled });
+    } catch (error) {
+      console.error('Failed to update startup setting', error);
+      showToast(t('toast_startup_update_failed', settings.language), 'error');
+    } finally {
+      setIsUpdatingStartup(false);
+    }
+  };
+
+  const handleDiscordPresenceChange = async (enabled: boolean) => {
+    setIsUpdatingDiscord(true);
+    try {
+      const track = status.current_track;
+      await IpcService.invoke('set_discord_presence', {
+        enabled,
+        activity: track && status.state === 'playing'
+          ? {
+              title: track.title,
+              artist: track.artist,
+              position_secs: playbackProgress.position,
+              duration_secs: playbackProgress.duration || status.duration || track.duration,
+            }
+          : null,
+      });
+      updateSettings({ discord_presence_enabled: enabled });
+      showToast(
+        t(enabled ? 'toast_discord_enabled' : 'toast_discord_disabled', settings.language),
+        'success'
+      );
+    } catch (error) {
+      console.error('Failed to update Discord activity', error);
+      showToast(t('toast_discord_update_failed', settings.language), 'error');
+    } finally {
+      setIsUpdatingDiscord(false);
+    }
+  };
 
   const handleExportBackup = () => {
     const backupJson = Storage.exportBackup();
@@ -92,7 +419,7 @@ export const SettingsView: React.FC = () => {
         <div className="flex items-center justify-between pb-3 border-b border-brand-border/60">
           <div className="flex items-center gap-2.5">
             <Folder className="w-5 h-5 text-brand-accent" />
-            <h2 className="font-bold text-base font-display text-white">
+            <h2 className="font-bold text-base font-display text-brand-foreground">
               {t('settings_library_section', settings.language)}
             </h2>
           </div>
@@ -164,8 +491,8 @@ export const SettingsView: React.FC = () => {
       {/* 2. Audio Engine & Hardware */}
       <section className="p-6 rounded-2xl bg-oled-card border border-brand-border space-y-5 shadow-card-elevated">
         <div className="flex items-center gap-2.5 pb-3 border-b border-brand-border/60">
-          <Cpu className="w-5 h-5 text-indigo-400" />
-          <h2 className="font-bold text-base font-display text-white">
+          <Cpu className="w-5 h-5 text-brand-accent" />
+          <h2 className="font-bold text-base font-display text-brand-foreground">
             {t('settings_audio_section', settings.language)}
           </h2>
         </div>
@@ -177,7 +504,14 @@ export const SettingsView: React.FC = () => {
           </label>
           <select
             value={settings.output_device}
-            onChange={e => updateSettings({ output_device: e.target.value })}
+            disabled={isUpdatingAudio}
+            onChange={e => {
+              const deviceId = e.target.value;
+              void applyAudioSetting(
+                () => IpcService.invoke('set_audio_output_device', { device_id: deviceId }),
+                { output_device: deviceId }
+              );
+            }}
             className="bg-oled-base border border-brand-border rounded-xl px-4 py-2.5 text-xs sm:text-sm text-brand-foreground focus-visible:outline-none"
           >
             {outputDevices.map(d => (
@@ -201,7 +535,14 @@ export const SettingsView: React.FC = () => {
               <input
                 type="checkbox"
                 checked={settings.bit_perfect}
-                onChange={e => updateSettings({ bit_perfect: e.target.checked })}
+                disabled={isUpdatingAudio || audioCapabilities?.exclusive_mode_supported === false}
+                onChange={e => {
+                  const enabled = e.target.checked;
+                  void applyAudioSetting(
+                    () => IpcService.invoke('set_bit_perfect', { enabled }),
+                    { bit_perfect: enabled }
+                  );
+                }}
                 className="sr-only peer"
               />
               <div className="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-400"></div>
@@ -210,6 +551,11 @@ export const SettingsView: React.FC = () => {
           <p className="text-xs text-brand-muted leading-relaxed">
             {t('settings_bit_perfect_desc', settings.language)}
           </p>
+          {audioCapabilities?.exclusive_mode_supported === false && (
+            <p className="text-xs font-medium text-amber-500">
+              {t('settings_bit_perfect_unavailable', settings.language)}
+            </p>
+          )}
         </div>
 
         {/* Crossfade */}
@@ -227,7 +573,10 @@ export const SettingsView: React.FC = () => {
             min={0}
             max={12}
             step={1}
-            onChange={val => updateSettings({ crossfade_duration: val })}
+            onChange={val => void applyAudioSetting(
+              () => IpcService.invoke('set_crossfade', { duration_secs: val }),
+              { crossfade_duration: val }
+            )}
             ariaLabel="Crossfade duration"
           />
         </div>
@@ -240,7 +589,18 @@ export const SettingsView: React.FC = () => {
             </label>
             <select
               value={settings.replay_gain_mode}
-              onChange={e => updateSettings({ replay_gain_mode: e.target.value as 'off' | 'track' | 'album' })}
+              disabled={isUpdatingAudio}
+              onChange={e => {
+                const mode = e.target.value as 'off' | 'track' | 'album';
+                void applyAudioSetting(
+                  () => IpcService.invoke('set_replay_gain', {
+                    mode,
+                    preamp_db: settings.replay_gain_preamp,
+                    prevent_clipping: true,
+                  }),
+                  { replay_gain_mode: mode }
+                );
+              }}
               className="bg-oled-base border border-brand-border rounded-xl px-3.5 py-2 text-xs text-brand-foreground"
             >
               <option value="off">Off (Disabled)</option>
@@ -263,7 +623,14 @@ export const SettingsView: React.FC = () => {
               min={-12}
               max={12}
               step={0.5}
-              onChange={val => updateSettings({ replay_gain_preamp: val })}
+              onChange={val => void applyAudioSetting(
+                () => IpcService.invoke('set_replay_gain', {
+                  mode: settings.replay_gain_mode,
+                  preamp_db: val,
+                  prevent_clipping: true,
+                }),
+                { replay_gain_preamp: val }
+              )}
               ariaLabel="ReplayGain Preamp"
             />
           </div>
@@ -290,7 +657,7 @@ export const SettingsView: React.FC = () => {
       <section className="p-6 rounded-2xl bg-oled-card border border-brand-border space-y-5 shadow-card-elevated">
         <div className="flex items-center gap-2.5 pb-3 border-b border-brand-border/60">
           <Palette className="w-5 h-5 text-brand-accent" />
-          <h2 className="font-bold text-base font-display text-white">
+          <h2 className="font-bold text-base font-display text-brand-foreground">
             {t('settings_interface_section', settings.language)}
           </h2>
         </div>
@@ -302,14 +669,21 @@ export const SettingsView: React.FC = () => {
               {t('settings_theme', settings.language)}
             </label>
             <select
-              value={settings.theme}
-              onChange={e => setTheme(e.target.value as 'oled' | 'midnight' | 'slate' | 'light')}
+              value={settings.theme === 'custom' && settings.custom_image_theme?.id
+                ? `custom:${settings.custom_image_theme.id}`
+                : settings.theme}
+              onChange={e => handleThemeSelection(e.target.value)}
               className="bg-oled-base border border-brand-border rounded-xl px-3.5 py-2 text-xs sm:text-sm text-brand-foreground"
             >
               <option value="oled">{t('settings_theme_oled', settings.language)}</option>
               <option value="midnight">{t('settings_theme_midnight', settings.language)}</option>
               <option value="slate">{t('settings_theme_slate', settings.language)}</option>
               <option value="light">{t('settings_theme_light', settings.language)}</option>
+              {settings.custom_image_themes.map((theme, index) => (
+                <option key={theme.id ?? index} value={`custom:${theme.id ?? index}`}>
+                  {theme.name || `${t('settings_theme_custom', settings.language)} ${index + 1}`}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -328,13 +702,60 @@ export const SettingsView: React.FC = () => {
             </select>
           </div>
         </div>
+
+        <ImageThemeControls
+          settings={settings}
+          isCreatingTheme={isCreatingTheme}
+          inputRef={themeImageInputRef}
+          onImageChange={handleThemeImage}
+          onChooseImage={() => themeImageInputRef.current?.click()}
+          onSelectColor={selectImageThemeColor}
+          onBlurChange={custom_theme_blur => updateSettings({ custom_theme_blur })}
+          onBlurPercentChange={custom_theme_blur_percent => updateSettings({ custom_theme_blur_percent })}
+        />
       </section>
 
-      {/* 4. Backup & Restore */}
+      {/* 4. Desktop behavior */}
+      <section className="rounded-2xl border border-brand-border bg-oled-card px-6 shadow-card-elevated">
+        <div className="flex items-center gap-2.5 border-b border-brand-border/60 py-4">
+          <Power className="h-5 w-5 text-brand-accent" aria-hidden="true" />
+          <h2 className="font-display text-base font-bold text-brand-foreground">
+            {t('settings_behavior_section', settings.language)}
+          </h2>
+        </div>
+
+        <div className="divide-y divide-brand-border/60">
+          <SettingsSwitch
+            checked={settings.launch_on_startup}
+            disabled={isUpdatingStartup}
+            loading={isUpdatingStartup}
+            label={t('settings_startup', settings.language)}
+            description={t('settings_startup_desc', settings.language)}
+            onChange={handleStartupChange}
+          />
+          <SettingsSwitch
+            checked={settings.close_to_tray}
+            label={t('settings_close_to_tray', settings.language)}
+            description={t('settings_close_to_tray_desc', settings.language)}
+            onChange={close_to_tray => updateSettings({ close_to_tray })}
+          />
+          <SettingsSwitch
+            checked={settings.discord_presence_enabled}
+            disabled={isUpdatingDiscord}
+            loading={isUpdatingDiscord}
+            label={t('settings_discord_presence', settings.language)}
+            description={t('settings_discord_presence_desc', settings.language)}
+            onChange={handleDiscordPresenceChange}
+          />
+        </div>
+
+      </section>
+
+      {/* 5. Backup & Restore */}
       <section className="p-6 rounded-2xl bg-oled-card border border-brand-border space-y-4 shadow-card-elevated">
         <div className="flex items-center gap-2.5 pb-3 border-b border-brand-border/60">
-          <Download className="w-5 h-5 text-emerald-400" />
-          <h2 className="font-bold text-base font-display text-white">
+          <Download className="w-5 h-5 text-brand-accent" />
+          <h2 className="font-bold text-base font-display text-brand-foreground">
             {t('settings_backup_section', settings.language)}
           </h2>
         </div>
@@ -353,7 +774,7 @@ export const SettingsView: React.FC = () => {
             {t('settings_btn_export_backup', settings.language)}
           </Button>
 
-          <label className="inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus-visible:outline-none min-h-[44px] px-4 py-2 text-sm gap-2 bg-brand-primary text-white hover:bg-indigo-900 border border-brand-border cursor-pointer shadow-sm">
+          <label className="inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus-visible:outline-none min-h-[44px] px-4 py-2 text-sm gap-2 bg-brand-primary text-white hover:brightness-110 border border-brand-border cursor-pointer shadow-sm">
             <Upload className="w-4 h-4" />
             <span>{t('settings_btn_import_backup', settings.language)}</span>
             <input

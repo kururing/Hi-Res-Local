@@ -20,6 +20,7 @@ import { useToast } from '../../context/ToastContext';
 import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
 import { ContextMenu, ContextMenuState } from '../common/ContextMenu';
+import { VirtualList } from '../common/VirtualList';
 import { Playlist } from '../../types/playlist';
 import { Track } from '../../types/library';
 import { t } from '../../i18n';
@@ -109,8 +110,8 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
       </button>
 
       {/* Playlist Header Banner */}
-      <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-indigo-950/80 to-oled-card border border-brand-border shadow-card-elevated">
-        <div className="w-40 h-40 sm:w-48 sm:h-48 rounded-2xl bg-gradient-to-tr from-indigo-950 to-slate-900 border border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
+      <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-brand-primary/60 to-oled-card border border-brand-border shadow-card-elevated">
+        <div className="w-40 h-40 sm:w-48 sm:h-48 rounded-2xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
           {playlist.is_smart ? (
             <Sparkles className="w-20 h-20 text-amber-400" />
           ) : (
@@ -130,7 +131,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
             )}
           </div>
 
-          <h1 className="text-2xl sm:text-4xl font-bold font-display text-white truncate">
+          <h1 className="text-2xl sm:text-4xl font-bold font-display text-brand-foreground truncate">
             {playlist.name}
           </h1>
 
@@ -194,24 +195,28 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
           No tracks in this playlist. Right-click on any song in library and choose &quot;Add to Playlist&quot;.
         </div>
       ) : (
-        <div className="rounded-xl border border-brand-border bg-oled-card/60 overflow-hidden divide-y divide-brand-border/30">
-          {playlistTracks.map((tr, idx) => {
+        <VirtualList
+          items={playlistTracks}
+          rowHeight={68}
+          className="rounded-xl border border-brand-border bg-oled-card/60"
+          style={{ maxHeight: 650 }}
+          getKey={(tr, idx) => `${tr.id}-${idx}`}
+          renderRow={(tr, idx) => {
             const isPlaying = status.current_track?.id === tr.id;
             const isFav = favoriteTrackIds.has(tr.id);
 
             return (
               <div
-                key={`${tr.id}-${idx}`}
                 onContextMenu={e => handleContextMenu(e, tr)}
                 onDoubleClick={() => playTrack(tr, playlistTracks)}
-                className={`grid grid-cols-12 gap-4 px-4 py-3 text-xs items-center group transition-colors cursor-pointer select-none ${
+                className={`grid grid-cols-12 gap-4 px-4 h-full text-xs items-center group cursor-pointer select-none ${
                   isPlaying ? 'bg-brand-accent/10 text-brand-accent font-medium' : 'hover:bg-oled-hover text-brand-foreground'
                 }`}
               >
                 <div className="col-span-1 text-center font-mono flex items-center justify-center">
                   <button
                     onClick={() => playTrack(tr, playlistTracks)}
-                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base transition-all focus-visible:outline-none"
+                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base focus-visible:outline-none"
                     aria-label={`Play ${tr.title}`}
                   >
                     {isPlaying ? (
@@ -226,7 +231,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                 </div>
 
                 <div className="col-span-5 flex flex-col min-w-0 pr-2">
-                  <span className="font-semibold truncate group-hover:text-brand-accent transition-colors">
+                  <span className="font-semibold truncate group-hover:text-brand-accent">
                     {tr.title}
                   </span>
                   <div className="flex items-center gap-2 mt-0.5">
@@ -248,7 +253,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                           e.stopPropagation();
                           reorderPlaylist(playlist.id, idx, idx - 1);
                         }}
-                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:bg-white/10 disabled:opacity-20 transition-opacity focus-visible:outline-none"
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:bg-brand-accent/10 disabled:opacity-20 focus-visible:outline-none"
                         aria-label={`Move ${tr.title} up`}
                       >
                         <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
@@ -259,7 +264,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                           e.stopPropagation();
                           reorderPlaylist(playlist.id, idx, idx + 1);
                         }}
-                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:bg-white/10 disabled:opacity-20 transition-opacity focus-visible:outline-none"
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:bg-brand-accent/10 disabled:opacity-20 focus-visible:outline-none"
                         aria-label={`Move ${tr.title} down`}
                       >
                         <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
@@ -269,7 +274,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                           e.stopPropagation();
                           removeTrackFromPlaylist(playlist.id, tr.id);
                         }}
-                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-rose-400 hover:bg-white/10 transition-colors focus-visible:outline-none"
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-rose-500 hover:bg-brand-accent/10 focus-visible:outline-none"
                         aria-label={`Remove ${tr.title} from playlist`}
                       >
                         <X className="w-3.5 h-3.5" aria-hidden="true" />
@@ -300,8 +305,8 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                 </div>
               </div>
             );
-          })}
-        </div>
+          }}
+        />
       )}
 
       <ContextMenu state={contextMenu} onClose={() => setContextMenu(prev => ({ ...prev, isOpen: false }))} />

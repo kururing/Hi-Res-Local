@@ -134,6 +134,7 @@ pub fn extract_metadata(path: &Path) -> Result<Track, LibraryError> {
                 .or_else(|| properties.overall_bitrate());
             let sample_rate = properties.sample_rate();
             let channels = properties.channels().map(|c| c as u16);
+            let bit_depth = properties.bit_depth();
 
             let primary_tag = tagged_file
                 .primary_tag()
@@ -180,6 +181,7 @@ pub fn extract_metadata(path: &Path) -> Result<Track, LibraryError> {
                 sample_rate,
                 bitrate,
                 channels,
+                bit_depth,
                 date_added: Utc::now(),
             })
         }
@@ -206,6 +208,7 @@ pub fn extract_metadata(path: &Path) -> Result<Track, LibraryError> {
                     sample_rate: None,
                     bitrate: None,
                     channels: None,
+                    bit_depth: None,
                     date_added: Utc::now(),
                 })
             } else {

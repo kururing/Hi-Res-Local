@@ -2,6 +2,7 @@ import React from 'react';
 import { User } from 'lucide-react';
 import { useLibrary } from '../../context/LibraryContext';
 import { useSettings } from '../../context/SettingsContext';
+import { VirtualGrid } from '../common/VirtualGrid';
 import { t } from '../../i18n';
 
 interface ArtistsViewProps {
@@ -28,16 +29,21 @@ export const ArtistsView: React.FC<ArtistsViewProps> = ({ onNavigate }) => {
       {artists.length === 0 ? (
         <div className="p-12 text-center text-brand-muted">No artists found in library.</div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
-          {artists.map(artist => (
+        <VirtualGrid
+          items={artists}
+          minColumnWidth={170}
+          gap={24}
+          getRowHeight={() => 204}
+          className="max-h-[75vh]"
+          getKey={artist => artist.id}
+          renderItem={artist => (
             <div
-              key={artist.id}
               onClick={() => onNavigate('artist_detail', artist)}
               className="group p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center shadow-card-elevated"
             >
               {/* Circle Avatar */}
-              <div className="relative w-28 h-28 rounded-full bg-gradient-to-tr from-indigo-950 to-slate-900 border-2 border-brand-border/80 mb-3 flex items-center justify-center overflow-hidden group-hover:scale-105 group-hover:border-brand-accent transition-all duration-300 shadow-md">
-                <User className="w-12 h-12 text-indigo-400/60" />
+              <div className="relative w-28 h-28 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border-2 border-brand-border/80 mb-3 flex items-center justify-center overflow-hidden group-hover:scale-105 group-hover:border-brand-accent transition-all duration-300 shadow-md">
+                <User className="w-12 h-12 text-brand-accent/60" />
               </div>
 
               {/* Name & Counts */}
@@ -48,8 +54,8 @@ export const ArtistsView: React.FC<ArtistsViewProps> = ({ onNavigate }) => {
                 {artist.album_count} albums • {artist.track_count} tracks
               </span>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
     </div>
   );

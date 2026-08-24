@@ -76,6 +76,7 @@ mod tests {
             sample_rate: Some(96000),
             bitrate: Some(1411),
             channels: Some(2),
+            bit_depth: Some(24),
             date_added: Utc::now(),
         }
     }

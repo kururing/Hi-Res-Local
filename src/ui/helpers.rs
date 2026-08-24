@@ -37,7 +37,8 @@ pub fn format_duration_human(total_secs: u64) -> String {
     }
 }
 
-/// Formats sample rate into kHz representation (e.g. "44.1 kHz", "96.0 kHz").
+/// Formats sample rate into kHz representation (e.g. "44.1 kHz", "96 kHz").
+/// Falls back to "N/A" if missing.
 pub fn format_sample_rate(sample_rate: Option<u32>) -> String {
     match sample_rate {
         Some(sr) => {
@@ -48,8 +49,39 @@ pub fn format_sample_rate(sample_rate: Option<u32>) -> String {
                 format!("{:.1} kHz", khz)
             }
         }
-        None => "44.1 kHz".to_string(),
+        None => "N/A".to_string(),
     }
+}
+
+/// Formats bit depth into standard string representation (e.g. "16-bit", "24-bit").
+/// Falls back to "N/A" if missing.
+pub fn format_bit_depth(bit_depth: Option<u8>) -> String {
+    match bit_depth {
+        Some(bd) if bd > 0 => format!("{}-bit", bd),
+        _ => "N/A".to_string(),
+    }
+}
+
+/// Formats sample rate and bit depth together from metadata (e.g. "44.1 kHz / 16-bit", "96 kHz / 24-bit", "44.1 kHz / N/A", "N/A").
+pub fn format_sample_rate_and_bit_depth(track: &Track) -> String {
+    match (track.sample_rate, track.bit_depth) {
+        (Some(sr), Some(bd)) if bd > 0 => {
+            format!("{} / {}-bit", format_sample_rate(Some(sr)), bd)
+        }
+        (Some(sr), _) => {
+            format!("{} / N/A", format_sample_rate(Some(sr)))
+        }
+        (None, Some(bd)) if bd > 0 => {
+            format!("N/A / {}-bit", bd)
+        }
+        _ => "N/A".to_string(),
+    }
+}
+
+/// Returns whether a track qualifies as Hi-Res audio (>= 88.2 kHz or >= 24-bit).
+pub fn is_hires_track(track: &Track) -> bool {
+    track.sample_rate.map_or(false, |sr| sr >= 88200)
+        || track.bit_depth.map_or(false, |bd| bd >= 24)
 }
 
 /// Formats bitrate into kbps string (e.g. "320 kbps", "1411 kbps").
@@ -255,6 +287,7 @@ mod tests {
             sample_rate: Some(96000),
             bitrate: Some(1411),
             channels: Some(2),
+            bit_depth: Some(24),
             date_added: Utc::now(),
         }
     }
@@ -283,7 +316,33 @@ mod tests {
         assert_eq!(format_sample_rate(Some(48000)), "48 kHz");
         assert_eq!(format_sample_rate(Some(96000)), "96 kHz");
         assert_eq!(format_sample_rate(Some(192000)), "192 kHz");
-        assert_eq!(format_sample_rate(None), "44.1 kHz");
+        assert_eq!(format_sample_rate(None), "N/A");
+    }
+
+    #[test]
+    fn test_sample_rate_and_bit_depth() {
+        let mut track = sample_track("HiFi Song", "Artist", "Album", 180);
+        track.sample_rate = Some(96000);
+        track.bit_depth = Some(24);
+        assert_eq!(format_sample_rate_and_bit_depth(&track), "96 kHz / 24-bit");
+        assert!(is_hires_track(&track));
+
+        // Missing bit_depth -> "44.1 kHz / N/A"
+        track.sample_rate = Some(44100);
+        track.bit_depth = None;
+        track.bitrate = Some(320);
+        assert_eq!(format_sample_rate_and_bit_depth(&track), "44.1 kHz / N/A");
+        assert!(!is_hires_track(&track));
+
+        // Missing all metadata -> "N/A"
+        track.sample_rate = None;
+        track.bit_depth = None;
+        track.bitrate = None;
+        assert_eq!(format_sample_rate_and_bit_depth(&track), "N/A");
+
+        // Format bit depth helper
+        assert_eq!(format_bit_depth(Some(24)), "24-bit");
+        assert_eq!(format_bit_depth(None), "N/A");
     }
 
     #[test]

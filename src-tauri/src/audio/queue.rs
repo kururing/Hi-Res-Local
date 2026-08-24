@@ -12,6 +12,9 @@ pub struct PlaybackQueue {
     repeat_mode: RepeatMode,
     shuffle_enabled: bool,
     recent_history_window: usize,
+    /// Shuffle pick decided ahead of time so the gapless preload and the actual
+    /// `next()` resolve to the same track. Invalidated on any queue mutation.
+    planned_next: Option<usize>,
 }
 
 impl Default for PlaybackQueue {
@@ -30,6 +33,7 @@ impl PlaybackQueue {
             repeat_mode: RepeatMode::Off,
             shuffle_enabled: false,
             recent_history_window: 10,
+            planned_next: None,
         }
     }
 
@@ -45,12 +49,17 @@ impl PlaybackQueue {
         self.current_index.and_then(|idx| self.tracks.get(idx))
     }
 
+    pub fn current_track_mut(&mut self) -> Option<&mut AudioTrack> {
+        self.current_index.and_then(|idx| self.tracks.get_mut(idx))
+    }
+
     pub fn repeat_mode(&self) -> RepeatMode {
         self.repeat_mode
     }
 
     pub fn set_repeat_mode(&mut self, mode: RepeatMode) {
         self.repeat_mode = mode;
+        self.planned_next = None;
     }
 
     pub fn shuffle_enabled(&self) -> bool {
@@ -59,6 +68,7 @@ impl PlaybackQueue {
 
     pub fn set_shuffle_enabled(&mut self, enabled: bool) {
         self.shuffle_enabled = enabled;
+        self.planned_next = None;
     }
 
     pub fn len(&self) -> usize {
@@ -70,6 +80,7 @@ impl PlaybackQueue {
     }
 
     pub fn add_tracks(&mut self, mut new_tracks: Vec<AudioTrack>) {
+        self.planned_next = None;
         if self.tracks.is_empty() && !new_tracks.is_empty() {
             self.tracks.append(&mut new_tracks);
             self.current_index = Some(0);
@@ -83,6 +94,7 @@ impl PlaybackQueue {
     }
 
     pub fn play_next(&mut self, track: AudioTrack) {
+        self.planned_next = None;
         match self.current_index {
             Some(idx) => {
                 let insert_pos = (idx + 1).min(self.tracks.len());
@@ -96,6 +108,7 @@ impl PlaybackQueue {
     }
 
     pub fn play_next_many(&mut self, tracks: Vec<AudioTrack>) {
+        self.planned_next = None;
         match self.current_index {
             Some(idx) => {
                 let mut insert_pos = idx + 1;
@@ -119,6 +132,7 @@ impl PlaybackQueue {
         }
 
         self.tracks.insert(index, track);
+        self.planned_next = None;
 
         if let Some(curr) = self.current_index {
             if index <= curr {
@@ -140,6 +154,7 @@ impl PlaybackQueue {
         }
 
         let removed = self.tracks.remove(index);
+        self.planned_next = None;
 
         if self.tracks.is_empty() {
             self.current_index = None;
@@ -187,6 +202,7 @@ impl PlaybackQueue {
 
         let item = self.tracks.remove(from);
         self.tracks.insert(to, item);
+        self.planned_next = None;
 
         if let Some(curr) = self.current_index {
             if curr == from {
@@ -206,6 +222,7 @@ impl PlaybackQueue {
         self.current_index = None;
         self.history_indices.clear();
         self.forward_indices.clear();
+        self.planned_next = None;
     }
 
     pub fn set_current_index(&mut self, index: usize) -> AudioResult<Option<&AudioTrack>> {
@@ -224,6 +241,7 @@ impl PlaybackQueue {
         }
 
         self.current_index = Some(index);
+        self.planned_next = None;
         Ok(self.current_track())
     }
 
@@ -248,7 +266,10 @@ impl PlaybackQueue {
 
         let current = self.current_index;
 
-        let next_idx = if self.shuffle_enabled {
+        let planned = self.planned_next.take().filter(|&idx| idx < self.tracks.len());
+        let next_idx = if let Some(planned_idx) = planned {
+            Some(planned_idx)
+        } else if self.shuffle_enabled {
             self.pick_weighted_shuffle_next()
         } else {
             match current {
@@ -280,6 +301,8 @@ impl PlaybackQueue {
         if self.tracks.is_empty() {
             return None;
         }
+
+        self.planned_next = None;
 
         if let Some(prev_idx) = self.history_indices.pop() {
             if prev_idx < self.tracks.len() {
@@ -315,6 +338,50 @@ impl PlaybackQueue {
             self.current_track()
         } else {
             None
+        }
+    }
+
+    /// Decide which track will play next (for gapless preload) and remember the
+    /// decision so a later `next()` resolves to the same track even in shuffle mode.
+    pub fn plan_next(&mut self) -> Option<&AudioTrack> {
+        if self.tracks.is_empty() {
+            return None;
+        }
+
+        if self.repeat_mode == RepeatMode::One {
+            return self.current_track();
+        }
+
+        if let Some(&fwd) = self.forward_indices.last() {
+            if fwd < self.tracks.len() {
+                return self.tracks.get(fwd);
+            }
+        }
+
+        if let Some(planned) = self.planned_next {
+            if planned < self.tracks.len() {
+                return self.tracks.get(planned);
+            }
+            self.planned_next = None;
+        }
+
+        if self.shuffle_enabled {
+            let picked = self.pick_weighted_shuffle_next();
+            self.planned_next = picked;
+            picked.and_then(|idx| self.tracks.get(idx))
+        } else {
+            match self.current_index {
+                Some(idx) => {
+                    if idx + 1 < self.tracks.len() {
+                        self.tracks.get(idx + 1)
+                    } else if self.repeat_mode == RepeatMode::All {
+                        self.tracks.first()
+                    } else {
+                        None
+                    }
+                }
+                None => self.tracks.first(),
+            }
         }
     }
 

@@ -1,17 +1,24 @@
 pub mod audio;
 pub mod commands;
 pub mod db;
+pub mod discord;
 pub mod error;
 pub mod lyrics;
 pub mod models;
+pub mod panic_hook;
 pub mod scanner;
 pub mod search;
 pub mod state;
+pub mod sync_util;
 pub mod tags;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
+};
 
 use crate::audio::dto::AudioEvent;
 use crate::commands::*;
@@ -21,8 +28,62 @@ use crate::scanner::watcher::LibraryWatcher;
 use crate::state::AppState;
 
 pub fn run() {
+    panic_hook::install();
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
+            let show_item = MenuItem::with_id(app, "show", "Open Nghe Nhac Pro Max", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            let mut tray = TrayIconBuilder::new()
+                .tooltip("Nghe Nhac Pro Max");
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.unminimize();
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.unminimize();
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // A previous close-to-tray session can leave the main webview hidden.
+            // Always restore the window when the application is launched explicitly.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+
             let db = Arc::new(
                 Database::open_default().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?,
             );
@@ -43,7 +104,7 @@ pub fn run() {
                                 crate::audio::dto::PlaybackState::Paused => "paused",
                                 crate::audio::dto::PlaybackState::Stopped => "stopped",
                                 crate::audio::dto::PlaybackState::Buffering => "loading",
-                                crate::audio::dto::PlaybackState::Ended => "stopped",
+                                crate::audio::dto::PlaybackState::Ended => "ended",
                             };
                             let _ = app_handle.emit(
                                 "audio://state_changed",
@@ -53,16 +114,30 @@ pub fn run() {
                             if state == crate::audio::dto::PlaybackState::Ended {
                                 let _ = app_handle
                                     .emit("audio://track_ended", serde_json::json!({}));
+                                // Auto-advance is owned by the backend queue. Ended
+                                // fires only when no preloaded next track existed
+                                // (end of queue, or a preload failure); next() plays
+                                // the following track or stops cleanly.
+                                if let Err(err) = player.next() {
+                                    tracing::warn!("Auto-advance after track end failed: {err}");
+                                }
                             }
                         }
                         AudioEvent::TrackChanged(track) => {
                             let _ = app_handle.emit("audio://track_changed", &track);
                         }
+                        AudioEvent::TrackTransitioned(track) => {
+                            // Gapless/crossfade moved to the preloaded track: sync
+                            // the queue index and schedule the next preload.
+                            player.handle_track_transitioned(&track);
+                            let _ = app_handle.emit("audio://track_changed", &Some(track));
+                        }
                         AudioEvent::ProgressUpdated(progress) => {
                             let _ = app_handle.emit(
                                 "audio://position",
                                 serde_json::json!({
-                                    "position_secs": (progress.position_ms as f64) / 1000.0
+                                    "position_secs": (progress.position_ms as f64) / 1000.0,
+                                    "duration_secs": (progress.duration_ms as f64) / 1000.0
                                 }),
                             );
                             let _ = app_handle.emit("audio://progress", &progress);
@@ -106,19 +181,19 @@ pub fn run() {
                 }
             });
 
-            // Periodic smooth position progress ticker when playing
+            // ~10 Hz progress ticks from atomics only (no queue clone, no audio-thread emit).
             let player_ticker = Arc::clone(&app_state.player);
             let app_handle_ticker = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
                 loop {
                     interval.tick().await;
-                    let snap = player_ticker.get_snapshot();
-                    if snap.state == crate::audio::dto::PlaybackState::Playing {
+                    if let Some((position_ms, duration_ms)) = player_ticker.get_progress_tick() {
                         let _ = app_handle_ticker.emit(
                             "audio://position",
                             serde_json::json!({
-                                "position_secs": (snap.progress.position_ms as f64) / 1000.0
+                                "position_secs": (position_ms as f64) / 1000.0,
+                                "duration_secs": (duration_ms as f64) / 1000.0
                             }),
                         );
                     }
@@ -126,25 +201,33 @@ pub fn run() {
             });
 
             // Initialize watcher for active roots if enabled in settings
-            if let Ok(settings) = {
+            match {
                 let conn = db.lock();
                 get_app_settings(&conn)
             } {
-                if settings.watch_directories {
-                    if let Ok(mut watcher) =
-                        LibraryWatcher::new(Arc::clone(&db), Some(app.handle().clone()))
-                    {
-                        for root in &settings.library_roots {
-                            if root.is_active {
-                                let path = PathBuf::from(&root.path);
-                                let _ = watcher.watch_path(&path);
+                Ok(settings) if settings.watch_directories => {
+                    match LibraryWatcher::new(Arc::clone(&db), Some(app.handle().clone())) {
+                        Ok(mut watcher) => {
+                            for root in &settings.library_roots {
+                                if root.is_active {
+                                    let path = PathBuf::from(&root.path);
+                                    if let Err(err) = watcher.watch_path(&path) {
+                                        tracing::warn!(
+                                            "Failed to watch library root {}: {err}",
+                                            root.path
+                                        );
+                                    }
+                                }
                             }
+                            *crate::sync_util::recover_mutex(&app_state.watcher) = Some(watcher);
                         }
-                        if let Ok(mut guard) = app_state.watcher.lock() {
-                            *guard = Some(watcher);
+                        Err(err) => {
+                            tracing::warn!("Failed to initialize library watcher: {err}");
                         }
                     }
                 }
+                Ok(_) => {}
+                Err(err) => tracing::warn!("Failed to load settings for watcher init: {err}"),
             }
 
             app.manage(app_state);
@@ -154,6 +237,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Audio Playback & Transport
             play_track,
+            play_queue,
             play_current,
             pause_playback,
             resume_playback,
@@ -187,6 +271,7 @@ pub fn run() {
             queue_remove,
             queue_reorder,
             queue_clear,
+            queue_clear_upcoming,
             queue_set_index,
             get_queue,
             // Dialogs
@@ -207,7 +292,6 @@ pub fn run() {
             get_track_by_id,
             delete_track,
             set_track_favorite,
-            set_track_rating,
             // Playlists & Smart Playlists
             create_playlist,
             get_playlists,
@@ -225,6 +309,7 @@ pub fn run() {
             // Lyrics
             get_track_lyrics,
             parse_lrc_content,
+            save_romanized_lyrics,
             // Browse
             get_home_feed,
             get_artists,
@@ -241,13 +326,20 @@ pub fn run() {
             // Favorites
             set_artist_favorite,
             set_album_favorite,
+            get_favorite_artists,
+            get_favorite_albums,
             // Settings
             get_settings,
             update_settings,
+            set_discord_presence,
             // Backup & Restore
             backup_database,
             restore_database
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|err| {
+            tracing::error!("error while running tauri application: {err}");
+            eprintln!("error while running tauri application: {err}");
+            std::process::exit(1);
+        });
 }

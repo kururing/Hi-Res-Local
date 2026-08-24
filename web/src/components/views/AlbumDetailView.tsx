@@ -12,7 +12,6 @@ import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
 import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
-import { Rating } from '../common/Rating';
 import { ContextMenu, ContextMenuState } from '../common/ContextMenu';
 import { Album, Track } from '../../types/library';
 import { t } from '../../i18n';
@@ -35,7 +34,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
   onNavigate,
   onOpenDetails,
 }) => {
-  const { toggleFavoriteTrack, favoriteTrackIds, setTrackRating, toggleFavoriteAlbum, favoriteAlbumKeys } = useLibrary();
+  const { toggleFavoriteTrack, favoriteTrackIds, toggleFavoriteAlbum, favoriteAlbumKeys } = useLibrary();
   const { playTrack, playQueue, status } = usePlayer();
   const { settings } = useSettings();
 
@@ -86,21 +85,21 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
       </button>
 
       {/* Album Header Banner */}
-      <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-indigo-950/80 to-oled-card border border-brand-border shadow-card-elevated">
-        <div className="w-44 h-44 sm:w-52 sm:h-52 rounded-2xl bg-gradient-to-tr from-indigo-950 to-slate-900 border border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
-          <Disc className="w-24 h-24 text-indigo-400/40" />
+      <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-brand-primary/60 to-oled-card border border-brand-border shadow-card-elevated">
+        <div className="w-44 h-44 sm:w-52 sm:h-52 rounded-2xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
+          <Disc className="w-24 h-24 text-brand-accent/40" />
         </div>
 
         <div className="flex flex-col gap-2 min-w-0 text-center sm:text-left flex-1">
           <span className="text-xs font-bold uppercase tracking-wider text-brand-accent">
             Album
           </span>
-          <h1 className="text-2xl sm:text-4xl font-bold font-display text-white truncate">
+          <h1 className="text-2xl sm:text-4xl font-bold font-display text-brand-foreground truncate">
             {album.name}
           </h1>
           <p
             onClick={() => onNavigate('artist_detail', { id: album.artist, name: album.artist, track_count: 1, album_count: 1, albums: [album], genres: [] })}
-            className="text-base sm:text-lg font-medium text-indigo-200 hover:text-brand-accent cursor-pointer transition-colors"
+            className="text-base sm:text-lg font-medium text-brand-muted hover:text-brand-accent cursor-pointer transition-colors"
           >
             {album.artist}
           </p>
@@ -114,7 +113,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
             {album.genre && (
               <>
                 <span>•</span>
-                <span className="px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 text-[10px]">
+                <span className="px-2 py-0.5 rounded-full bg-brand-primary/80 text-brand-muted text-[10px]">
                   {album.genre}
                 </span>
               </>
@@ -217,18 +216,12 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                     </div>
 
                     <div className="col-span-5 flex items-center justify-end gap-1">
-                      <Rating
-                        value={tr.rating || 0}
-                        onChange={r => setTrackRating(tr.id, r)}
-                        size="sm"
-                      />
-
                       <button
                         onClick={e => {
                           e.stopPropagation();
                           toggleFavoriteTrack(tr.id);
                         }}
-                        className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
+                        className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-brand-accent/10 text-brand-muted hover:text-rose-500 transition-colors focus-visible:outline-none"
                         aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
                         aria-pressed={isFav}
                       >
@@ -249,7 +242,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                           e.stopPropagation();
                           handleContextMenu(e, tr);
                         }}
-                        className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-brand-foreground hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity focus-visible:outline-none"
+                        className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-brand-foreground hover:bg-brand-accent/10 opacity-0 group-hover:opacity-100 transition-opacity focus-visible:outline-none"
                         aria-label="More actions"
                       >
                         <MoreVertical className="w-4 h-4" aria-hidden="true" />

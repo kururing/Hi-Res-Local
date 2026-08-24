@@ -12,9 +12,9 @@ import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
 import { Badge } from '../common/Badge';
-import { Rating } from '../common/Rating';
 import { Button } from '../common/Button';
 import { ContextMenu, ContextMenuState } from '../common/ContextMenu';
+import { VirtualList } from '../common/VirtualList';
 import { Track } from '../../types/library';
 import { t } from '../../i18n';
 
@@ -25,7 +25,132 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
-type SortKey = 'title' | 'artist' | 'album' | 'duration' | 'rating' | 'date_added';
+const TRACK_ROW_HEIGHT = 68;
+
+const TrackRow = React.memo(function TrackRow({
+  tr,
+  index,
+  isPlaying,
+  isFav,
+  onPlay,
+  onFavorite,
+  onContextMenu,
+  onOpenArtist,
+  onOpenAlbum,
+}: {
+  tr: Track;
+  index: number;
+  isPlaying: boolean;
+  isFav: boolean;
+  onPlay: (track: Track) => void;
+  onFavorite: (id: string) => void;
+  onContextMenu: (e: React.MouseEvent, track: Track) => void;
+  onOpenArtist: (track: Track) => void;
+  onOpenAlbum: (track: Track) => void;
+}) {
+  return (
+    <div
+      onContextMenu={e => onContextMenu(e, tr)}
+      onDoubleClick={() => onPlay(tr)}
+      className={`tracks-table-grid grid gap-3 px-4 h-full text-sm items-center group cursor-pointer select-none ${
+        isPlaying
+          ? 'bg-brand-accent/12 text-brand-accent font-semibold'
+          : 'bg-oled-card hover:bg-oled-hover text-brand-foreground'
+      }`}
+    >
+      <div className="text-center font-mono flex items-center justify-center">
+        <button
+          onClick={e => {
+            e.stopPropagation();
+            onPlay(tr);
+          }}
+          className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base focus-visible:outline-none"
+          aria-label={`Play ${tr.title}`}
+        >
+          {isPlaying ? (
+            <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
+          ) : (
+            <>
+              <span className="group-hover:hidden text-brand-muted">{index + 1}</span>
+              <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" aria-hidden="true" />
+            </>
+          )}
+        </button>
+      </div>
+
+      <div className="flex flex-col min-w-0 pr-2">
+        <span className="font-semibold truncate group-hover:text-brand-accent">
+          {tr.title}
+        </span>
+        <span className="sm:hidden mt-0.5 text-xs text-brand-muted truncate">
+          {tr.artist}
+        </span>
+      </div>
+
+      <div className="hidden sm:block min-w-0">
+        <button
+          type="button"
+          onClick={() => onOpenArtist(tr)}
+          className="block max-w-full truncate rounded-md px-1 py-1 text-left font-semibold text-brand-muted hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+          title={tr.artist}
+        >
+          {tr.artist}
+        </button>
+      </div>
+
+      <div className="hidden md:block min-w-0">
+        <button
+          type="button"
+          onClick={() => onOpenAlbum(tr)}
+          className="block max-w-full truncate rounded-md px-1 py-1 text-left font-medium text-brand-muted hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+          title={tr.album}
+        >
+          {tr.album}
+        </button>
+      </div>
+
+      <div className="hidden min-[1180px]:flex min-w-0 items-center">
+        <Badge track={tr} />
+      </div>
+
+      <div className="grid grid-cols-[44px_minmax(44px,auto)_44px] items-center justify-end">
+        <button
+          onClick={e => {
+            e.stopPropagation();
+            onFavorite(tr.id);
+          }}
+          className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-brand-accent/10 focus-visible:outline-none"
+          aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
+          aria-pressed={isFav}
+        >
+          <Heart
+            aria-hidden="true"
+            className={`w-4 h-4 ${
+              isFav ? 'text-rose-500 fill-rose-500' : 'text-brand-muted hover:text-rose-400'
+            }`}
+          />
+        </button>
+
+        <span className="text-center font-mono text-brand-muted tabular-nums">
+          {formatDuration(tr.duration)}
+        </span>
+
+        <button
+          onClick={e => {
+            e.stopPropagation();
+            onContextMenu(e, tr);
+          }}
+          className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-brand-foreground hover:bg-brand-accent/10 opacity-0 group-hover:opacity-100 focus-visible:outline-none"
+          aria-label="More actions"
+        >
+          <MoreVertical className="w-4 h-4" aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  );
+});
+
+type SortKey = 'title' | 'artist' | 'album' | 'duration' | 'date_added';
 
 interface TracksViewProps {
   onNavigate: (view: string, payload?: unknown) => void;
@@ -33,7 +158,7 @@ interface TracksViewProps {
 }
 
 export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetails }) => {
-  const { tracks, toggleFavoriteTrack, favoriteTrackIds, setTrackRating, scanDirectory } = useLibrary();
+  const { tracks, albums, artists, toggleFavoriteTrack, favoriteTrackIds, scanDirectory } = useLibrary();
   const { playTrack, playQueue, status } = usePlayer();
   const { settings } = useSettings();
 
@@ -73,9 +198,6 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
       } else if (sortKey === 'duration') {
         valA = a.duration || 0;
         valB = b.duration || 0;
-      } else if (sortKey === 'rating') {
-        valA = a.rating || 0;
-        valB = b.rating || 0;
       } else if (sortKey === 'date_added') {
         valA = new Date(a.date_added).getTime();
         valB = new Date(b.date_added).getTime();
@@ -105,6 +227,38 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
         onNavigate('artist_detail', ar);
       },
     });
+  };
+
+  const openArtistDetails = (track: Track) => {
+    const matchesArtist = (value: string) => value.localeCompare(track.artist, undefined, { sensitivity: 'accent' }) === 0;
+    const matchingAlbums = albums.filter(item => matchesArtist(item.artist));
+    const artist = artists.find(item => matchesArtist(item.name)) ?? {
+      id: track.artist,
+      name: track.artist,
+      track_count: tracks.filter(item => matchesArtist(item.artist)).length,
+      album_count: matchingAlbums.length,
+      albums: matchingAlbums,
+      genres: [...new Set(tracks.filter(item => matchesArtist(item.artist)).map(item => item.genre).filter((genre): genre is string => Boolean(genre)))],
+    };
+    onNavigate('artist_detail', artist);
+  };
+
+  const openAlbumDetails = (track: Track) => {
+    const album = albums.find(item =>
+      item.name.localeCompare(track.album, undefined, { sensitivity: 'accent' }) === 0
+      && item.artist.localeCompare(track.artist, undefined, { sensitivity: 'accent' }) === 0
+    );
+    const resolvedAlbum = album ?? {
+      id: `${track.artist}-${track.album}`,
+      name: track.album,
+      artist: track.artist,
+      track_count: tracks.filter(item => item.album === track.album && item.artist === track.artist).length,
+      total_duration: tracks
+        .filter(item => item.album === track.album && item.artist === track.artist)
+        .reduce((total, item) => total + item.duration, 0),
+      tracks: tracks.filter(item => item.album === track.album && item.artist === track.artist),
+    };
+    onNavigate('album_detail', resolvedAlbum);
   };
 
   return (
@@ -148,7 +302,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
       {/* Tracks Table */}
       {tracks.length === 0 ? (
         <div className="flex flex-col items-center justify-center p-16 rounded-2xl bg-oled-card/50 border border-brand-border/60 text-center gap-4">
-          <div className="w-16 h-16 rounded-2xl bg-indigo-950/80 border border-brand-border flex items-center justify-center text-brand-muted">
+          <div className="w-16 h-16 rounded-2xl bg-brand-primary/80 border border-brand-border flex items-center justify-center text-brand-muted">
             <Music2 className="w-8 h-8" />
           </div>
           <div>
@@ -169,144 +323,61 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
           </Button>
         </div>
       ) : (
-        <div className="rounded-xl border border-brand-border bg-oled-card/60 overflow-hidden shadow-card-elevated">
+        <div className="rounded-2xl border border-brand-border bg-oled-card/95 backdrop-blur-xl overflow-hidden shadow-card-elevated">
           {/* Table Header */}
-          <div className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-brand-border/60 text-[11px] font-semibold text-brand-muted uppercase tracking-wider items-center">
-            <div className="col-span-1 text-center">#</div>
+          <div className="tracks-table-grid grid gap-3 px-4 py-3.5 bg-oled-card border-b border-brand-border text-xs font-bold text-brand-muted uppercase tracking-wider items-center whitespace-nowrap">
+            <div className="text-center">#</div>
             <div
-              className="col-span-4 sm:col-span-4 flex items-center gap-1.5 cursor-pointer hover:text-brand-foreground"
+              className="flex items-center gap-1.5 cursor-pointer hover:text-brand-foreground"
               onClick={() => handleSort('title')}
             >
               <span>{t('col_title', settings.language)}</span>
               <ArrowUpDown className="w-3 h-3" />
             </div>
             <div
-              className="hidden sm:block col-span-3 cursor-pointer hover:text-brand-foreground"
+              className="hidden sm:block cursor-pointer hover:text-brand-foreground"
               onClick={() => handleSort('artist')}
             >
               <span>{t('col_artist', settings.language)}</span>
             </div>
             <div
-              className="hidden md:block col-span-2 cursor-pointer hover:text-brand-foreground"
+              className="hidden md:block cursor-pointer hover:text-brand-foreground"
               onClick={() => handleSort('album')}
             >
               <span>{t('col_album', settings.language)}</span>
             </div>
+            <div className="hidden min-[1180px]:block">
+              <span>{t('col_quality', settings.language)}</span>
+            </div>
             <div
-              className="col-span-2 sm:col-span-2 text-right cursor-pointer hover:text-brand-foreground"
+              className="grid grid-cols-[44px_minmax(44px,auto)_44px] items-center cursor-pointer hover:text-brand-foreground"
               onClick={() => handleSort('duration')}
             >
-              <span>{t('col_duration', settings.language)}</span>
+              <span className="col-start-2 text-center">{t('col_duration', settings.language)}</span>
             </div>
           </div>
 
           {/* Table Rows */}
-          <div className="divide-y divide-brand-border/30 max-h-[650px] overflow-y-auto">
-            {sortedTracks.map((tr, index) => {
-              const isPlaying = status.current_track?.id === tr.id;
-              const isFav = favoriteTrackIds.has(tr.id);
-
-              return (
-                <div
-                  key={tr.id}
-                  onContextMenu={e => handleContextMenu(e, tr)}
-                  onDoubleClick={() => playTrack(tr, sortedTracks)}
-                  className={`grid grid-cols-12 gap-4 px-4 py-3 text-xs items-center group transition-colors cursor-pointer select-none ${
-                    isPlaying
-                      ? 'bg-brand-accent/10 text-brand-accent font-medium'
-                      : 'hover:bg-oled-hover text-brand-foreground'
-                  }`}
-                >
-                  {/* # Index / Play Button */}
-                  <div className="col-span-1 text-center font-mono flex items-center justify-center">
-                    <button
-                      onClick={e => {
-                        e.stopPropagation();
-                        playTrack(tr, sortedTracks);
-                      }}
-                      className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base transition-all focus-visible:outline-none"
-                      aria-label={`Play ${tr.title}`}
-                    >
-                      {isPlaying ? (
-                        <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
-                      ) : (
-                        <>
-                          <span className="group-hover:hidden text-brand-muted">{index + 1}</span>
-                          <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" aria-hidden="true" />
-                        </>
-                      )}
-                    </button>
-                  </div>
-
-                  {/* Title & Format Badge */}
-                  <div className="col-span-4 sm:col-span-4 flex flex-col min-w-0 pr-2">
-                    <span className="font-semibold truncate group-hover:text-brand-accent transition-colors">
-                      {tr.title}
-                    </span>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <Badge track={tr} />
-                      <span className="sm:hidden text-[10px] text-brand-muted truncate">
-                        {tr.artist}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Artist */}
-                  <div className="hidden sm:block col-span-3 truncate text-brand-muted font-medium">
-                    {tr.artist}
-                  </div>
-
-                  {/* Album */}
-                  <div className="hidden md:block col-span-2 truncate text-brand-muted">
-                    {tr.album}
-                  </div>
-
-                  {/* Duration, Rating, Favorite & Context Menu */}
-                  <div className="col-span-2 sm:col-span-2 flex items-center justify-end gap-1">
-                    <div className="hidden lg:block">
-                      <Rating
-                        value={tr.rating || 0}
-                        onChange={r => setTrackRating(tr.id, r)}
-                        size="sm"
-                      />
-                    </div>
-
-                    <button
-                      onClick={e => {
-                        e.stopPropagation();
-                        toggleFavoriteTrack(tr.id);
-                      }}
-                      className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 transition-colors focus-visible:outline-none"
-                      aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
-                      aria-pressed={isFav}
-                    >
-                      <Heart
-                        aria-hidden="true"
-                        className={`w-4 h-4 ${
-                          isFav ? 'text-rose-500 fill-rose-500' : 'text-brand-muted hover:text-rose-400'
-                        }`}
-                      />
-                    </button>
-
-                    <span className="font-mono text-brand-muted tabular-nums">
-                      {formatDuration(tr.duration)}
-                    </span>
-
-                    <button
-                      onClick={e => {
-                        e.stopPropagation();
-                        handleContextMenu(e, tr);
-                      }}
-                      className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-brand-foreground hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity focus-visible:outline-none"
-                      aria-label="More actions"
-                    >
-                      <MoreVertical className="w-4 h-4" aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <VirtualList
+            items={sortedTracks}
+            rowHeight={TRACK_ROW_HEIGHT}
+            className="divide-y divide-brand-border/45 max-h-[650px] bg-oled-card"
+            style={{ maxHeight: 650 }}
+            getKey={item => item.id}
+            renderRow={(tr, index) => (
+              <TrackRow
+                tr={tr}
+                index={index}
+                isPlaying={status.current_track?.id === tr.id}
+                isFav={favoriteTrackIds.has(tr.id)}
+                onPlay={track => playTrack(track, sortedTracks)}
+                onFavorite={toggleFavoriteTrack}
+                onContextMenu={handleContextMenu}
+                onOpenArtist={openArtistDetails}
+                onOpenAlbum={openAlbumDetails}
+              />
+            )}
+          />
         </div>
       )}
 

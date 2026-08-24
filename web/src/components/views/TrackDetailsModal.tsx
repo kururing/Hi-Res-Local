@@ -38,11 +38,11 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
       <div className="flex flex-col gap-5">
         {/* Track Title Banner */}
         <div className="flex items-center gap-3 p-4 rounded-xl bg-oled-base/80 border border-brand-border">
-          <div className="w-12 h-12 rounded-xl bg-indigo-950 flex items-center justify-center text-brand-accent shrink-0">
+          <div className="w-12 h-12 rounded-xl bg-brand-primary flex items-center justify-center text-brand-accent shrink-0">
             <FileAudio className="w-6 h-6" />
           </div>
           <div className="flex flex-col min-w-0">
-            <span className="font-bold text-base text-white truncate">{track.title}</span>
+            <span className="font-bold text-base text-brand-foreground truncate">{track.title}</span>
             <span className="text-xs text-brand-muted truncate">
               {track.artist} • {track.album}
             </span>
@@ -64,7 +64,7 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
             <span className="text-[11px] font-semibold text-brand-muted uppercase">
               {t('detail_sample_rate', settings.language)}
             </span>
-            <span className="font-mono text-sm font-bold text-indigo-300">
+            <span className="font-mono text-sm font-bold text-brand-foreground">
               {track.sample_rate ? `${track.sample_rate / 1000} kHz` : '44.1 kHz'}
             </span>
           </div>
@@ -73,7 +73,7 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
             <span className="text-[11px] font-semibold text-brand-muted uppercase">
               {t('detail_bitrate', settings.language)}
             </span>
-            <span className="font-mono text-sm font-bold text-emerald-400">
+            <span className="font-mono text-sm font-bold text-brand-accent">
               {track.bitrate ? `${track.bitrate} kbps` : '1411 kbps'}
             </span>
           </div>
@@ -98,10 +98,10 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
 
           <div className="p-3 rounded-xl bg-oled-base/50 border border-brand-border/60 flex flex-col gap-1">
             <span className="text-[11px] font-semibold text-brand-muted uppercase">
-              Plays & Rating
+              Plays
             </span>
-            <span className="font-mono text-sm font-bold text-amber-400">
-              {track.play_count || 0} plays • {track.rating || 0}★
+            <span className="font-mono text-sm font-bold text-brand-foreground">
+              {track.play_count || 0} plays
             </span>
           </div>
         </div>

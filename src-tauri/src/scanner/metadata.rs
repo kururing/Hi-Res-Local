@@ -74,16 +74,8 @@ pub fn clean_filename_fallback(path: &Path) -> String {
     }
 }
 
-pub fn extract_metadata(path: &Path) -> Track {
-    let id = generate_track_id(path);
-    let path_str = path.to_string_lossy().to_string();
-    let format = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("unknown")
-        .to_ascii_lowercase();
-
-    let (file_size, file_modified_at) = match fs::metadata(path) {
+pub fn file_identity(path: &Path) -> (u64, String) {
+    match fs::metadata(path) {
         Ok(m) => {
             let size = m.len();
             let modified = m
@@ -94,11 +86,74 @@ pub fn extract_metadata(path: &Path) -> Track {
             (size, modified)
         }
         Err(_) => (0, Utc::now().to_rfc3339()),
-    };
+    }
+}
 
+fn format_from_path(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("unknown")
+        .to_ascii_lowercase()
+}
+
+fn corrupt_track(path: &Path, reason: String) -> Track {
+    let (file_size, file_modified_at) = file_identity(path);
+    Track {
+        id: generate_track_id(path),
+        path: path.to_string_lossy().to_string(),
+        title: clean_filename_fallback(path),
+        artist: "Unknown Artist".to_string(),
+        album_artist: None,
+        album: "Unknown Album".to_string(),
+        genre: None,
+        year: None,
+        track_number: None,
+        disc_number: None,
+        duration_ms: 0,
+        bitrate: None,
+        sample_rate: None,
+        channels: None,
+        bit_depth: None,
+        format: format_from_path(path),
+        file_size,
+        file_modified_at,
+        date_added: Utc::now().to_rfc3339(),
+        is_favorite: false,
+        rating: 0,
+        play_count: 0,
+        skip_count: 0,
+        last_played_at: None,
+        cover_art_path: None,
+        lyrics: None,
+        has_synced_lyrics: false,
+        is_corrupt: true,
+        corrupt_reason: Some(reason),
+        duplicate_group_id: None,
+        is_primary: true,
+    }
+}
+
+/// Extracts metadata for a file. A corrupt or panicking parser never aborts the scan.
+pub fn extract_metadata_safe(path: &Path) -> Track {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| extract_metadata(path))) {
+        Ok(track) => track,
+        Err(_) => {
+            tracing::warn!("Metadata parser panicked on {}", path.display());
+            corrupt_track(
+                path,
+                "Metadata parser panicked on corrupt or unsupported file".to_string(),
+            )
+        }
+    }
+}
+
+pub fn extract_metadata(path: &Path) -> Track {
+    let id = generate_track_id(path);
+    let path_str = path.to_string_lossy().to_string();
+    let format = format_from_path(path);
+    let (file_size, file_modified_at) = file_identity(path);
     let now_str = Utc::now().to_rfc3339();
 
-    // Probe audio file with lofty
     let probe_res = Probe::open(path)
         .map_err(|e| e.to_string())
         .and_then(|p| p.read().map_err(|e| e.to_string()));
@@ -106,39 +161,10 @@ pub fn extract_metadata(path: &Path) -> Track {
     let tagged_file = match probe_res {
         Ok(tf) => tf,
         Err(err) => {
-            // Return corrupt track representation
-            return Track {
-                id,
-                path: path_str,
-                title: clean_filename_fallback(path),
-                artist: "Unknown Artist".to_string(),
-                album_artist: None,
-                album: "Unknown Album".to_string(),
-                genre: None,
-                year: None,
-                track_number: None,
-                disc_number: None,
-                duration_ms: 0,
-                bitrate: None,
-                sample_rate: None,
-                channels: None,
-                format,
-                file_size,
-                file_modified_at,
-                date_added: now_str,
-                is_favorite: false,
-                rating: 0,
-                play_count: 0,
-                skip_count: 0,
-                last_played_at: None,
-                cover_art_path: None,
-                lyrics: None,
-                has_synced_lyrics: false,
-                is_corrupt: true,
-                corrupt_reason: Some(format!("Failed to parse audio file tags/headers: {}", err)),
-                duplicate_group_id: None,
-                is_primary: true,
-            };
+            return corrupt_track(
+                path,
+                format!("Failed to parse audio file tags/headers: {}", err),
+            );
         }
     };
 
@@ -147,6 +173,7 @@ pub fn extract_metadata(path: &Path) -> Track {
     let bitrate = properties.audio_bitrate();
     let sample_rate = properties.sample_rate();
     let channels = properties.channels().map(|c| c as u16);
+    let bit_depth = properties.bit_depth();
 
     let tag = tagged_file
         .primary_tag()
@@ -223,6 +250,7 @@ pub fn extract_metadata(path: &Path) -> Track {
         bitrate,
         sample_rate,
         channels,
+        bit_depth,
         format,
         file_size,
         file_modified_at,

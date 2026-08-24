@@ -10,6 +10,7 @@ interface SliderProps {
   className?: string;
   showTooltip?: boolean;
   formatTooltip?: (value: number) => string;
+  compact?: boolean;
 }
 
 export const Slider: React.FC<SliderProps> = ({
@@ -20,6 +21,7 @@ export const Slider: React.FC<SliderProps> = ({
   onChange,
   ariaLabel = 'Seek Slider',
   className = '',
+  compact = false,
 }) => {
   const percentage = max > min ? Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100)) : 0;
   const sliderRef = useRef<HTMLDivElement>(null);
@@ -77,13 +79,13 @@ export const Slider: React.FC<SliderProps> = ({
       aria-valuenow={value}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
-      className={`group relative min-h-[44px] flex items-center cursor-pointer touch-none select-none focus-visible:outline-none ${className}`}
+      className={`group relative ${compact ? 'min-h-9' : 'min-h-[44px]'} flex items-center cursor-pointer touch-none select-none rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/70 ${className}`}
     >
       {/* Background Track */}
-      <div className="w-full h-1.5 bg-indigo-950/70 border border-brand-border/40 rounded-full relative overflow-hidden transition-all duration-150 group-hover:h-2">
+      <div className="w-full h-1.5 bg-oled-base/80 border border-brand-border/50 rounded-full relative overflow-hidden transition-all duration-150 group-hover:h-2">
         {/* Filled Progress */}
         <div
-          className="absolute left-0 top-0 bottom-0 bg-brand-accent rounded-full transition-[width] duration-75 group-hover:bg-emerald-400"
+          className="absolute left-0 top-0 bottom-0 bg-brand-accent rounded-full transition-[width] duration-75 group-hover:bg-brand-accentHover"
           style={{ width: `${percentage}%` }}
         />
       </div>

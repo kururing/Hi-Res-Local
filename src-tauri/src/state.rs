@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use crate::audio::adapters::{FallbackMediaControlsAdapter, StandardAudioAdapter};
 use crate::audio::player::AudioPlayer;
 use crate::db::Database;
+use crate::discord::DiscordPresence;
 use crate::scanner::watcher::LibraryWatcher;
 
 pub struct AppState {
@@ -11,6 +12,7 @@ pub struct AppState {
     pub player: Arc<AudioPlayer>,
     pub exclusive_adapter: Arc<Mutex<StandardAudioAdapter>>,
     pub media_controls_adapter: Arc<Mutex<FallbackMediaControlsAdapter>>,
+    pub discord_presence: DiscordPresence,
 }
 
 impl AppState {
@@ -21,6 +23,7 @@ impl AppState {
             player: Arc::new(AudioPlayer::new()),
             exclusive_adapter: Arc::new(Mutex::new(StandardAudioAdapter::new())),
             media_controls_adapter: Arc::new(Mutex::new(FallbackMediaControlsAdapter::new())),
+            discord_presence: DiscordPresence::new(),
         }
     }
 }

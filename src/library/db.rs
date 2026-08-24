@@ -1,6 +1,7 @@
 //! SQLite persistence and query engine for local music library.
 
 use chrono::{DateTime, Utc};
+use lofty::file::AudioFile;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -68,6 +69,7 @@ impl LibraryDatabase {
                 sample_rate INTEGER,
                 bitrate INTEGER,
                 channels INTEGER,
+                bit_depth INTEGER,
                 date_added TEXT NOT NULL
             );
 
@@ -97,6 +99,10 @@ impl LibraryDatabase {
             CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track_id ON playlist_tracks(track_id);
             ",
         )?;
+        let _ = self
+            .conn
+            .execute("ALTER TABLE tracks ADD COLUMN bit_depth INTEGER", []);
+        let _ = self.backfill_missing_bit_depth();
         Ok(())
     }
 
@@ -110,11 +116,11 @@ impl LibraryDatabase {
             "INSERT INTO tracks (
                 id, title, artist, album, duration_ms, path,
                 track_number, disc_number, year, genre,
-                sample_rate, bitrate, channels, date_added
+                sample_rate, bitrate, channels, bit_depth, date_added
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6,
                 ?7, ?8, ?9, ?10,
-                ?11, ?12, ?13, ?14
+                ?11, ?12, ?13, ?14, ?15
             )
             ON CONFLICT(path) DO UPDATE SET
                 id = excluded.id,
@@ -128,7 +134,8 @@ impl LibraryDatabase {
                 genre = excluded.genre,
                 sample_rate = excluded.sample_rate,
                 bitrate = excluded.bitrate,
-                channels = excluded.channels;",
+                channels = excluded.channels,
+                bit_depth = excluded.bit_depth;",
             params![
                 track.id.to_string(),
                 track.title,
@@ -143,6 +150,7 @@ impl LibraryDatabase {
                 track.sample_rate.map(|v| v as i64),
                 track.bitrate.map(|v| v as i64),
                 track.channels.map(|v| v as i64),
+                track.bit_depth.map(|v| v as i64),
                 date_added_str,
             ],
         )?;
@@ -158,11 +166,11 @@ impl LibraryDatabase {
                 "INSERT INTO tracks (
                     id, title, artist, album, duration_ms, path,
                     track_number, disc_number, year, genre,
-                    sample_rate, bitrate, channels, date_added
+                    sample_rate, bitrate, channels, bit_depth, date_added
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
                     ?7, ?8, ?9, ?10,
-                    ?11, ?12, ?13, ?14
+                    ?11, ?12, ?13, ?14, ?15
                 )
                 ON CONFLICT(path) DO UPDATE SET
                     id = excluded.id,
@@ -176,7 +184,8 @@ impl LibraryDatabase {
                     genre = excluded.genre,
                     sample_rate = excluded.sample_rate,
                     bitrate = excluded.bitrate,
-                    channels = excluded.channels;",
+                    channels = excluded.channels,
+                    bit_depth = excluded.bit_depth;",
             )?;
 
             for track in tracks {
@@ -198,6 +207,7 @@ impl LibraryDatabase {
                     track.sample_rate.map(|v| v as i64),
                     track.bitrate.map(|v| v as i64),
                     track.channels.map(|v| v as i64),
+                    track.bit_depth.map(|v| v as i64),
                     date_added_str,
                 ])?;
             }
@@ -260,7 +270,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, artist, album, duration_ms, path,
                     track_number, disc_number, year, genre,
-                    sample_rate, bitrate, channels, date_added
+                    sample_rate, bitrate, channels, bit_depth, date_added
              FROM tracks
              ORDER BY artist COLLATE NOCASE ASC, album COLLATE NOCASE ASC, track_number ASC, title COLLATE NOCASE ASC",
         )?;
@@ -278,7 +288,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, artist, album, duration_ms, path,
                     track_number, disc_number, year, genre,
-                    sample_rate, bitrate, channels, date_added
+                    sample_rate, bitrate, channels, bit_depth, date_added
              FROM tracks
              WHERE id = ?1",
         )?;
@@ -572,6 +582,61 @@ impl LibraryDatabase {
         tx.commit()?;
         Ok(())
     }
+
+    /// Backfills existing tracks with missing bit_depth by re-probing file metadata from disk.
+    /// Uses 0 as a sentinel value for files with no bit-depth metadata or unreadable paths, ensuring idempotency.
+    pub fn backfill_missing_bit_depth(&mut self) -> Result<usize, LibraryError> {
+        let pending_items: Vec<(String, String)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, path FROM tracks WHERE bit_depth IS NULL")?;
+
+            let rows = stmt.query_map([], |row| {
+                let id_str: String = row.get(0)?;
+                let path_str: String = row.get(1)?;
+                Ok((id_str, path_str))
+            })?;
+
+            let mut items = Vec::new();
+            for item in rows {
+                items.push(item?);
+            }
+            items
+        };
+
+        if pending_items.is_empty() {
+            return Ok(0);
+        }
+
+        let mut pending_updates: Vec<(String, u8)> = Vec::with_capacity(pending_items.len());
+        for (id, path_str) in pending_items {
+            let path = PathBuf::from(&path_str);
+            let mut resolved_bd = 0u8;
+            if path.exists() {
+                if let Ok(tagged_file) = lofty::probe::Probe::open(&path).and_then(|p| p.read()) {
+                    if let Some(bd) = tagged_file.properties().bit_depth() {
+                        if bd > 0 {
+                            resolved_bd = bd;
+                        }
+                    }
+                }
+            }
+            pending_updates.push((id, resolved_bd));
+        }
+
+        let updated_count = pending_updates.len();
+        let tx = self.conn.transaction()?;
+        {
+            let mut update_stmt =
+                tx.prepare_cached("UPDATE tracks SET bit_depth = ?1 WHERE id = ?2")?;
+            for (id, bd) in pending_updates {
+                update_stmt.execute(params![bd as i64, id])?;
+            }
+        }
+        tx.commit()?;
+
+        Ok(updated_count)
+    }
 }
 
 /// Helper function to convert a SQLite row into a [`Track`] struct.
@@ -589,7 +654,8 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> Result<Track, rusqlite::Error> {
     let sample_rate: Option<i64> = row.get(10)?;
     let bitrate: Option<i64> = row.get(11)?;
     let channels: Option<i64> = row.get(12)?;
-    let date_added_str: String = row.get(13)?;
+    let bit_depth: Option<i64> = row.get(13)?;
+    let date_added_str: String = row.get(14)?;
 
     let uuid = Uuid::parse_str(&id_str).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -613,6 +679,7 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> Result<Track, rusqlite::Error> {
         sample_rate: sample_rate.map(|v| v as u32),
         bitrate: bitrate.map(|v| v as u32),
         channels: channels.map(|v| v as u16),
+        bit_depth: bit_depth.map(|v| v as u8),
         date_added,
     })
 }

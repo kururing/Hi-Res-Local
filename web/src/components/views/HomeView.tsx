@@ -55,12 +55,12 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
   return (
     <div className="p-6 md:p-8 space-y-8 max-w-7xl mx-auto w-full select-none">
       {/* Header Greeting Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-indigo-950 to-oled-card border border-brand-border shadow-card-elevated">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-2xl bg-gradient-to-r from-brand-accent/16 via-oled-card to-brand-secondary/12 border border-brand-border shadow-card-elevated backdrop-blur-xl">
         <div className="flex flex-col gap-1">
           <span className="text-xs font-semibold text-brand-accent uppercase tracking-wider">
             Nghe Nhac Pro Max 2.0
           </span>
-          <h1 className="text-2xl sm:text-3xl font-bold font-display text-white">
+          <h1 className="text-2xl sm:text-3xl font-bold font-display text-brand-foreground">
             {greeting}
           </h1>
           <p className="text-xs sm:text-sm text-brand-muted">
@@ -91,7 +91,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       {/* Library Summary Stats Row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="p-4 rounded-xl bg-oled-card border border-brand-border/80 flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-lg bg-indigo-950 flex items-center justify-center text-brand-accent">
+          <div className="w-10 h-10 rounded-lg bg-brand-accent/12 border border-brand-accent/25 flex items-center justify-center text-brand-accent">
             <Music2 className="w-5 h-5" />
           </div>
           <div>
@@ -105,7 +105,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
         </div>
 
         <div className="p-4 rounded-xl bg-oled-card border border-brand-border/80 flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-lg bg-indigo-950 flex items-center justify-center text-indigo-400">
+          <div className="w-10 h-10 rounded-lg bg-brand-accent/12 border border-brand-accent/25 flex items-center justify-center text-brand-accent">
             <Disc className="w-5 h-5" />
           </div>
           <div>
@@ -119,7 +119,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
         </div>
 
         <div className="p-4 rounded-xl bg-oled-card border border-brand-border/80 flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-lg bg-indigo-950 flex items-center justify-center text-amber-400">
+          <div className="w-10 h-10 rounded-lg bg-brand-primary/80 flex items-center justify-center text-amber-400">
             <Users className="w-5 h-5" />
           </div>
           <div>
@@ -133,7 +133,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
         </div>
 
         <div className="p-4 rounded-xl bg-oled-card border border-brand-border/80 flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-lg bg-indigo-950 flex items-center justify-center text-emerald-400">
+          <div className="w-10 h-10 rounded-lg bg-brand-primary/80 flex items-center justify-center text-rose-400">
             <Clock className="w-5 h-5" />
           </div>
           <div>
@@ -151,14 +151,14 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       {status.current_track && (
         <div className="p-5 rounded-2xl bg-oled-card/90 border border-brand-accent/30 flex items-center justify-between gap-4 shadow-sm">
           <div className="flex items-center gap-4 min-w-0">
-            <div className="w-14 h-14 rounded-xl bg-indigo-950 border border-brand-border flex items-center justify-center shrink-0">
+            <div className="w-14 h-14 rounded-xl bg-brand-primary/80 border border-brand-border flex items-center justify-center shrink-0">
               <Music2 className="w-6 h-6 text-brand-accent" />
             </div>
             <div className="flex flex-col min-w-0">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-accent">
                 {t('home_continue_listening', settings.language)}
               </span>
-              <span className="text-base font-semibold text-white truncate">
+              <span className="text-base font-semibold text-brand-foreground truncate">
                 {status.current_track.title}
               </span>
               <span className="text-xs text-brand-muted truncate">
@@ -201,7 +201,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
               className="group p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex items-center justify-between gap-3"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-11 h-11 rounded-lg bg-indigo-950/90 border border-brand-border flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <div className="w-11 h-11 rounded-lg bg-brand-primary/90 border border-brand-border flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
                   <Music2 className="w-5 h-5 text-brand-muted group-hover:text-brand-accent transition-colors" />
                 </div>
                 <div className="flex flex-col min-w-0">
@@ -239,8 +239,8 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
               onClick={() => onNavigate('album_detail', al)}
               className="group p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col"
             >
-              <div className="relative aspect-square rounded-lg bg-gradient-to-tr from-indigo-950 to-slate-900 border border-brand-border/60 mb-2.5 flex items-center justify-center overflow-hidden">
-                <Disc className="w-12 h-12 text-indigo-400/40 group-hover:rotate-45 transition-transform duration-500" />
+              <div className="relative aspect-square rounded-lg bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-2.5 flex items-center justify-center overflow-hidden">
+                <Disc className="w-12 h-12 text-brand-accent/40 group-hover:rotate-45 transition-transform duration-500" />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <button
                     onClick={e => {
@@ -294,7 +294,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                   </div>
                   <p className="text-[11px] text-brand-muted line-clamp-2">{pl.description}</p>
                 </div>
-                <span className="text-[10px] text-indigo-300 font-mono">
+                <span className="text-[10px] text-brand-muted font-mono">
                   {pl.track_ids.length} tracks
                 </span>
               </div>

@@ -9,24 +9,24 @@ export default {
     extend: {
       colors: {
         oled: {
-          base: '#0F0F23',
-          card: '#1B1B30',
-          hover: '#242442',
-          active: '#2E2D56',
+          base: 'rgb(var(--color-oled-base) / <alpha-value>)',
+          card: 'rgb(var(--color-oled-card) / <alpha-value>)',
+          hover: 'rgb(var(--color-oled-hover) / <alpha-value>)',
+          active: 'rgb(var(--color-oled-active) / <alpha-value>)',
         },
         brand: {
-          primary: '#1E1B4B',
-          secondary: '#4338CA',
-          accent: '#22C55E',
-          accentHover: '#16A34A',
-          border: '#312E81',
-          foreground: '#F8FAFC',
-          muted: '#94A3B8',
+          primary: 'rgb(var(--color-primary) / <alpha-value>)',
+          secondary: 'rgb(var(--color-secondary) / <alpha-value>)',
+          accent: 'rgb(var(--color-accent) / <alpha-value>)',
+          accentHover: 'rgb(var(--color-accent-hover) / <alpha-value>)',
+          border: 'rgb(var(--color-border) / <alpha-value>)',
+          foreground: 'rgb(var(--color-foreground) / <alpha-value>)',
+          muted: 'rgb(var(--color-muted) / <alpha-value>)',
         }
       },
       fontFamily: {
         sans: ['Poppins', 'Segoe UI', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'Roboto', 'sans-serif'],
-        display: ['Righteous', 'Poppins', 'Trebuchet MS', 'Arial Black', 'sans-serif'],
+        display: ['Poppins', 'Segoe UI Variable Display', 'Segoe UI', 'sans-serif'],
       },
       minHeight: {
         touch: '44px',
@@ -35,9 +35,11 @@ export default {
         touch: '44px',
       },
       boxShadow: {
-        'glow-accent': '0 0 20px -5px rgba(34, 197, 94, 0.5)',
-        'glow-indigo': '0 0 25px -5px rgba(67, 56, 202, 0.4)',
-        'card-elevated': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
+        'glow-accent': '0 0 20px -5px rgba(var(--color-accent) / 0.5)',
+        'glow-secondary': '0 0 25px -5px rgba(var(--color-secondary) / 0.4)',
+        'glow-indigo': '0 0 25px -5px rgba(var(--color-secondary) / 0.4)',
+        'card-elevated': '0 12px 36px -12px rgba(59, 87, 101, 0.28)',
+        'soft-button': '0 8px 20px -12px rgba(94, 69, 126, 0.5)',
       },
       keyframes: {
         pulseSlow: {

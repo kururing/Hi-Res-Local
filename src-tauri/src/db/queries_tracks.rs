@@ -20,6 +20,11 @@ pub fn map_row_to_track(row: &Row) -> rusqlite::Result<Track> {
         bitrate: row.get("bitrate")?,
         sample_rate: row.get("sample_rate")?,
         channels: row.get("channels")?,
+        bit_depth: row
+            .get::<_, Option<i64>>("bit_depth")
+            .ok()
+            .flatten()
+            .map(|v| v as u8),
         format: row.get("format")?,
         file_size: row.get::<_, i64>("file_size")? as u64,
         file_modified_at: row.get("file_modified_at")?,
@@ -40,20 +45,21 @@ pub fn map_row_to_track(row: &Row) -> rusqlite::Result<Track> {
 }
 
 pub fn upsert_track(conn: &Connection, track: &Track) -> AppResult<()> {
-    conn.execute(
+    // prepare_cached: the same statement is executed thousands of times per scan.
+    let mut stmt = conn.prepare_cached(
         r#"
         INSERT INTO tracks (
             id, path, title, artist, album_artist, album, genre, year,
-            track_number, disc_number, duration_ms, bitrate, sample_rate, channels,
+            track_number, disc_number, duration_ms, bitrate, sample_rate, channels, bit_depth,
             format, file_size, file_modified_at, date_added, is_favorite, rating,
             play_count, skip_count, last_played_at, cover_art_path, lyrics,
             has_synced_lyrics, is_corrupt, corrupt_reason, duplicate_group_id, is_primary
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-            ?9, ?10, ?11, ?12, ?13, ?14,
-            ?15, ?16, ?17, ?18, ?19, ?20,
-            ?21, ?22, ?23, ?24, ?25,
-            ?26, ?27, ?28, ?29, ?30
+            ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+            ?16, ?17, ?18, ?19, ?20, ?21,
+            ?22, ?23, ?24, ?25, ?26,
+            ?27, ?28, ?29, ?30, ?31
         )
         ON CONFLICT(path) DO UPDATE SET
             title = excluded.title,
@@ -68,6 +74,7 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> AppResult<()> {
             bitrate = excluded.bitrate,
             sample_rate = excluded.sample_rate,
             channels = excluded.channels,
+            bit_depth = excluded.bit_depth,
             format = excluded.format,
             file_size = excluded.file_size,
             file_modified_at = excluded.file_modified_at,
@@ -77,7 +84,8 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> AppResult<()> {
             is_corrupt = excluded.is_corrupt,
             corrupt_reason = excluded.corrupt_reason;
         "#,
-        params![
+    )?;
+    stmt.execute(params![
             track.id,
             track.path,
             track.title,
@@ -92,6 +100,7 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> AppResult<()> {
             track.bitrate,
             track.sample_rate,
             track.channels,
+            track.bit_depth.map(|v| v as i64),
             track.format,
             track.file_size as i64,
             track.file_modified_at,
@@ -108,17 +117,20 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> AppResult<()> {
             track.corrupt_reason,
             track.duplicate_group_id,
             if track.is_primary { 1 } else { 0 }
-        ],
-    )?;
+    ])?;
     Ok(())
 }
 
+pub const UPSERT_BATCH_SIZE: usize = 500;
+
 pub fn upsert_tracks_batch(conn: &mut Connection, tracks: &[Track]) -> AppResult<()> {
-    let tx = conn.transaction()?;
-    for track in tracks {
-        upsert_track(&tx, track)?;
+    for chunk in tracks.chunks(UPSERT_BATCH_SIZE) {
+        let tx = conn.transaction()?;
+        for track in chunk {
+            upsert_track(&tx, track)?;
+        }
+        tx.commit()?;
     }
-    tx.commit()?;
     Ok(())
 }
 
@@ -142,8 +154,30 @@ pub fn get_track_by_path(conn: &Connection, path: &str) -> AppResult<Option<Trac
     }
 }
 
+/// All track columns except the potentially large `lyrics` text (returned as
+/// NULL). Use for list views and IPC payloads; lyrics load on demand.
+const TRACK_COLUMNS_NO_LYRICS: &str = "id, path, title, artist, album_artist, album, genre, year, \
+     track_number, disc_number, duration_ms, bitrate, sample_rate, channels, bit_depth, \
+     format, file_size, file_modified_at, date_added, is_favorite, rating, \
+     play_count, skip_count, last_played_at, cover_art_path, NULL AS lyrics, \
+     has_synced_lyrics, is_corrupt, corrupt_reason, duplicate_group_id, is_primary";
+
 pub fn get_tracks(conn: &Connection, filter: Option<TrackFilter>) -> AppResult<Vec<Track>> {
-    let mut sql = String::from("SELECT * FROM tracks WHERE 1=1 ");
+    get_tracks_with_columns(conn, filter, "*")
+}
+
+/// Same as [`get_tracks`] but without the `lyrics` column, which can dominate
+/// memory/IPC cost for large libraries with embedded lyrics.
+pub fn get_tracks_summary(conn: &Connection, filter: Option<TrackFilter>) -> AppResult<Vec<Track>> {
+    get_tracks_with_columns(conn, filter, TRACK_COLUMNS_NO_LYRICS)
+}
+
+fn get_tracks_with_columns(
+    conn: &Connection,
+    filter: Option<TrackFilter>,
+    columns: &str,
+) -> AppResult<Vec<Track>> {
+    let mut sql = format!("SELECT {} FROM tracks WHERE 1=1 ", columns);
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
     if let Some(f) = filter {

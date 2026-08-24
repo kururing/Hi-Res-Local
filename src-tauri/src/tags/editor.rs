@@ -19,7 +19,9 @@ pub fn write_tags_to_file(audio_path: &Path, update: &TrackUpdateTags) -> AppRes
             } else {
                 let tag_type = tagged_file.primary_tag_type();
                 tagged_file.insert_tag(Tag::new(tag_type));
-                tagged_file.primary_tag_mut().unwrap()
+                tagged_file.primary_tag_mut().ok_or_else(|| {
+                    AppError::Internal("Failed to create a writable tag on audio file".to_string())
+                })?
             }
         }
     };
@@ -57,6 +59,20 @@ pub fn write_tags_to_file(audio_path: &Path, update: &TrackUpdateTags) -> AppRes
     Ok(())
 }
 
+/// Same as [`write_tags_to_file`], but a panicking tag parser (corrupt file)
+/// is converted into an error instead of aborting the invoke thread.
+fn write_tags_to_file_safe(audio_path: &Path, update: &TrackUpdateTags) -> AppResult<()> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        write_tags_to_file(audio_path, update)
+    }))
+    .unwrap_or_else(|_| {
+        Err(AppError::Internal(format!(
+            "Tag writer panicked on corrupt or unsupported file: {}",
+            audio_path.display()
+        )))
+    })
+}
+
 pub fn update_tags_and_save(db: &Database, update: &TrackUpdateTags) -> AppResult<Track> {
     let track = {
         let conn = db.lock();
@@ -64,11 +80,11 @@ pub fn update_tags_and_save(db: &Database, update: &TrackUpdateTags) -> AppResul
             .ok_or_else(|| AppError::NotFound(format!("Track not found: {}", update.id)))?
     };
 
+    // Write the file first; only update the DB when the file write succeeded so
+    // the database never diverges from what is actually stored in the tags.
     let audio_path = Path::new(&track.path);
     if audio_path.is_file() {
-        if let Err(err) = write_tags_to_file(audio_path, update) {
-            tracing::warn!("Failed to write lofty tags to file {}: {}", track.path, err);
-        }
+        write_tags_to_file_safe(audio_path, update)?;
     }
 
     {

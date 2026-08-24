@@ -8,8 +8,8 @@ use crate::ui::components::{
     seek_slider_style, with_tooltip,
 };
 use crate::ui::helpers::{
-    audio_quality_badge, cycle_loop_mode, format_bitrate, format_channels, format_duration,
-    format_sample_rate,
+    cycle_loop_mode, format_bit_depth, format_channels, format_duration, format_sample_rate,
+    format_sample_rate_and_bit_depth, is_hires_track,
 };
 use iced::widget::{button, column, container, row, scrollable, slider, text, vertical_space};
 use iced::{Alignment, Element, Length};
@@ -37,8 +37,8 @@ pub fn render_now_playing_view(app: &App) -> Element<'_, Message> {
         }
     };
 
-    let quality_badge = audio_quality_badge(track);
-    let is_hires = quality_badge.contains("LOSSLESS") || quality_badge.contains("HI-RES");
+    let format_badge = format_sample_rate_and_bit_depth(track);
+    let is_hires = is_hires_track(track);
 
     // ========================================================================
     // 1. Hero Artwork and Main Metadata
@@ -46,9 +46,19 @@ pub fn render_now_playing_view(app: &App) -> Element<'_, Message> {
     let hero_section = row![
         artwork_placeholder(&track.title, 180.0),
         column![
-            row![badge(quality_badge, is_hires), badge("MASTER HI-FI", true),]
-                .spacing(8)
-                .align_y(Alignment::Center),
+            row![
+                badge(format_badge, is_hires),
+                badge(
+                    if is_hires {
+                        "HI-RES AUDIO"
+                    } else {
+                        "STUDIO MASTER"
+                    },
+                    true
+                ),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
             text(&track.title).size(26).color(colors::TEXT_PRIMARY),
             text(&track.artist).size(18).color(colors::ACCENT_PRIMARY),
             text(format!("Album: {}", track.album))
@@ -177,7 +187,7 @@ pub fn render_now_playing_view(app: &App) -> Element<'_, Message> {
         row![
             text(label)
                 .size(12)
-                .width(Length::Fixed(140.0))
+                .width(Length::Fixed(180.0))
                 .color(colors::TEXT_MUTED),
             text(value).size(13).color(colors::TEXT_PRIMARY),
         ]
@@ -190,11 +200,11 @@ pub fn render_now_playing_view(app: &App) -> Element<'_, Message> {
             .size(12)
             .color(colors::TEXT_MUTED),
         spec_item(
-            "Quality Profile:",
-            format!("{} (Studio Master Standard)", quality_badge)
+            "Sample Rate & Bit Depth:",
+            format_sample_rate_and_bit_depth(track)
         ),
         spec_item("Sample Rate:", format_sample_rate(track.sample_rate)),
-        spec_item("Bitrate / Depth:", format_bitrate(track.bitrate)),
+        spec_item("Bit Depth:", format_bit_depth(track.bit_depth)),
         spec_item("Channels:", format_channels(track.channels)),
         spec_item("File Path:", track.path.to_string_lossy().to_string()),
         spec_item(

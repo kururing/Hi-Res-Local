@@ -151,12 +151,7 @@ impl AudioEngineInner {
             sink.set_volume(self.status.volume.clamp(0.0, 1.0));
         }
 
-        // LoopMode::Track repeats source infinitely
-        if self.status.loop_mode == LoopMode::Track {
-            sink.append(source.repeat_infinite());
-        } else {
-            sink.append(source);
-        }
+        sink.append(source);
 
         self.sink = Some(sink);
         self.status.state = PlaybackState::Playing;
@@ -196,18 +191,91 @@ impl AudioEngineInner {
         self.status.position = Duration::ZERO;
     }
 
+    /// Fallback seeking by reloading track and positioning decoder stream.
+    fn seek_fallback(&mut self, position: Duration) -> Result<(), AudioError> {
+        let track = match &self.status.current_track {
+            Some(t) => t.clone(),
+            None => {
+                return Err(AudioError::SeekError {
+                    position,
+                    reason: "No active track loaded to seek".to_string(),
+                });
+            }
+        };
+
+        if !track.path.exists() {
+            return Err(AudioError::FileAccess {
+                path: track.path.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Audio file does not exist on disk",
+                ),
+            });
+        }
+
+        let file = File::open(&track.path).map_err(|err| AudioError::FileAccess {
+            path: track.path.clone(),
+            source: err,
+        })?;
+        let reader = BufReader::new(file);
+        let mut source = Decoder::new(reader).map_err(|err| AudioError::DecodeError {
+            path: track.path.clone(),
+            details: err.to_string(),
+        })?;
+
+        source
+            .try_seek(position)
+            .map_err(|err| AudioError::SeekError {
+                position,
+                reason: format!("Decoder try_seek failed: {err}"),
+            })?;
+
+        let handle = self.ensure_handle()?;
+        if let Some(old_sink) = self.sink.take() {
+            old_sink.stop();
+        }
+
+        let sink =
+            Sink::try_new(&handle).map_err(|err| AudioError::SinkCreation(err.to_string()))?;
+        if self.status.is_muted {
+            sink.set_volume(0.0);
+        } else {
+            sink.set_volume(self.status.volume.clamp(0.0, 1.0));
+        }
+
+        let is_paused = self.status.state == PlaybackState::Paused;
+        sink.append(source);
+        if is_paused {
+            sink.pause();
+        }
+        self.sink = Some(sink);
+        Ok(())
+    }
+
     /// Seeks playback position to the given duration offset.
     fn seek(&mut self, position: Duration) -> Result<(), AudioError> {
         let clamped = position.min(self.status.duration);
 
+        if self.status.current_track.is_none() {
+            self.status.position = clamped;
+            return Ok(());
+        }
+
         if let Some(sink) = &self.sink {
             if let Err(err) = sink.try_seek(clamped) {
-                tracing::warn!("Sink try_seek failed: {err:?}");
-                return Err(AudioError::SeekError {
-                    position: clamped,
-                    reason: err.to_string(),
-                });
+                tracing::warn!("Sink try_seek failed ({err:?}), attempting seek reload fallback");
+                self.seek_fallback(clamped).map_err(|fallback_err| {
+                    tracing::error!("Seek fallback failed: {fallback_err:?}");
+                    AudioError::SeekError {
+                        position: clamped,
+                        reason: format!(
+                            "Direct seek failed ({err}), fallback failed ({fallback_err})"
+                        ),
+                    }
+                })?;
             }
+        } else {
+            self.seek_fallback(clamped)?;
         }
 
         self.status.position = clamped;
@@ -259,10 +327,8 @@ impl AudioEngineInner {
         if self.status.state == PlaybackState::Playing {
             if let Some(sink) = &self.sink {
                 if sink.empty() {
-                    if self.status.loop_mode != LoopMode::Track {
-                        self.status.state = PlaybackState::Stopped;
-                        self.status.position = self.status.duration;
-                    }
+                    self.status.state = PlaybackState::Stopped;
+                    self.status.position = self.status.duration;
                 } else {
                     let pos = sink.get_pos();
                     if self.status.duration > Duration::ZERO {

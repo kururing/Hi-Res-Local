@@ -9,7 +9,7 @@ use crate::audio::dto::{
     PlayerSnapshot, RepeatMode, ReplayGainConfig, ReplayGainMode,
 };
 use crate::db::queries_tracks::{
-    get_track_by_id as db_get_track_by_id, get_tracks as db_get_tracks,
+    get_track_by_id as db_get_track_by_id, get_tracks_summary as db_get_tracks_summary,
 };
 use crate::models::track::Track;
 use crate::scanner::scan_library_roots;
@@ -145,6 +145,21 @@ pub async fn play_track(
         .map_err(|e| e.to_string())
 }
 
+/// Replace the backend queue with `tracks` and start playing at `start_index`.
+/// Keeps queue/shuffle/gapless ownership in the backend.
+#[tauri::command]
+pub async fn play_queue(
+    tracks: Vec<AudioTrackInput>,
+    start_index: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let audio_tracks: Vec<AudioTrack> = tracks.into_iter().map(|t| t.into_audio_track()).collect();
+    state
+        .player
+        .play_queue(audio_tracks, start_index.unwrap_or(0))
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn play_current(state: State<'_, AppState>) -> Result<(), String> {
     state.player.play_current().map_err(|e| e.to_string())
@@ -272,7 +287,7 @@ pub async fn set_audio_output_device(
 
 #[tauri::command]
 pub async fn set_bit_perfect(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
-    let mut adapter = state.exclusive_adapter.lock().unwrap();
+    let mut adapter = crate::sync_util::recover_mutex(&state.exclusive_adapter);
     adapter.set_exclusive(enabled).map_err(|e| e.to_string())
 }
 
@@ -280,7 +295,7 @@ pub async fn set_bit_perfect(enabled: bool, state: State<'_, AppState>) -> Resul
 pub async fn get_audio_capabilities(
     state: State<'_, AppState>,
 ) -> Result<AudioCapabilitiesDTO, String> {
-    let excl = state.exclusive_adapter.lock().unwrap().is_supported();
+    let excl = crate::sync_util::recover_mutex(&state.exclusive_adapter).is_supported();
     let smtc = false; // Fallback adapter reports honest capability (no fake SMTC)
     Ok(AudioCapabilitiesDTO {
         exclusive_mode_supported: excl,
@@ -434,6 +449,14 @@ pub async fn queue_clear(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn queue_clear_upcoming(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .player
+        .queue_clear_upcoming()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn queue_set_index(index: usize, state: State<'_, AppState>) -> Result<(), String> {
     state
         .player
@@ -476,7 +499,8 @@ pub async fn open_files_dialog() -> Result<Option<Vec<String>>, String> {
 #[tauri::command]
 pub async fn get_all_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, String> {
     let conn = state.db.lock();
-    db_get_tracks(&conn, None).map_err(|e| e.to_string())
+    // Summary query: lyrics are excluded and loaded on demand via get_track_lyrics.
+    db_get_tracks_summary(&conn, None).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -531,5 +555,5 @@ pub async fn scan_directory(
         .map_err(|e| e.to_string())?;
 
     let conn = state.db.lock();
-    db_get_tracks(&conn, None).map_err(|e| e.to_string())
+    db_get_tracks_summary(&conn, None).map_err(|e| e.to_string())
 }

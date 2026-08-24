@@ -39,6 +39,37 @@ export const SAMPLE_LRC_2 = `[ti:Bohemian Rhapsody]
 [01:27.50]If I'm not back again this time tomorrow
 [01:32.40]Carry on, carry on as if nothing really matters...`;
 
+export const SAMPLE_LRC_JAPANESE = `[ti:夜に駆ける]
+[ar:YOASOBI]
+[al:THE BOOK]
+[by:Nghe Nhac Pro Max]
+[00:00.00]夜に駆ける - YOASOBI
+[00:02.50]沈むように溶けてゆくように
+[00:08.20]二人だけの空が広がる夜に
+[00:15.50]「さよなら」だけだった
+[00:19.00]その一言で全てが分かった
+[00:23.00]日が沈み出した空と君の姿
+[00:28.00]フェンス越しに重なっていた
+[00:33.50]初めて会った日から
+[00:37.00]僕の心の全てを奪った
+[00:41.00]どこか儚い空気を纏う君は
+[00:46.00]寂しい目をした人だった`;
+
+export const SAMPLE_LRC_ROMANIZED = `[ti:Yoru ni Kakeru]
+[ar:YOASOBI]
+[al:THE BOOK]
+[00:00.00]Yoru ni Kakeru - YOASOBI
+[00:02.50]Shizumu you ni tokete yuku you ni
+[00:08.20]Futari dake no sora ga hirogaru yoru ni
+[00:15.50]'Sayonara' dake datta
+[00:19.00]Sono hitokoto de subete ga wakatta
+[00:23.00]Hi ga shizumi dashita sora to kimi no sugata
+[00:28.00]Fensu goshi ni kasanatte ita
+[00:33.50]Hajimete atta hi kara
+[00:37.00]Boku no kokoro no subete wo ubatta
+[00:41.00]Doko ka hakanai kuuki wo matou kimi wa
+[00:46.00]Sabishii me wo shita hito datta`;
+
 export const MOCK_TRACKS: Track[] = [
   {
     id: 'track-1',
@@ -57,7 +88,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-01-15T08:30:00Z',
     format: 'FLAC',
     bits_per_sample: 24,
-    rating: 5,
     is_favorite: true,
     play_count: 42,
     lyrics: SAMPLE_LRC_1,
@@ -79,7 +109,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-01-15T08:31:00Z',
     format: 'FLAC',
     bits_per_sample: 16,
-    rating: 4,
     is_favorite: true,
     play_count: 35,
     lyrics: SAMPLE_LRC_1,
@@ -101,7 +130,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-01-10T12:00:00Z',
     format: 'FLAC',
     bits_per_sample: 24,
-    rating: 5,
     is_favorite: true,
     play_count: 88,
     lyrics: SAMPLE_LRC_2,
@@ -123,7 +151,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-01-10T12:05:00Z',
     format: 'MP3',
     bits_per_sample: 16,
-    rating: 4,
     is_favorite: false,
     play_count: 19,
   },
@@ -144,7 +171,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-01-18T14:20:00Z',
     format: 'FLAC',
     bits_per_sample: 24,
-    rating: 5,
     is_favorite: true,
     play_count: 64,
   },
@@ -165,7 +191,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-02-01T09:15:00Z',
     format: 'FLAC',
     bits_per_sample: 24,
-    rating: 5,
     is_favorite: true,
     play_count: 51,
   },
@@ -186,7 +211,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-02-01T09:12:00Z',
     format: 'FLAC',
     bits_per_sample: 24,
-    rating: 4,
     is_favorite: false,
     play_count: 28,
   },
@@ -207,7 +231,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-02-10T16:45:00Z',
     format: 'WAV',
     bits_per_sample: 24,
-    rating: 5,
     is_favorite: true,
     play_count: 73,
   },
@@ -228,7 +251,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-02-10T16:50:00Z',
     format: 'FLAC',
     bits_per_sample: 24,
-    rating: 5,
     is_favorite: false,
     play_count: 38,
   },
@@ -249,7 +271,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-02-14T20:10:00Z',
     format: 'MP3',
     bits_per_sample: 16,
-    rating: 4,
     is_favorite: true,
     play_count: 22,
   },
@@ -270,7 +291,6 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-02-15T10:00:00Z',
     format: 'FLAC',
     bits_per_sample: 16,
-    rating: 5,
     is_favorite: true,
     play_count: 67,
   },
@@ -291,9 +311,29 @@ export const MOCK_TRACKS: Track[] = [
     date_added: '2025-02-16T11:20:00Z',
     format: 'FLAC',
     bits_per_sample: 24,
-    rating: 5,
     is_favorite: true,
     play_count: 45,
+  },
+  {
+    id: 'track-13',
+    title: '夜に駆ける (Yoru ni Kakeru)',
+    artist: 'YOASOBI',
+    album: 'THE BOOK',
+    duration: 261,
+    path: 'D:/Music/J-Pop/YOASOBI/01_Yoru_ni_Kakeru.flac',
+    track_number: 1,
+    disc_number: 1,
+    year: 2021,
+    genre: 'J-Pop',
+    sample_rate: 96000,
+    bitrate: 3100,
+    channels: 2,
+    date_added: '2025-02-18T10:00:00Z',
+    format: 'FLAC',
+    bits_per_sample: 24,
+    is_favorite: true,
+    play_count: 110,
+    lyrics: SAMPLE_LRC_JAPANESE,
   }
 ];
 
@@ -315,16 +355,6 @@ export const MOCK_PLAYLISTS: Playlist[] = [
     created_at: '2025-02-05T14:00:00Z',
     updated_at: '2025-02-15T18:20:00Z',
     is_smart: false,
-  },
-  {
-    id: 'pl-smart-1',
-    name: 'Smart: 5-Star Favorites',
-    description: 'Tự động tổng hợp bài hát đánh giá 5 sao',
-    track_ids: ['track-1', 'track-3', 'track-5', 'track-6', 'track-8', 'track-9', 'track-11', 'track-12'],
-    created_at: '2025-02-01T00:00:00Z',
-    updated_at: '2025-02-20T00:00:00Z',
-    is_smart: true,
-    smart_rule: { type: 'rating_gte', value: 5 },
   },
   {
     id: 'pl-smart-2',

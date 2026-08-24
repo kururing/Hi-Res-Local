@@ -19,11 +19,11 @@ export const Button: React.FC<ButtonProps> = ({
   ...props
 }) => {
   const baseClasses =
-    'inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus-visible:outline-none disabled:opacity-50 disabled:pointer-events-none active:scale-[0.98] select-none';
+    'soft-button inline-flex items-center justify-center whitespace-nowrap font-medium rounded-2xl transition-all duration-300 focus-visible:outline-none disabled:opacity-50 disabled:pointer-events-none active:scale-[0.97] select-none';
 
   const variantClasses = {
-    primary: 'bg-brand-primary text-white hover:bg-indigo-900 border border-brand-border shadow-sm',
-    secondary: 'bg-brand-secondary text-white hover:bg-indigo-600 shadow-sm hover:shadow-glow-indigo',
+    primary: 'bg-brand-primary text-white hover:brightness-110 border border-brand-border shadow-sm',
+    secondary: 'bg-brand-secondary text-white hover:brightness-110 shadow-sm hover:shadow-glow-secondary',
     accent: 'bg-brand-accent text-oled-base font-semibold hover:bg-brand-accentHover shadow-sm hover:shadow-glow-accent',
     ghost: 'bg-transparent text-brand-muted hover:text-brand-foreground hover:bg-oled-hover',
     danger: 'bg-rose-600/20 text-rose-300 border border-rose-600/40 hover:bg-rose-600 hover:text-white',

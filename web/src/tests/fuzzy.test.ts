@@ -31,4 +31,17 @@ describe('Fuzzy Search Matcher', () => {
     // Hotel California starts with Cal or contains Cal
     expect(results[0].item.title).toBe('Hotel California');
   });
+
+  it('matches Vietnamese text without requiring diacritics', () => {
+    expect(fuzzySearch(items, 'nang am', ['title', 'artist'])[0].item.title).toBe('Nắng Ấm Xa Dần');
+  });
+
+  it('tolerates a small typo and supports initials', () => {
+    expect(fuzzySearch(items, 'bohemain', ['title'])[0].item.title).toBe('Bohemian Rhapsody');
+    expect(fuzzySearch(items, 'st', ['artist'])[0].item.artist).toBe('Sơn Tùng M-TP');
+  });
+
+  it('does not return every item for an unrelated single letter', () => {
+    expect(fuzzySearch(items, 'q', ['title', 'artist']).map(result => result.item.artist)).toEqual(['Queen']);
+  });
 });

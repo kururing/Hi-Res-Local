@@ -1,6 +1,5 @@
 export type SmartRuleType =
   | 'genre'
-  | 'rating_gte'
   | 'recently_added'
   | 'recently_played'
   | 'top_played'

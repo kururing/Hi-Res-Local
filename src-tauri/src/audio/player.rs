@@ -1,20 +1,23 @@
 use cpal::traits::{DeviceTrait, StreamTrait};
-use cpal::{SampleFormat, Stream, StreamConfig};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use cpal::{BufferSize, SampleFormat, Stream, StreamConfig};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::broadcast;
 
 use crate::audio::device::{convert_f32_to_i16, convert_f32_to_u16, OutputDeviceManager};
-use crate::audio::dsp::{soft_limit, CrossfadeProcessor, EqualizerProcessor, ReplayGainProcessor};
 use crate::audio::dto::{
     AudioDeviceDTO, AudioEvent, AudioTrack, CrossfadeConfig, EqConfig, EqPreset, PlaybackProgress,
-    PlaybackState, PlayerSnapshot, QualityBadge, RepeatMode, ReplayGainConfig,
+    PlaybackState, PlayerSnapshot, RepeatMode, ReplayGainConfig,
 };
 use crate::audio::error::{AudioError, AudioResult};
-use crate::audio::gapless::GaplessController;
+use crate::audio::pipeline::{
+    device_buffer_frames, realtime_fill, spawn_decode_thread, AudioPipeline, DecodeCommand,
+};
 use crate::audio::queue::PlaybackQueue;
+use crate::sync_util::{recover_mutex, recover_rw_read, recover_rw_write};
 
-/// Commands sent from UI/Tauri command handlers to the audio engine
+use ringbuf::HeapCons;
+
 #[derive(Debug)]
 pub enum AudioCommand {
     PlayTrack(AudioTrack),
@@ -46,7 +49,6 @@ pub enum AudioCommand {
     SelectDevice(Option<String>),
 }
 
-/// Internal shared audio player state
 struct InnerPlayerState {
     state: PlaybackState,
     volume: f32,
@@ -56,21 +58,17 @@ struct InnerPlayerState {
     crossfade_config: CrossfadeConfig,
     replay_gain_config: ReplayGainConfig,
     active_device: Option<AudioDeviceDTO>,
-    quality_badge: Option<QualityBadge>,
+    quality_badge: Option<crate::audio::dto::QualityBadge>,
 }
 
-/// Production Native Tauri Audio Player
 pub struct AudioPlayer {
     inner: Arc<RwLock<InnerPlayerState>>,
-    gapless_controller: Arc<Mutex<GaplessController>>,
-    eq_processor: Arc<Mutex<EqualizerProcessor>>,
-    replay_gain_processor: Arc<Mutex<ReplayGainProcessor>>,
-    crossfade_processor: Arc<Mutex<CrossfadeProcessor>>,
     device_manager: Arc<Mutex<OutputDeviceManager>>,
     event_sender: broadcast::Sender<AudioEvent>,
     active_stream: Arc<Mutex<Option<Stream>>>,
-    is_playing_atomic: Arc<AtomicBool>,
-    current_position_ms_atomic: Arc<AtomicU64>,
+    pending_cons: Mutex<Option<HeapCons<f32>>>,
+    pipeline: Arc<AudioPipeline>,
+    decode_tx: crossbeam_channel::Sender<DecodeCommand>,
 }
 
 unsafe impl Send for AudioPlayer {}
@@ -95,33 +93,25 @@ impl AudioPlayer {
             volume: 1.0,
             is_muted: false,
             queue: PlaybackQueue::new(),
-            eq_config: default_eq.clone(),
-            crossfade_config: default_crossfade.clone(),
-            replay_gain_config: default_rg.clone(),
+            eq_config: default_eq,
+            crossfade_config: default_crossfade,
+            replay_gain_config: default_rg,
             active_device: None,
             quality_badge: None,
         };
 
-        let gapless = GaplessController::new(44100, 2);
-        let eq_proc = EqualizerProcessor::new(44100, 2, &default_eq);
-        let rg_proc = ReplayGainProcessor::new();
-        let cf_proc = CrossfadeProcessor::new(44100, 2, default_crossfade);
-        let dev_mgr = OutputDeviceManager::new();
+        let (pipeline, cons, decode_tx, decode_rx) = AudioPipeline::create();
+        spawn_decode_thread(Arc::clone(&pipeline), decode_rx, event_sender.clone());
 
-        let player = Self {
+        Self {
             inner: Arc::new(RwLock::new(inner_state)),
-            gapless_controller: Arc::new(Mutex::new(gapless)),
-            eq_processor: Arc::new(Mutex::new(eq_proc)),
-            replay_gain_processor: Arc::new(Mutex::new(rg_proc)),
-            crossfade_processor: Arc::new(Mutex::new(cf_proc)),
-            device_manager: Arc::new(Mutex::new(dev_mgr)),
+            device_manager: Arc::new(Mutex::new(OutputDeviceManager::new())),
             event_sender,
             active_stream: Arc::new(Mutex::new(None)),
-            is_playing_atomic: Arc::new(AtomicBool::new(false)),
-            current_position_ms_atomic: Arc::new(AtomicU64::new(0)),
-        };
-
-        player
+            pending_cons: Mutex::new(Some(cons)),
+            pipeline,
+            decode_tx,
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<AudioEvent> {
@@ -132,11 +122,21 @@ impl AudioPlayer {
         let _ = self.event_sender.send(event);
     }
 
+    fn send_decode(&self, cmd: DecodeCommand) {
+        if let Err(err) = self.decode_tx.send(cmd) {
+            tracing::warn!("Decode thread command dropped: {err}");
+        }
+    }
+
     pub fn get_snapshot(&self) -> PlayerSnapshot {
-        let inner = self.inner.read().unwrap();
-        let pos_ms = self.current_position_ms_atomic.load(Ordering::Relaxed);
+        let inner = recover_rw_read(&self.inner);
+        let pos_ms = self.pipeline.position_ms.load(Ordering::Relaxed);
         let curr_track = inner.queue.current_track().cloned();
-        let duration_ms = curr_track.as_ref().map(|t| t.duration_ms).unwrap_or(0);
+        let duration_ms = self
+            .pipeline
+            .duration_ms
+            .load(Ordering::Relaxed)
+            .max(curr_track.as_ref().map(|t| t.duration_ms).unwrap_or(0));
         let percentage = if duration_ms > 0 {
             (pos_ms as f32 / duration_ms as f32).clamp(0.0, 1.0)
         } else {
@@ -164,6 +164,17 @@ impl AudioPlayer {
             replay_gain: inner.replay_gain_config.clone(),
             output_device: inner.active_device.clone(),
         }
+    }
+
+    /// Cheap progress read for the UI ticker: atomics only, no queue clone.
+    pub fn get_progress_tick(&self) -> Option<(u64, u64)> {
+        if !self.pipeline.is_playing.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some((
+            self.pipeline.position_ms.load(Ordering::Relaxed),
+            self.pipeline.duration_ms.load(Ordering::Relaxed),
+        ))
     }
 
     pub fn execute_command(&self, command: AudioCommand) -> AudioResult<()> {
@@ -200,20 +211,59 @@ impl AudioPlayer {
 
     pub fn play_track(&self, track: AudioTrack) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.queue.clear();
-            inner.queue.add_track(track.clone());
+            inner.queue.add_track(track);
+            self.emit_queue_updated(&inner);
         }
         self.start_playback_for_current()
     }
 
-    pub fn play_current(&self) -> AudioResult<()> {
-        let current_track = {
-            let inner = self.inner.read().unwrap();
-            inner.queue.current_track().cloned()
-        };
+    /// Replace the whole queue and start playback at `start_index`.
+    /// This is the primary entry point used by the UI so the backend queue owns
+    /// next/previous, weighted shuffle and gapless preloading.
+    pub fn play_queue(&self, tracks: Vec<AudioTrack>, start_index: usize) -> AudioResult<()> {
+        if tracks.is_empty() {
+            return Err(AudioError::QueueEmpty);
+        }
+        let index = start_index.min(tracks.len() - 1);
+        {
+            let mut inner = recover_rw_write(&self.inner);
+            inner.queue.clear();
+            inner.queue.add_tracks(tracks);
+            inner.queue.set_current_index(index)?;
+            self.emit_queue_updated(&inner);
+        }
+        self.start_playback_for_current()
+    }
 
-        if let Some(_) = current_track {
+    /// Called when the decode thread gaplessly moved to the preloaded track:
+    /// advance the queue index to match and preload the following track.
+    pub fn handle_track_transitioned(&self, track: &AudioTrack) {
+        {
+            let mut inner = recover_rw_write(&self.inner);
+            let advanced_id = inner.queue.next().map(|t| t.id.clone());
+            if advanced_id.as_deref() != Some(track.id.as_str()) {
+                // Queue mutated after the preload was issued; align to what is
+                // actually playing if it is still present in the queue.
+                let idx = inner
+                    .queue
+                    .tracks()
+                    .iter()
+                    .position(|t| t.id == track.id);
+                if let Some(idx) = idx {
+                    let _ = inner.queue.set_current_index(idx);
+                }
+            }
+            inner.state = PlaybackState::Playing;
+            self.emit_queue_updated(&inner);
+        }
+        self.check_and_preload_next();
+    }
+
+    pub fn play_current(&self) -> AudioResult<()> {
+        let has_track = recover_rw_read(&self.inner).queue.current_track().is_some();
+        if has_track {
             self.start_playback_for_current()
         } else {
             Err(AudioError::QueueEmpty)
@@ -221,23 +271,23 @@ impl AudioPlayer {
     }
 
     pub fn pause(&self) -> AudioResult<()> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = recover_rw_write(&self.inner);
         if inner.state == PlaybackState::Playing {
             inner.state = PlaybackState::Paused;
-            self.is_playing_atomic.store(false, Ordering::SeqCst);
+            self.pipeline.is_playing.store(false, Ordering::SeqCst);
             self.emit_event(AudioEvent::StateChanged(PlaybackState::Paused));
         }
         Ok(())
     }
 
     pub fn resume(&self) -> AudioResult<()> {
-        let state = { self.inner.read().unwrap().state };
+        let state = recover_rw_read(&self.inner).state;
         if state == PlaybackState::Paused {
             {
-                let mut inner = self.inner.write().unwrap();
+                let mut inner = recover_rw_write(&self.inner);
                 inner.state = PlaybackState::Playing;
             }
-            self.is_playing_atomic.store(true, Ordering::SeqCst);
+            self.pipeline.is_playing.store(true, Ordering::SeqCst);
             self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
             Ok(())
         } else if state == PlaybackState::Stopped {
@@ -248,7 +298,7 @@ impl AudioPlayer {
     }
 
     pub fn toggle_play_pause(&self) -> AudioResult<()> {
-        let state = { self.inner.read().unwrap().state };
+        let state = recover_rw_read(&self.inner).state;
         match state {
             PlaybackState::Playing => self.pause(),
             PlaybackState::Paused => self.resume(),
@@ -258,16 +308,14 @@ impl AudioPlayer {
     }
 
     pub fn stop(&self) -> AudioResult<()> {
+        let generation = self.pipeline.next_generation();
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.state = PlaybackState::Stopped;
         }
-        self.is_playing_atomic.store(false, Ordering::SeqCst);
-        self.current_position_ms_atomic.store(0, Ordering::SeqCst);
-
-        // Clear active stream
-        let mut stream_lock = self.active_stream.lock().unwrap();
-        *stream_lock = None;
+        self.pipeline.is_playing.store(false, Ordering::SeqCst);
+        self.pipeline.position_ms.store(0, Ordering::SeqCst);
+        self.send_decode(DecodeCommand::Stop { generation });
 
         self.emit_event(AudioEvent::StateChanged(PlaybackState::Stopped));
         self.emit_event(AudioEvent::ProgressUpdated(PlaybackProgress::default()));
@@ -275,40 +323,17 @@ impl AudioPlayer {
     }
 
     pub fn seek(&self, position_ms: u64) -> AudioResult<()> {
-        let mut gapless = self.gapless_controller.lock().unwrap();
-        if gapless.has_current() {
-            let actual = gapless.seek(position_ms)?;
-            self.current_position_ms_atomic
-                .store(actual, Ordering::SeqCst);
-            let duration = self
-                .inner
-                .read()
-                .unwrap()
-                .queue
-                .current_track()
-                .map(|t| t.duration_ms)
-                .unwrap_or(0);
-            let percentage = if duration > 0 {
-                (actual as f32 / duration as f32).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-
-            self.emit_event(AudioEvent::ProgressUpdated(PlaybackProgress {
-                position_ms: actual,
-                duration_ms: duration,
-                buffered_ms: actual,
-                percentage,
-            }));
-            Ok(())
-        } else {
-            Ok(())
-        }
+        let generation = self.pipeline.generation.load(Ordering::SeqCst);
+        self.send_decode(DecodeCommand::Seek {
+            position_ms,
+            generation,
+        });
+        Ok(())
     }
 
     pub fn next(&self) -> AudioResult<()> {
         let next_track = {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.queue.next().cloned()
         };
 
@@ -321,14 +346,13 @@ impl AudioPlayer {
     }
 
     pub fn previous(&self) -> AudioResult<()> {
-        // If playing > 3 seconds, replay track from beginning
-        let pos = self.current_position_ms_atomic.load(Ordering::Relaxed);
+        let pos = self.pipeline.position_ms.load(Ordering::Relaxed);
         if pos > 3000 {
             return self.seek(0);
         }
 
         let prev_track = {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.queue.previous().cloned()
         };
 
@@ -342,8 +366,11 @@ impl AudioPlayer {
 
     pub fn set_volume(&self, volume: f32) -> AudioResult<()> {
         let clamped = volume.clamp(0.0, 1.0);
+        self.pipeline
+            .volume_bits
+            .store(clamped.to_bits(), Ordering::Relaxed);
         let is_muted = {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.volume = clamped;
             inner.is_muted
         };
@@ -355,8 +382,9 @@ impl AudioPlayer {
     }
 
     pub fn set_muted(&self, muted: bool) -> AudioResult<()> {
+        self.pipeline.is_muted.store(muted, Ordering::Relaxed);
         let volume = {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.is_muted = muted;
             inner.volume
         };
@@ -369,10 +397,11 @@ impl AudioPlayer {
 
     pub fn toggle_mute(&self) -> AudioResult<()> {
         let (vol, muted) = {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.is_muted = !inner.is_muted;
             (inner.volume, inner.is_muted)
         };
+        self.pipeline.is_muted.store(muted, Ordering::Relaxed);
         self.emit_event(AudioEvent::VolumeChanged {
             volume: vol,
             is_muted: muted,
@@ -381,26 +410,25 @@ impl AudioPlayer {
     }
 
     pub fn set_repeat_mode(&self, mode: RepeatMode) -> AudioResult<()> {
-        {
-            let mut inner = self.inner.write().unwrap();
-            inner.queue.set_repeat_mode(mode);
-        }
+        recover_rw_write(&self.inner).queue.set_repeat_mode(mode);
         self.emit_event(AudioEvent::RepeatModeChanged(mode));
+        // The upcoming track may have changed (repeat one/all wrap-around).
+        self.check_and_preload_next();
         Ok(())
     }
 
     pub fn set_shuffle(&self, enabled: bool) -> AudioResult<()> {
-        {
-            let mut inner = self.inner.write().unwrap();
-            inner.queue.set_shuffle_enabled(enabled);
-        }
+        recover_rw_write(&self.inner)
+            .queue
+            .set_shuffle_enabled(enabled);
         self.emit_event(AudioEvent::ShuffleChanged(enabled));
+        self.check_and_preload_next();
         Ok(())
     }
 
     pub fn queue_add(&self, tracks: Vec<AudioTrack>) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.queue.add_tracks(tracks);
             self.emit_queue_updated(&inner);
         }
@@ -410,7 +438,7 @@ impl AudioPlayer {
 
     pub fn queue_insert(&self, index: usize, track: AudioTrack) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.queue.insert_track(index, track)?;
             self.emit_queue_updated(&inner);
         }
@@ -420,7 +448,7 @@ impl AudioPlayer {
 
     pub fn queue_play_next(&self, track: AudioTrack) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.queue.play_next(track);
             self.emit_queue_updated(&inner);
         }
@@ -430,7 +458,7 @@ impl AudioPlayer {
 
     pub fn queue_remove(&self, index: usize) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.queue.remove_track(index)?;
             self.emit_queue_updated(&inner);
         }
@@ -440,7 +468,7 @@ impl AudioPlayer {
 
     pub fn queue_reorder(&self, from: usize, to: usize) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.queue.reorder(from, to)?;
             self.emit_queue_updated(&inner);
         }
@@ -450,16 +478,31 @@ impl AudioPlayer {
 
     pub fn queue_clear(&self) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.queue.clear();
             self.emit_queue_updated(&inner);
         }
         self.stop()
     }
 
+    /// Clear everything except the currently playing track (playback continues).
+    pub fn queue_clear_upcoming(&self) -> AudioResult<()> {
+        {
+            let mut inner = recover_rw_write(&self.inner);
+            let current = inner.queue.current_track().cloned();
+            inner.queue.clear();
+            if let Some(track) = current {
+                inner.queue.add_track(track);
+            }
+            self.emit_queue_updated(&inner);
+        }
+        self.check_and_preload_next();
+        Ok(())
+    }
+
     pub fn queue_set_index(&self, index: usize) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.queue.set_current_index(index)?;
             self.emit_queue_updated(&inner);
         }
@@ -468,75 +511,64 @@ impl AudioPlayer {
 
     pub fn set_eq_config(&self, config: EqConfig) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.eq_config = config.clone();
         }
-        let mut eq = self.eq_processor.lock().unwrap();
-        eq.update_config(&config);
+        self.send_decode(DecodeCommand::SetEq(config));
         Ok(())
     }
 
     pub fn set_eq_preset(&self, preset: EqPreset) -> AudioResult<()> {
         let config = {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.eq_config.apply_preset(preset);
             inner.eq_config.clone()
         };
-        let mut eq = self.eq_processor.lock().unwrap();
-        eq.update_config(&config);
+        self.send_decode(DecodeCommand::SetEq(config));
         Ok(())
     }
 
     pub fn set_eq_band(&self, index: usize, gain_db: f32) -> AudioResult<()> {
         let config = {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             if let Some(band) = inner.eq_config.bands.get_mut(index) {
                 band.gain_db = gain_db.clamp(-12.0, 12.0);
                 inner.eq_config.preset = EqPreset::Custom;
             }
             inner.eq_config.clone()
         };
-        let mut eq = self.eq_processor.lock().unwrap();
-        eq.update_config(&config);
+        self.send_decode(DecodeCommand::SetEq(config));
         Ok(())
     }
 
     pub fn set_crossfade_config(&self, config: CrossfadeConfig) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.crossfade_config = config.clone();
         }
-        let mut cf = self.crossfade_processor.lock().unwrap();
-        cf.set_config(config);
+        self.send_decode(DecodeCommand::SetCrossfade(config));
         Ok(())
     }
 
     pub fn set_replay_gain_config(&self, config: ReplayGainConfig) -> AudioResult<()> {
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = recover_rw_write(&self.inner);
             inner.replay_gain_config = config.clone();
         }
-        let mut rg = self.replay_gain_processor.lock().unwrap();
-        let gapless = self.gapless_controller.lock().unwrap();
-        rg.update(&config, gapless.current_replay_gain().as_ref());
+        self.send_decode(DecodeCommand::SetReplayGain(config));
         Ok(())
     }
 
     pub fn enumerate_devices(&self) -> AudioResult<Vec<AudioDeviceDTO>> {
-        let dev_mgr = self.device_manager.lock().unwrap();
-        dev_mgr.enumerate_devices()
+        recover_mutex(&self.device_manager).enumerate_devices()
     }
 
     pub fn select_output_device(&self, device_name: Option<String>) -> AudioResult<()> {
-        {
-            let mut dev_mgr = self.device_manager.lock().unwrap();
-            dev_mgr.select_device(device_name.clone());
-        }
-
-        // If currently playing, recreate audio stream on new device
-        let is_playing = self.is_playing_atomic.load(Ordering::SeqCst);
+        recover_mutex(&self.device_manager).select_device(device_name);
+        let is_playing = self.pipeline.is_playing.load(Ordering::SeqCst);
+        self.recreate_cpal_stream()?;
         if is_playing {
-            self.start_playback_for_current()?;
+            self.pipeline.is_playing.store(true, Ordering::SeqCst);
         }
         Ok(())
     }
@@ -549,157 +581,162 @@ impl AudioPlayer {
     }
 
     fn check_and_preload_next(&self) {
-        let next_track_opt = {
-            let inner = self.inner.read().unwrap();
-            inner.queue.peek_next().cloned()
-        };
-
-        if let Some(next_track) = next_track_opt {
-            let mut gapless = self.gapless_controller.lock().unwrap();
-            let _ = gapless.preload_next(next_track);
+        // plan_next (not peek_next) pins the shuffle pick so the preloaded track
+        // is the one a later queue.next() actually resolves to.
+        let next_track = recover_rw_write(&self.inner).queue.plan_next().cloned();
+        match next_track {
+            Some(track) => {
+                let generation = self.pipeline.generation.load(Ordering::SeqCst);
+                self.send_decode(DecodeCommand::PreloadNext { track, generation });
+            }
+            // No upcoming track: drop any stale preload so it can't play at EOF.
+            None => self.send_decode(DecodeCommand::ClearPreload),
         }
     }
 
     fn start_playback_for_current(&self) -> AudioResult<()> {
-        let current_track = {
-            let inner = self.inner.read().unwrap();
-            inner.queue.current_track().cloned()
-        };
+        let track = recover_rw_read(&self.inner)
+            .queue
+            .current_track()
+            .cloned()
+            .ok_or(AudioError::QueueEmpty)?;
 
-        let track = match current_track {
-            Some(t) => t,
-            None => return Err(AudioError::QueueEmpty),
-        };
-
-        // Load into gapless controller
+        let generation = self.pipeline.next_generation();
         {
-            let mut gapless = self.gapless_controller.lock().unwrap();
-            gapless.load_track(track.clone())?;
-        }
-
-        // Update ReplayGain & QualityBadge
-        {
-            let gapless = self.gapless_controller.lock().unwrap();
-            let badge = gapless.current_quality_badge();
-            let rg_info = gapless.current_replay_gain();
-
-            let mut inner = self.inner.write().unwrap();
-            inner.quality_badge = badge.clone();
+            let mut inner = recover_rw_write(&self.inner);
             inner.state = PlaybackState::Playing;
-
-            let mut rg_proc = self.replay_gain_processor.lock().unwrap();
-            rg_proc.update(&inner.replay_gain_config, rg_info.as_ref());
-
-            self.emit_event(AudioEvent::TrackChanged(Some(track.clone())));
-            self.emit_event(AudioEvent::QualityUpdated(badge));
-            self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
         }
-
-        self.is_playing_atomic.store(true, Ordering::SeqCst);
-        self.current_position_ms_atomic.store(0, Ordering::SeqCst);
-
-        // Preload next track
+        if track.duration_ms > 0 {
+            self.pipeline
+                .duration_ms
+                .store(track.duration_ms, Ordering::Relaxed);
+        }
+        self.pipeline.is_playing.store(true, Ordering::SeqCst);
+        self.pipeline.position_ms.store(0, Ordering::SeqCst);
+        self.emit_event(AudioEvent::TrackChanged(Some(track.clone())));
+        self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
+        self.send_decode(DecodeCommand::OpenTrack { track, generation });
         self.check_and_preload_next();
-
-        // Ensure CPAL Stream is running
         self.init_cpal_stream()?;
-
         Ok(())
     }
 
+    fn recreate_cpal_stream(&self) -> AudioResult<()> {
+        {
+            let mut stream_lock = recover_mutex(&self.active_stream);
+            *stream_lock = None;
+        }
+        let cons = self.pipeline.recreate_ring();
+        *recover_mutex(&self.pending_cons) = Some(cons);
+        self.init_cpal_stream()
+    }
+
     fn init_cpal_stream(&self) -> AudioResult<()> {
-        let mut stream_lock = self.active_stream.lock().unwrap();
+        let mut stream_lock = recover_mutex(&self.active_stream);
         if stream_lock.is_some() {
             return Ok(());
         }
 
-        let dev_mgr = self.device_manager.lock().unwrap();
-        let device = dev_mgr.get_active_device()?;
+        let cons = recover_mutex(&self.pending_cons)
+            .take()
+            .unwrap_or_else(|| self.pipeline.recreate_ring());
+
+        let device = recover_mutex(&self.device_manager).get_active_device()?;
         let supported_config = OutputDeviceManager::get_best_output_config(&device)?;
         let sample_format = supported_config.sample_format();
-        let config: StreamConfig = supported_config.into();
-
+        let mut config: StreamConfig = supported_config.into();
         let sample_rate = config.sample_rate.0;
         let channels = config.channels;
+        config.buffer_size = BufferSize::Fixed(device_buffer_frames(sample_rate));
 
-        // Update DSP and Gapless output specs
-        {
-            let mut gapless = self.gapless_controller.lock().unwrap();
-            gapless.set_output_spec(sample_rate, channels);
+        self.pipeline
+            .sample_rate
+            .store(sample_rate, Ordering::Relaxed);
+        self.pipeline
+            .channels
+            .store(channels as u32, Ordering::Relaxed);
+        self.send_decode(DecodeCommand::SetOutputSpec {
+            sample_rate,
+            channels,
+        });
 
-            let mut eq = self.eq_processor.lock().unwrap();
-            eq.set_sample_rate(sample_rate);
-        }
-
-        let gapless_arc = Arc::clone(&self.gapless_controller);
-        let eq_arc = Arc::clone(&self.eq_processor);
-        let rg_arc = Arc::clone(&self.replay_gain_processor);
-        let is_playing_arc = Arc::clone(&self.is_playing_atomic);
-        let pos_arc = Arc::clone(&self.current_position_ms_atomic);
-        let inner_arc = Arc::clone(&self.inner);
-        let event_sender_clone = self.event_sender.clone();
-
+        let pipeline = Arc::clone(&self.pipeline);
         let err_event_sender = self.event_sender.clone();
         let err_fn = move |err: cpal::StreamError| {
             tracing::error!("CPAL audio stream error: {}", err);
             let _ = err_event_sender.send(AudioEvent::DeviceLost(err.to_string()));
         };
 
+        let stream =
+            match self.build_stream(&device, &config, sample_format, cons, pipeline, err_fn) {
+                Ok(stream) => stream,
+                Err(_) if matches!(config.buffer_size, BufferSize::Fixed(_)) => {
+                    config.buffer_size = BufferSize::Default;
+                    let pipeline = Arc::clone(&self.pipeline);
+                    let err_event_sender = self.event_sender.clone();
+                    let err_fn = move |err: cpal::StreamError| {
+                        tracing::error!("CPAL audio stream error: {}", err);
+                        let _ = err_event_sender.send(AudioEvent::DeviceLost(err.to_string()));
+                    };
+                    let cons = self.pipeline.recreate_ring();
+                    self.build_stream(&device, &config, sample_format, cons, pipeline, err_fn)?
+                }
+                Err(err) => return Err(err),
+            };
+
+        stream
+            .play()
+            .map_err(|e| AudioError::StreamError(e.to_string()))?;
+        *stream_lock = Some(stream);
+        Ok(())
+    }
+
+    fn build_stream<E>(
+        &self,
+        device: &cpal::Device,
+        config: &StreamConfig,
+        sample_format: SampleFormat,
+        mut cons: HeapCons<f32>,
+        pipeline: Arc<AudioPipeline>,
+        err_fn: E,
+    ) -> AudioResult<Stream>
+    where
+        E: FnMut(cpal::StreamError) + Send + 'static,
+    {
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
-                &config,
+                config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    Self::audio_callback_f32(
-                        data,
-                        &gapless_arc,
-                        &eq_arc,
-                        &rg_arc,
-                        &is_playing_arc,
-                        &pos_arc,
-                        &inner_arc,
-                        &event_sender_clone,
-                    );
+                    realtime_fill(data, &mut cons, &pipeline);
                 },
                 err_fn,
                 None,
             ),
             SampleFormat::I16 => device.build_output_stream(
-                &config,
+                config,
                 move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    let mut temp = vec![0.0f32; data.len()];
-                    Self::audio_callback_f32(
-                        &mut temp,
-                        &gapless_arc,
-                        &eq_arc,
-                        &rg_arc,
-                        &is_playing_arc,
-                        &pos_arc,
-                        &inner_arc,
-                        &event_sender_clone,
-                    );
-                    for (out, &sample) in data.iter_mut().zip(temp.iter()) {
-                        *out = convert_f32_to_i16(sample);
+                    let mut tmp = [0.0f32; 512];
+                    for chunk in data.chunks_mut(512) {
+                        let sl = &mut tmp[..chunk.len()];
+                        realtime_fill(sl, &mut cons, &pipeline);
+                        for (out, &sample) in chunk.iter_mut().zip(sl.iter()) {
+                            *out = convert_f32_to_i16(sample);
+                        }
                     }
                 },
                 err_fn,
                 None,
             ),
             SampleFormat::U16 => device.build_output_stream(
-                &config,
+                config,
                 move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                    let mut temp = vec![0.0f32; data.len()];
-                    Self::audio_callback_f32(
-                        &mut temp,
-                        &gapless_arc,
-                        &eq_arc,
-                        &rg_arc,
-                        &is_playing_arc,
-                        &pos_arc,
-                        &inner_arc,
-                        &event_sender_clone,
-                    );
-                    for (out, &sample) in data.iter_mut().zip(temp.iter()) {
-                        *out = convert_f32_to_u16(sample);
+                    let mut tmp = [0.0f32; 512];
+                    for chunk in data.chunks_mut(512) {
+                        let sl = &mut tmp[..chunk.len()];
+                        realtime_fill(sl, &mut cons, &pipeline);
+                        for (out, &sample) in chunk.iter_mut().zip(sl.iter()) {
+                            *out = convert_f32_to_u16(sample);
+                        }
                     }
                 },
                 err_fn,
@@ -712,87 +749,15 @@ impl AudioPlayer {
             }
         }
         .map_err(|e| AudioError::StreamInitialization(e.to_string()))?;
-
-        stream
-            .play()
-            .map_err(|e| AudioError::StreamError(e.to_string()))?;
-        *stream_lock = Some(stream);
-
-        Ok(())
+        Ok(stream)
     }
+}
 
-    fn audio_callback_f32(
-        output_buffer: &mut [f32],
-        gapless_arc: &Arc<Mutex<GaplessController>>,
-        eq_arc: &Arc<Mutex<EqualizerProcessor>>,
-        rg_arc: &Arc<Mutex<ReplayGainProcessor>>,
-        is_playing_arc: &Arc<AtomicBool>,
-        pos_arc: &Arc<AtomicU64>,
-        inner_arc: &Arc<RwLock<InnerPlayerState>>,
-        event_sender: &broadcast::Sender<AudioEvent>,
-    ) {
-        if !is_playing_arc.load(Ordering::Relaxed) {
-            output_buffer.fill(0.0);
-            return;
-        }
-
-        let mut gapless = match gapless_arc.try_lock() {
-            Ok(g) => g,
-            Err(_) => {
-                output_buffer.fill(0.0);
-                return;
-            }
-        };
-
-        match gapless.read_samples(output_buffer) {
-            Ok((written, transitioned, is_eof)) => {
-                if written < output_buffer.len() {
-                    output_buffer[written..].fill(0.0);
-                }
-
-                let current_pos_ms = gapless.current_position_ms();
-                pos_arc.store(current_pos_ms, Ordering::Relaxed);
-
-                if let Some(next_track) = transitioned {
-                    let _ = event_sender.send(AudioEvent::TrackChanged(Some(next_track)));
-                }
-
-                if is_eof && written == 0 {
-                    is_playing_arc.store(false, Ordering::Relaxed);
-                    let _ = event_sender.send(AudioEvent::StateChanged(PlaybackState::Ended));
-                }
-            }
-            Err(e) => {
-                tracing::error!("Audio decode error during stream callback: {}", e);
-                output_buffer.fill(0.0);
-            }
-        }
-
-        // Apply ReplayGain
-        if let Ok(mut rg) = rg_arc.try_lock() {
-            rg.process_interleaved(output_buffer);
-        }
-
-        // Apply Equalizer
-        if let Ok(mut eq) = eq_arc.try_lock() {
-            eq.process_interleaved(output_buffer);
-        }
-
-        // Volume & Mute scaling
-        let (volume, is_muted) = {
-            let inner = inner_arc.read().unwrap();
-            (inner.volume, inner.is_muted)
-        };
-
-        if is_muted {
-            output_buffer.fill(0.0);
-        } else if (volume - 1.0).abs() > 0.001 {
-            for sample in output_buffer.iter_mut() {
-                *sample *= volume;
-            }
-        }
-
-        // Soft limit to prevent digital distortion
-        soft_limit(output_buffer);
+impl Drop for AudioPlayer {
+    fn drop(&mut self) {
+        self.pipeline.is_playing.store(false, Ordering::SeqCst);
+        let _ = self.decode_tx.send(DecodeCommand::Shutdown);
+        let mut stream = recover_mutex(&self.active_stream);
+        *stream = None;
     }
 }

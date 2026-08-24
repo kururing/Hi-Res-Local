@@ -8,6 +8,7 @@ pub const CURRENT_SCHEMA_VERSION: i32 = 1;
 
 pub fn run_migrations(conn: &mut Connection) -> AppResult<()> {
     conn.execute_batch(SCHEMA_V1)?;
+    let _ = conn.execute("ALTER TABLE tracks ADD COLUMN bit_depth INTEGER", []);
 
     let mut stmt = conn.prepare("SELECT MAX(version) FROM schema_migrations")?;
     let current_version: Option<i32> = stmt.query_row([], |row| row.get(0)).unwrap_or(None);

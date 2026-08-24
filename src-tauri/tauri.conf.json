@@ -19,11 +19,16 @@
         "minWidth": 960,
         "minHeight": 640,
         "resizable": true,
+        "decorations": false,
         "fullscreen": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$CACHE/**"]
+      }
     }
   },
   "bundle": {

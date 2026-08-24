@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { AppSettings, DEFAULT_SETTINGS, AppLanguage, AppTheme } from '../types/settings';
 import { Storage } from '../services/storage';
-import { IpcService } from '../services/ipc';
+import { IpcService, isTauri } from '../services/ipc';
 import { EqualizerPreset } from '../types/audio';
 
 export const DEFAULT_EQ_PRESETS: EqualizerPreset[] = [
@@ -37,9 +37,35 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Apply Theme to DOM
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.remove('dark', 'light', 'theme-midnight', 'theme-slate');
+    root.classList.remove('dark', 'light', 'theme-midnight', 'theme-slate', 'theme-custom');
+    const customProperties = [
+      '--color-oled-base', '--color-oled-card', '--color-oled-hover', '--color-oled-active',
+      '--color-primary', '--color-secondary', '--color-accent', '--color-accent-hover',
+      '--color-foreground', '--color-muted', '--color-border', '--custom-theme-image',
+      '--custom-theme-blur',
+    ];
+    customProperties.forEach(property => root.style.removeProperty(property));
 
-    if (settings.theme === 'light') {
+    if (settings.theme === 'custom' && settings.custom_image_theme) {
+      const theme = settings.custom_image_theme;
+      root.classList.add('theme-custom', theme.is_dark ? 'dark' : 'light');
+      const colorProperties: Record<string, string> = {
+        '--color-oled-base': theme.colors.base,
+        '--color-oled-card': theme.colors.card,
+        '--color-oled-hover': theme.colors.hover,
+        '--color-oled-active': theme.colors.active,
+        '--color-primary': theme.colors.primary,
+        '--color-secondary': theme.colors.secondary,
+        '--color-accent': theme.colors.accent,
+        '--color-accent-hover': theme.colors.accent_hover,
+        '--color-foreground': theme.colors.foreground,
+        '--color-muted': theme.colors.muted,
+        '--color-border': theme.colors.border,
+        '--custom-theme-image': `url("${theme.image_data_url}")`,
+        '--custom-theme-blur': settings.custom_theme_blur ? `${settings.custom_theme_blur_percent * 0.6}px` : '0px',
+      };
+      Object.entries(colorProperties).forEach(([property, value]) => root.style.setProperty(property, value));
+    } else if (settings.theme === 'light') {
       root.classList.add('light');
     } else if (settings.theme === 'midnight') {
       root.classList.add('dark', 'theme-midnight');
@@ -48,7 +74,33 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } else {
       root.classList.add('dark'); // OLED
     }
-  }, [settings.theme]);
+  }, [settings.theme, settings.custom_image_theme, settings.custom_theme_blur, settings.custom_theme_blur_percent]);
+
+  // Keep the player running in the system tray when the user closes the window.
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+
+    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+      const window = getCurrentWindow();
+      return window.onCloseRequested(event => {
+        if (settings.close_to_tray) {
+          event.preventDefault();
+          void window.hide();
+        }
+      });
+    }).then(dispose => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [settings.close_to_tray]);
 
   // Sync EQ with backend/audio engine
   useEffect(() => {

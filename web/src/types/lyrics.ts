@@ -1,6 +1,7 @@
 export interface LyricLine {
   timestamp: number; // in seconds
   text: string;
+  romanized?: string;
   translation?: string;
 }
 
@@ -12,4 +13,8 @@ export interface LyricData {
   offset?: number;
   lines: LyricLine[];
   is_synced: boolean;
+  plain_text?: string;
+  romanized?: LyricData;
 }
+
+export type LyricsMode = 'original' | 'romanized' | 'both';

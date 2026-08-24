@@ -5,6 +5,7 @@ import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
 import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
+import { VirtualList } from '../common/VirtualList';
 import { Track } from '../../types/library';
 import { t } from '../../i18n';
 
@@ -117,21 +118,25 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
               {t('empty_favorites_desc', settings.language)}
             </div>
           ) : (
-            <div className="rounded-xl border border-brand-border bg-oled-card/60 overflow-hidden divide-y divide-brand-border/30">
-              {favTracks.map((tr, idx) => {
+            <VirtualList
+              items={favTracks}
+              rowHeight={64}
+              className="rounded-xl border border-brand-border bg-oled-card/60"
+              style={{ maxHeight: 650 }}
+              getKey={item => item.id}
+              renderRow={(tr, idx) => {
                 const isPlaying = status.current_track?.id === tr.id;
                 return (
                   <div
-                    key={tr.id}
                     onDoubleClick={() => playTrack(tr, favTracks)}
-                    className={`flex items-center justify-between px-4 py-3 text-xs transition-colors cursor-pointer ${
+                    className={`flex h-full items-center justify-between px-4 text-xs cursor-pointer ${
                       isPlaying ? 'bg-brand-accent/10 text-brand-accent font-medium' : 'hover:bg-oled-hover text-brand-foreground'
                     }`}
                   >
                     <div className="flex items-center gap-3 min-w-0 pr-2">
                       <button
                         onClick={() => playTrack(tr, favTracks)}
-                        className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all focus-visible:outline-none"
+                        className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base focus-visible:outline-none"
                         aria-label={`Play ${tr.title}`}
                       >
                         {isPlaying ? (
@@ -147,7 +152,6 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                         </span>
                       </div>
                     </div>
-
                     <div className="flex items-center gap-2">
                       <Badge track={tr} />
                       <button
@@ -161,8 +165,8 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                     </div>
                   </div>
                 );
-              })}
-            </div>
+              }}
+            />
           )}
         </div>
       )}
@@ -180,8 +184,8 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                 onClick={() => onNavigate('album_detail', al)}
                 className="group p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col"
               >
-                <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-indigo-950 to-slate-900 border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
-                  <Disc className="w-14 h-14 text-indigo-400/40" />
+                <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
+                  <Disc className="w-14 h-14 text-brand-accent/40" />
                 </div>
                 <span className="font-semibold text-xs text-brand-foreground truncate">
                   {al.name}
@@ -206,8 +210,8 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                 onClick={() => onNavigate('artist_detail', ar)}
                 className="group p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center"
               >
-                <div className="relative w-24 h-24 rounded-full bg-gradient-to-tr from-indigo-950 to-slate-900 border border-brand-border mb-3 flex items-center justify-center">
-                  <User className="w-10 h-10 text-indigo-400/60" />
+                <div className="relative w-24 h-24 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border mb-3 flex items-center justify-center">
+                  <User className="w-10 h-10 text-brand-accent/60" />
                 </div>
                 <span className="font-semibold text-xs text-brand-foreground truncate w-full">
                   {ar.name}

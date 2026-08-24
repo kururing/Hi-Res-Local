@@ -3,8 +3,13 @@ use lofty::file::{TaggedFile, TaggedFileExt};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use crate::error::{AppError, AppResult};
+
+/// Covers are resized to fit within this dimension before caching. Full-size
+/// embedded art (often 1000–3000px) is never stored or served to the UI.
+const MAX_COVER_DIM: u32 = 512;
 
 pub const FOLDER_COVER_NAMES: &[&str] = &[
     "cover.jpg",
@@ -32,11 +37,55 @@ pub fn get_cover_cache_dir() -> AppResult<PathBuf> {
     Ok(dir)
 }
 
+fn folder_art_cache_key(path: &Path) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.update(meta.len().to_le_bytes());
+    hasher.update(modified.to_le_bytes());
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// Write cover bytes to `target_path`, downscaled to [`MAX_COVER_DIM`] when
+/// larger. Uses a temp file + rename so concurrent scan threads producing the
+/// same hash never interleave writes. Falls back to the original bytes when the
+/// image cannot be decoded or re-encoded.
+fn write_cover_resized(data: &[u8], target_path: &Path) -> bool {
+    let tmp_path = target_path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+
+    let written = match image::load_from_memory(data) {
+        Ok(img) if img.width() > MAX_COVER_DIM || img.height() > MAX_COVER_DIM => {
+            let thumb = img.thumbnail(MAX_COVER_DIM, MAX_COVER_DIM);
+            thumb.save(&tmp_path).is_ok() || fs::write(&tmp_path, data).is_ok()
+        }
+        _ => fs::write(&tmp_path, data).is_ok(),
+    };
+
+    if !written {
+        let _ = fs::remove_file(&tmp_path);
+        return false;
+    }
+
+    if fs::rename(&tmp_path, target_path).is_ok() {
+        return true;
+    }
+    // Rename can fail on Windows when another thread won the race; the target
+    // then already holds identical content.
+    let _ = fs::remove_file(&tmp_path);
+    target_path.exists()
+}
+
 pub fn extract_and_cache_cover(
     tagged_file: Option<&TaggedFile>,
     audio_path: &Path,
 ) -> Option<String> {
-    // 1. Try extracting embedded picture from lofty tags
+    // 1. Embedded picture is already in the tagged file — write and drop, no extra full-file read.
     if let Some(tf) = tagged_file {
         if let Some(tag) = tf.primary_tag().or_else(|| tf.first_tag()) {
             let pictures = tag.pictures();
@@ -59,7 +108,7 @@ pub fn extract_and_cache_cover(
                             return Some(target_path.to_string_lossy().to_string());
                         }
 
-                        if fs::write(&target_path, data).is_ok() {
+                        if write_cover_resized(data, &target_path) {
                             return Some(target_path.to_string_lossy().to_string());
                         }
                     }
@@ -68,12 +117,33 @@ pub fn extract_and_cache_cover(
         }
     }
 
-    // 2. Fallback: Search parent directory for folder art
+    // 2. Folder art: cache by path+size+mtime, resized to a thumbnail.
     if let Some(parent) = audio_path.parent() {
         for candidate_name in FOLDER_COVER_NAMES {
             let candidate_path = parent.join(candidate_name);
-            if candidate_path.is_file() {
-                return Some(candidate_path.to_string_lossy().to_string());
+            if !candidate_path.is_file() {
+                continue;
+            }
+            let Some(hash_str) = folder_art_cache_key(&candidate_path) else {
+                continue;
+            };
+            let ext = candidate_path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("jpg");
+
+            if let Ok(cache_dir) = get_cover_cache_dir() {
+                let target_path = cache_dir.join(format!("{}.{}", hash_str, ext));
+                if target_path.exists() {
+                    return Some(target_path.to_string_lossy().to_string());
+                }
+                let cached = match fs::read(&candidate_path) {
+                    Ok(data) => write_cover_resized(&data, &target_path),
+                    Err(_) => fs::copy(&candidate_path, &target_path).is_ok(),
+                };
+                if cached {
+                    return Some(target_path.to_string_lossy().to_string());
+                }
             }
         }
     }

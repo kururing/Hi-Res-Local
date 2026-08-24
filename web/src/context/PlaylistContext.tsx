@@ -2,11 +2,25 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { Playlist } from '../types/playlist';
 import { Track } from '../types/library';
 import { IpcService } from '../services/ipc';
+import { BackendPlaylist } from '../types/ipc';
 import { parseM3u, generateM3u } from '../services/m3u';
 import { useToast } from './ToastContext';
 import { useLibrary } from './LibraryContext';
 import { t } from '../i18n';
 import { useSettings } from './SettingsContext';
+
+function mapBackendPlaylist(pl: BackendPlaylist, trackIds: string[] = []): Playlist {
+  return {
+    id: pl.id,
+    name: pl.name,
+    description: pl.description ?? null,
+    track_ids: trackIds,
+    created_at: pl.created_at,
+    updated_at: pl.updated_at,
+    is_smart: pl.is_smart,
+    cover_url: pl.cover_art_path ?? null,
+  };
+}
 
 interface PlaylistContextType {
   playlists: Playlist[];
@@ -32,9 +46,19 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const loadPlaylists = useCallback(async () => {
     try {
       const list = await IpcService.invoke('get_playlists');
-      if (list) {
-        setPlaylists(list);
-      }
+      if (!list) return;
+      // Track membership lives in the backend join table; fetch it per playlist.
+      const mapped = await Promise.all(
+        list.map(async pl => {
+          try {
+            const detail = await IpcService.invoke('get_playlist', { id: pl.id });
+            return mapBackendPlaylist(pl, (detail?.tracks || []).map(track => track.id));
+          } catch {
+            return mapBackendPlaylist(pl);
+          }
+        })
+      );
+      setPlaylists(mapped);
     } catch (e) {
       console.error('Failed to load playlists', e);
     }
@@ -45,19 +69,45 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [loadPlaylists]);
 
   const createPlaylist = async (name: string, description?: string): Promise<Playlist> => {
-    const pl = await IpcService.invoke('create_playlist', { name, description });
+    const created = await IpcService.invoke('create_playlist', {
+      input: { name, description: description ?? null },
+    });
+    const pl = mapBackendPlaylist(created);
     setPlaylists(prev => [...prev, pl]);
     showToast(t('toast_playlist_created', settings.language, { name }), 'success');
     return pl;
   };
 
   const updatePlaylist = async (id: string, partial: Partial<Playlist>) => {
-    await IpcService.invoke('update_playlist', {
-      id,
-      name: partial.name,
-      description: partial.description ?? undefined,
-      track_ids: partial.track_ids,
-    });
+    if (partial.name !== undefined || partial.description !== undefined) {
+      await IpcService.invoke('update_playlist', {
+        input: {
+          id,
+          name: partial.name ?? null,
+          description: partial.description ?? null,
+        },
+      });
+    }
+
+    // Membership/order changes go through the dedicated backend commands.
+    if (partial.track_ids) {
+      const current = playlists.find(p => p.id === id);
+      const oldIds = current?.track_ids ?? [];
+      const newIds = partial.track_ids;
+      const oldSet = new Set(oldIds);
+      const newSet = new Set(newIds);
+      const added = newIds.filter(trackId => !oldSet.has(trackId));
+      const removed = oldIds.filter(trackId => !newSet.has(trackId));
+
+      if (removed.length > 0) {
+        await IpcService.invoke('remove_tracks_from_playlist', { playlistId: id, trackIds: removed });
+      }
+      if (added.length > 0) {
+        await IpcService.invoke('add_tracks_to_playlist', { playlistId: id, trackIds: added });
+      }
+      await IpcService.invoke('reorder_playlist_tracks', { playlistId: id, trackIds: newIds });
+    }
+
     setPlaylists(prev =>
       prev.map(p => (p.id === id ? { ...p, ...partial, updated_at: new Date().toISOString() } : p))
     );
@@ -70,7 +120,7 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const addTrackToPlaylist = async (playlistId: string, trackId: string) => {
-    await IpcService.invoke('add_track_to_playlist', { playlist_id: playlistId, track_id: trackId });
+    await IpcService.invoke('add_tracks_to_playlist', { playlistId, trackIds: [trackId] });
     setPlaylists(prev =>
       prev.map(p => {
         if (p.id === playlistId && !p.track_ids.includes(trackId)) {
@@ -83,7 +133,7 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const removeTrackFromPlaylist = async (playlistId: string, trackId: string) => {
-    await IpcService.invoke('remove_track_from_playlist', { playlist_id: playlistId, track_id: trackId });
+    await IpcService.invoke('remove_tracks_from_playlist', { playlistId, trackIds: [trackId] });
     setPlaylists(prev =>
       prev.map(p => {
         if (p.id === playlistId) {
@@ -109,10 +159,6 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const getPlaylistTracks = (playlist: Playlist): Track[] => {
     if (playlist.is_smart && playlist.smart_rule) {
       const rule = playlist.smart_rule;
-      if (rule.type === 'rating_gte') {
-        const minRating = Number(rule.value || 4);
-        return tracks.filter(t => (t.rating || 0) >= minRating);
-      }
       if (rule.type === 'genre') {
         const targetGenre = String(rule.value || '').toLowerCase();
         return tracks.filter(t => (t.genre || '').toLowerCase().includes(targetGenre));

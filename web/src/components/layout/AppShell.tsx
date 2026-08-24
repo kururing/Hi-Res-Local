@@ -1,8 +1,8 @@
 import React, { useState, useCallback } from 'react';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { WindowTitleBar } from './WindowTitleBar';
 import { PlayerBar } from '../player/PlayerBar';
-import { NowPlayingExpanded } from '../player/NowPlayingExpanded';
 import { QueueDrawer } from '../player/QueueDrawer';
 import { EqualizerModal } from '../player/EqualizerModal';
 import { TrackDetailsModal } from '../views/TrackDetailsModal';
@@ -126,7 +126,10 @@ export const AppShell: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-oled-base text-brand-foreground font-sans selection:bg-brand-secondary selection:text-white">
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-oled-base text-brand-foreground font-sans selection:bg-brand-secondary selection:text-white">
+      <div className="custom-theme-backdrop" aria-hidden="true" />
+      <WindowTitleBar />
+      <div className="app-shell relative z-10 flex min-h-0 flex-1 overflow-hidden">
       {/* Skip to Main Content Link for Accessibility */}
       <a
         href="#main-content"
@@ -139,7 +142,7 @@ export const AppShell: React.FC = () => {
       <Sidebar currentView={currentView} onNavigate={navigate} />
 
       {/* Main View Area */}
-      <div className="flex-1 flex flex-col min-w-0 h-full relative overflow-hidden">
+      <div className="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-hidden">
         {/* Top Header */}
         <Header
           currentView={currentView}
@@ -151,18 +154,28 @@ export const AppShell: React.FC = () => {
         />
 
         {/* Scrollable View Content */}
-        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto pb-28 focus:outline-none">
-          {renderCurrentView()}
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className={`app-main min-h-0 flex-1 focus:outline-none ${
+            currentView === 'lyrics' ? 'overflow-hidden' : 'overflow-y-auto'
+          }`}
+        >
+          <div
+            key={currentView}
+            className={`view-stage ${currentView === 'lyrics' ? 'h-full min-h-0' : 'min-h-full'}`}
+          >
+            {renderCurrentView()}
+          </div>
         </main>
 
-        {/* Bottom Fixed Player Bar */}
-        <div className="absolute bottom-0 left-0 right-0">
-          <PlayerBar onNavigateLyrics={() => navigate('lyrics')} />
+        {/* Player owns its space so scrollable content can never run underneath it. */}
+        <div className="relative z-30 shrink-0 px-3 pb-3 pt-2">
+          <PlayerBar onNavigateNowPlaying={() => navigate('lyrics')} />
         </div>
       </div>
 
       {/* Overlays & Modals */}
-      <NowPlayingExpanded />
       <QueueDrawer />
       <EqualizerModal />
       <TrackDetailsModal
@@ -170,6 +183,7 @@ export const AppShell: React.FC = () => {
         isOpen={isTrackDetailsOpen}
         onClose={() => setIsTrackDetailsOpen(false)}
       />
+      </div>
     </div>
   );
 };

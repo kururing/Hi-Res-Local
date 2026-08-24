@@ -13,14 +13,14 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Tauri Framework
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 
 # Serialization & Deserialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Local Storage / Database
-rusqlite = { version = "0.32", features = ["bundled", "blob", "chrono", "uuid", "backup"] }
+rusqlite = { version = "0.32", features = ["bundled", "chrono", "uuid", "backup"] }
 
 # Audio Metadata & Tag Extraction / Editing
 lofty = "0.21"
@@ -29,11 +29,10 @@ lofty = "0.21"
 notify = "6.1"
 walkdir = "2.5"
 
-# Audio Engine / Playback dependencies (prepared for audio integration)
+# Audio Engine / Playback dependencies
 symphonia = { version = "0.5", features = ["all"] }
 cpal = "0.15"
 ringbuf = "0.4"
-dasp = "0.11"
 
 # Search & Utilities
 fuzzy-matcher = "0.3"
@@ -41,21 +40,33 @@ rand = "0.8"
 uuid = { version = "1.10", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
-anyhow = "1.0"
 directories = "5.0"
 regex = "1.10"
 sha2 = "0.10"
 unicode-normalization = "0.1"
 crossbeam-channel = "0.5"
+rayon = "1.10"
 rfd = "0.15"
+discord-rich-presence = "0.2"
 
 # Image processing for cover art cache
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
-# Async runtime & Logging
-tokio = { version = "1.40", features = ["full"] }
+# Async runtime & Logging (only the features actually used:
+# interval ticker, broadcast channel, spawn_blocking)
+tokio = { version = "1.40", features = ["rt", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tempfile = "3.10"
+
+# Keep decoding and DSP fast enough for realtime playback during `tauri dev`.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-autostart = "2.5.1"

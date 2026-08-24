@@ -23,6 +23,7 @@ pub mod dsp;
 pub mod dto;
 pub mod error;
 pub mod gapless;
+pub mod pipeline;
 pub mod player;
 pub mod queue;
 

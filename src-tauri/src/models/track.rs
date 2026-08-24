@@ -16,6 +16,8 @@ pub struct Track {
     pub bitrate: Option<u32>,
     pub sample_rate: Option<u32>,
     pub channels: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bit_depth: Option<u8>,
     pub format: String,
     pub file_size: u64,
     pub file_modified_at: String,

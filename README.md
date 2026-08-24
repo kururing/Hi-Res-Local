@@ -67,6 +67,17 @@ Or run frontend standalone in browser for UI rapid prototyping:
 npm run dev
 ```
 
+### Discord Rich Presence
+
+The app includes its public Discord Application ID. To override it for another Discord application, expose a different ID while developing or building:
+
+```powershell
+$env:NGHENHAC_DISCORD_CLIENT_ID = "your-discord-application-id"
+npm run tauri:dev
+```
+
+The **Show activity on Discord** switch is available under Desktop App Behavior. Discord must be running when the switch is enabled.
+
 ### Verification & Testing
 
 ```bash

@@ -8,6 +8,7 @@ export interface Track {
   artist: string;
   album: string;
   duration: number; // in seconds
+  duration_ms?: number; // backend transport value
   path: string;
   track_number?: number | null;
   disc_number?: number | null;
@@ -18,12 +19,14 @@ export interface Track {
   channels?: number | null;
   date_added: string; // ISO timestamp
   is_favorite?: boolean;
-  rating?: number; // 0 to 5 stars
   play_count?: number;
   last_played?: string | null;
   lyrics?: string | null; // Raw LRC or plain text
   format?: string; // 'FLAC' | 'MP3' | 'WAV' | 'AAC' | 'OGG' | 'ALAC' | 'OPUS'
   bits_per_sample?: number; // 16, 24, 32
+  bit_depth?: number | null;
+  cover_art_path?: string | null;
+  last_played_at?: string | null;
 }
 
 export interface Album {

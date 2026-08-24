@@ -1,7 +1,7 @@
 import React from 'react';
 import { History as HistoryIcon, Play, Trash2, Clock } from 'lucide-react';
-import { Storage, HistoryItem } from '../../services/storage';
-import { useLibrary } from '../../context/LibraryContext';
+import { IpcService } from '../../services/ipc';
+import { PlayHistoryEntry } from '../../types/ipc';
 import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
 import { Badge } from '../common/Badge';
@@ -13,13 +13,24 @@ interface HistoryViewProps {
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = () => {
-  const [historyItems, setHistoryItems] = React.useState<HistoryItem[]>(() => Storage.getHistory());
-  const { getTrackById } = useLibrary();
+  const [historyItems, setHistoryItems] = React.useState<PlayHistoryEntry[]>([]);
   const { playTrack, status } = usePlayer();
   const { settings } = useSettings();
 
-  const clearHistory = () => {
-    localStorage.removeItem('nghenhac_history_v2');
+  const loadHistory = React.useCallback(async () => {
+    const entries = await IpcService.invoke('get_play_history', { limit: 100, offset: 0 });
+    setHistoryItems(entries);
+  }, []);
+
+  React.useEffect(() => {
+    void loadHistory();
+    const handleUpdate = () => void loadHistory();
+    window.addEventListener('nghenhac:history-updated', handleUpdate);
+    return () => window.removeEventListener('nghenhac:history-updated', handleUpdate);
+  }, [loadHistory]);
+
+  const clearHistory = async () => {
+    await IpcService.invoke('clear_play_history');
     setHistoryItems([]);
   };
 
@@ -56,7 +67,7 @@ export const HistoryView: React.FC<HistoryViewProps> = () => {
       ) : (
         <div className="rounded-xl border border-brand-border bg-oled-card/60 overflow-hidden divide-y divide-brand-border/30">
           {historyItems.map((item, idx) => {
-            const track = getTrackById(item.track_id);
+            const track = item.track;
             if (!track) return null;
             const isPlaying = status.current_track?.id === track.id;
 

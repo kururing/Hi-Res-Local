@@ -3,6 +3,7 @@ import { Disc, Play } from 'lucide-react';
 import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
+import { VirtualGrid } from '../common/VirtualGrid';
 import { t } from '../../i18n';
 
 interface AlbumsViewProps {
@@ -30,16 +31,21 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({ onNavigate }) => {
       {albums.length === 0 ? (
         <div className="p-12 text-center text-brand-muted">No albums found in library.</div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5">
-          {albums.map(album => (
+        <VirtualGrid
+          items={albums}
+          minColumnWidth={170}
+          gap={20}
+          getRowHeight={colWidth => colWidth + 66}
+          className="max-h-[75vh]"
+          getKey={album => album.id}
+          renderItem={album => (
             <div
-              key={album.id}
               onClick={() => onNavigate('album_detail', album)}
               className="group p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col shadow-card-elevated"
             >
               {/* Artwork Box */}
-              <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-indigo-950 to-slate-900 border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
-                <Disc className="w-16 h-16 text-indigo-400/40 group-hover:rotate-90 transition-transform duration-700" aria-hidden="true" />
+              <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
+                <Disc className="w-16 h-16 text-brand-accent/40 group-hover:rotate-90 transition-transform duration-700" aria-hidden="true" />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <button
                     onClick={e => {
@@ -61,12 +67,12 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({ onNavigate }) => {
               <span className="text-xs text-brand-muted truncate mt-0.5 font-medium">
                 {album.artist}
               </span>
-              <span className="text-[10px] text-indigo-300 font-mono mt-1">
+              <span className="text-[10px] text-brand-muted font-mono mt-1">
                 {album.track_count} tracks {album.year ? `• ${album.year}` : ''}
               </span>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
     </div>
   );
