@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { AppSettings, DEFAULT_SETTINGS, AppLanguage, AppTheme } from '../types/settings';
+import { AppSettings, DEFAULT_SETTINGS, AppLanguage, AppTheme, isWasapiExclusiveMode, withWasapiExclusiveMode } from '../types/settings';
 import { Storage } from '../services/storage';
 import { IpcService, isTauri } from '../services/ipc';
 import { EqualizerPreset } from '../types/audio';
@@ -116,11 +116,83 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       ? settings.eq_custom_gains
       : (allPresets.find(p => p.id === settings.eq_preset_id)?.gains || DEFAULT_SETTINGS.eq_custom_gains);
 
-    IpcService.invoke('set_equalizer', {
+    void IpcService.invoke('set_equalizer', {
       enabled: settings.eq_enabled,
       gains: activeGains,
-    });
+    }).catch(error => console.error('Failed to apply equalizer settings', error));
   }, [settings.eq_enabled, settings.eq_preset_id, settings.eq_custom_gains]);
+
+  // Restore persisted audio mode: device → Exclusive → Bit-Perfect.
+  useEffect(() => {
+    if (!isTauri()) return;
+    void (async () => {
+      try {
+        await IpcService.invoke('set_audio_output_device', {
+          device_id: settings.output_device || 'default',
+        });
+
+        const wantExclusive = isWasapiExclusiveMode(settings);
+        if (wantExclusive) {
+          try {
+            await IpcService.invoke('set_exclusive_mode', { enabled: true });
+            await IpcService.invoke('set_bit_perfect', { enabled: true });
+          } catch (error) {
+            console.error('Failed to restore WASAPI Exclusive', error);
+            try {
+              await IpcService.invoke('set_exclusive_mode', { enabled: false });
+            } catch (rollbackError) {
+              console.error('Failed to roll back WASAPI Exclusive restore', rollbackError);
+            }
+            updateSettings(withWasapiExclusiveMode(false));
+            return;
+          }
+        } else {
+          await IpcService.invoke('set_bit_perfect', { enabled: false });
+          await IpcService.invoke('set_exclusive_mode', { enabled: false });
+        }
+
+        await IpcService.invoke('set_crossfade', {
+          duration_secs: settings.crossfade_duration,
+        });
+        await IpcService.invoke('set_replay_gain', {
+          mode: settings.replay_gain_mode,
+          preamp_db: settings.replay_gain_preamp,
+          prevent_clipping: true,
+        });
+      } catch (error) {
+        console.error('Failed to restore native audio mode', error);
+        updateSettings(withWasapiExclusiveMode(false));
+      }
+    })();
+    // Restore once from the initial persisted settings.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep the persisted Exclusive switch aligned with the live engine.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void IpcService.listen('audio://exclusive_mode', payload => {
+      if (disposed) return;
+      if (!payload.enabled) {
+        updateSettings(withWasapiExclusiveMode(false));
+      }
+    }).then(dispose => {
+      if (disposed) {
+        dispose();
+        return;
+      }
+      unlisten = dispose;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const allPresets = [...DEFAULT_EQ_PRESETS, ...customEqPresets];
 

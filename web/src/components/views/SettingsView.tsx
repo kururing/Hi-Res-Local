@@ -19,13 +19,12 @@ import { useLibrary } from '../../context/LibraryContext';
 import { usePlaybackProgress, usePlayer } from '../../context/PlayerContext';
 import { useToast } from '../../context/ToastContext';
 import { Button } from '../common/Button';
-import { Slider } from '../common/Slider';
 import { Storage } from '../../services/storage';
 import { IpcService, isTauri } from '../../services/ipc';
 import { AudioCapabilities, AudioOutputDevice } from '../../types/audio';
 import { t } from '../../i18n';
 import { applyImageThemeAccent, createImageTheme } from '../../services/imageTheme';
-import { AppSettings, AppTheme } from '../../types/settings';
+import { AppSettings, AppTheme, isWasapiExclusiveMode, withWasapiExclusiveMode } from '../../types/settings';
 import { APP_FONT_OPTIONS } from '../../services/fonts';
 
 interface SettingsSwitchProps {
@@ -219,7 +218,7 @@ export const SettingsView: React.FC = () => {
   } = useSettings();
 
   const { scanDirectory, scanProgress } = useLibrary();
-  const { status, setIsEqualizerOpen } = usePlayer();
+  const { status, setIsEqualizerOpen, engineStatus } = usePlayer();
   const playbackProgress = usePlaybackProgress();
   const { showToast } = useToast();
 
@@ -278,13 +277,51 @@ export const SettingsView: React.FC = () => {
   };
 
   useEffect(() => {
-    (async () => {
-      const devices = await IpcService.invoke('get_audio_output_devices');
-      if (devices) setOutputDevices(devices);
-      const capabilities = await IpcService.invoke('get_audio_capabilities');
-      if (capabilities) setAudioCapabilities(capabilities);
+    void (async () => {
+      try {
+        const devices = await IpcService.invoke('get_audio_output_devices');
+        const withDefault =
+          devices.some(d => d.id === 'default')
+            ? devices
+            : [
+                {
+                  id: 'default',
+                  name: t('settings_output_device_default', settings.language),
+                  is_default: true,
+                  sample_rates: [44100, 48000],
+                },
+                ...devices,
+              ];
+
+        // Localize the backend "System default" sentinel label.
+        const localized = withDefault.map(d =>
+          d.id === 'default'
+            ? { ...d, name: t('settings_output_device_default', settings.language) }
+            : d
+        );
+        setOutputDevices(localized);
+
+        // Migrate legacy friendly-name settings / stale ids onto a real option.
+        const current = settings.output_device;
+        const byId = localized.find(d => d.id === current);
+        if (!byId && current && current !== 'default') {
+          const byName = localized.find(d => d.name === current);
+          if (byName) {
+            updateSettings({ output_device: byName.id });
+          } else {
+            updateSettings({ output_device: 'default' });
+          }
+        }
+
+        const capabilities = await IpcService.invoke('get_audio_capabilities');
+        setAudioCapabilities(capabilities);
+      } catch (error) {
+        console.error('Failed to load audio devices', error);
+        showToast(t('toast_audio_setting_failed', settings.language), 'error');
+      }
     })();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.language, showToast]);
 
   const applyAudioSetting = async (
     action: () => Promise<void>,
@@ -319,10 +356,66 @@ export const SettingsView: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (audioCapabilities?.exclusive_mode_supported === false && settings.bit_perfect) {
-      updateSettings({ bit_perfect: false });
+    if (
+      audioCapabilities?.exclusive_mode_supported === false &&
+      isWasapiExclusiveMode(settings)
+    ) {
+      void (async () => {
+        try {
+          await IpcService.invoke('set_bit_perfect', { enabled: false });
+          await IpcService.invoke('set_exclusive_mode', { enabled: false });
+        } catch (error) {
+          console.error('Failed to clear unsupported WASAPI Exclusive setting', error);
+        } finally {
+          updateSettings(withWasapiExclusiveMode(false));
+        }
+      })();
     }
-  }, [audioCapabilities?.exclusive_mode_supported, settings.bit_perfect, updateSettings]);
+  }, [
+    audioCapabilities?.exclusive_mode_supported,
+    settings.bit_perfect,
+    settings.wasapi_exclusive,
+    updateSettings,
+  ]);
+
+  const wasapiExclusiveChecked =
+    engineStatus && engineStatus.output_mode
+      ? /exclusive/i.test(engineStatus.output_mode) && engineStatus.bit_perfect
+      : isWasapiExclusiveMode(settings);
+
+  // Keep persisted flags aligned with the live engine when status is available.
+  useEffect(() => {
+    if (!engineStatus?.output_mode) return;
+    const liveOn = /exclusive/i.test(engineStatus.output_mode) && engineStatus.bit_perfect;
+    if (liveOn !== isWasapiExclusiveMode(settings)) {
+      updateSettings(withWasapiExclusiveMode(liveOn));
+    }
+  }, [engineStatus, settings, updateSettings]);
+
+  const handleWasapiExclusiveChange = (enabled: boolean) => {
+    void applyAudioSetting(
+      async () => {
+        if (enabled) {
+          try {
+            await IpcService.invoke('set_exclusive_mode', { enabled: true });
+            await IpcService.invoke('set_bit_perfect', { enabled: true });
+          } catch (error) {
+            try {
+              await IpcService.invoke('set_bit_perfect', { enabled: false });
+              await IpcService.invoke('set_exclusive_mode', { enabled: false });
+            } catch (rollbackError) {
+              console.error('Failed to roll back WASAPI Exclusive enable', rollbackError);
+            }
+            throw error;
+          }
+        } else {
+          await IpcService.invoke('set_bit_perfect', { enabled: false });
+          await IpcService.invoke('set_exclusive_mode', { enabled: false });
+        }
+      },
+      withWasapiExclusiveMode(enabled)
+    );
+  };
 
   const handleStartupChange = async (enabled: boolean) => {
     if (!isTauri()) {
@@ -504,8 +597,12 @@ export const SettingsView: React.FC = () => {
             {t('settings_output_device', settings.language)}
           </label>
           <select
-            value={settings.output_device}
-            disabled={isUpdatingAudio}
+            value={
+              outputDevices.some(d => d.id === settings.output_device)
+                ? settings.output_device
+                : 'default'
+            }
+            disabled={isUpdatingAudio || outputDevices.length === 0}
             onChange={e => {
               const deviceId = e.target.value;
               void applyAudioSetting(
@@ -517,124 +614,46 @@ export const SettingsView: React.FC = () => {
           >
             {outputDevices.map(d => (
               <option key={d.id} value={d.id}>
-                {d.name}
+                {d.id === 'default'
+                  ? t('settings_output_device_default', settings.language)
+                  : d.is_default
+                    ? `${d.name} (${t('settings_output_device_default_badge', settings.language)})`
+                    : d.name}
               </option>
             ))}
           </select>
         </div>
 
-        {/* Bit Perfect Toggle */}
+        {/* WASAPI Exclusive */}
         <div className="p-4 rounded-xl bg-oled-base/60 border border-brand-border space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-amber-400" />
-              <span className="text-sm font-semibold text-brand-foreground">
-                {t('settings_bit_perfect', settings.language)}
-              </span>
-            </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={settings.bit_perfect}
-                disabled={isUpdatingAudio || audioCapabilities?.exclusive_mode_supported === false}
-                onChange={e => {
-                  const enabled = e.target.checked;
-                  void applyAudioSetting(
-                    () => IpcService.invoke('set_bit_perfect', { enabled }),
-                    { bit_perfect: enabled }
-                  );
-                }}
-                className="sr-only peer"
-              />
-              <div className="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-400"></div>
-            </label>
+          <div className="flex items-center gap-2 border-b border-brand-border/60 pb-2">
+            <Sparkles className="w-4 h-4 text-amber-400" aria-hidden="true" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-brand-muted">
+              Windows Audio
+            </span>
           </div>
-          <p className="text-xs text-brand-muted leading-relaxed">
-            {t('settings_bit_perfect_desc', settings.language)}
+          <p className="text-xs text-brand-muted px-0.5">
+            {t('settings_output_mode', settings.language)}:{' '}
+            <span className="font-semibold text-brand-foreground">
+              {engineStatus?.output_mode ||
+                (isWasapiExclusiveMode(settings)
+                  ? t('settings_output_mode_exclusive', settings.language)
+                  : t('settings_output_mode_shared', settings.language))}
+            </span>
           </p>
+          <SettingsSwitch
+            checked={wasapiExclusiveChecked}
+            disabled={isUpdatingAudio || audioCapabilities?.exclusive_mode_supported === false}
+            loading={isUpdatingAudio}
+            label={t('settings_bit_perfect_wasapi', settings.language)}
+            description={t('settings_bit_perfect_wasapi_desc', settings.language)}
+            onChange={handleWasapiExclusiveChange}
+          />
           {audioCapabilities?.exclusive_mode_supported === false && (
             <p className="text-xs font-medium text-amber-500">
               {t('settings_bit_perfect_unavailable', settings.language)}
             </p>
           )}
-        </div>
-
-        {/* Crossfade */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold text-brand-muted uppercase tracking-wider">
-              {t('settings_crossfade', settings.language)}
-            </span>
-            <span className="font-mono text-brand-accent font-bold">
-              {settings.crossfade_duration}s
-            </span>
-          </div>
-          <Slider
-            value={settings.crossfade_duration}
-            min={0}
-            max={12}
-            step={1}
-            onChange={val => void applyAudioSetting(
-              () => IpcService.invoke('set_crossfade', { duration_secs: val }),
-              { crossfade_duration: val }
-            )}
-            ariaLabel="Crossfade duration"
-          />
-        </div>
-
-        {/* ReplayGain */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-          <div className="flex flex-col gap-2">
-            <label className="text-xs font-semibold text-brand-muted uppercase tracking-wider">
-              {t('settings_replay_gain', settings.language)}
-            </label>
-            <select
-              value={settings.replay_gain_mode}
-              disabled={isUpdatingAudio}
-              onChange={e => {
-                const mode = e.target.value as 'off' | 'track' | 'album';
-                void applyAudioSetting(
-                  () => IpcService.invoke('set_replay_gain', {
-                    mode,
-                    preamp_db: settings.replay_gain_preamp,
-                    prevent_clipping: true,
-                  }),
-                  { replay_gain_mode: mode }
-                );
-              }}
-              className="bg-oled-base border border-brand-border rounded-xl px-3.5 py-2 text-xs text-brand-foreground"
-            >
-              <option value="off">Off (Disabled)</option>
-              <option value="track">Track Gain (Per-song normalization)</option>
-              <option value="album">Album Gain (Preserves album dynamics)</option>
-            </select>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-brand-muted uppercase tracking-wider">
-                {t('settings_replay_gain_preamp', settings.language)}
-              </span>
-              <span className="font-mono text-brand-accent font-bold">
-                {settings.replay_gain_preamp > 0 ? `+${settings.replay_gain_preamp}` : settings.replay_gain_preamp}dB
-              </span>
-            </div>
-            <Slider
-              value={settings.replay_gain_preamp}
-              min={-12}
-              max={12}
-              step={0.5}
-              onChange={val => void applyAudioSetting(
-                () => IpcService.invoke('set_replay_gain', {
-                  mode: settings.replay_gain_mode,
-                  preamp_db: val,
-                  prevent_clipping: true,
-                }),
-                { replay_gain_preamp: val }
-              )}
-              ariaLabel="ReplayGain Preamp"
-            />
-          </div>
         </div>
 
         {/* Equalizer Shortcut Button */}

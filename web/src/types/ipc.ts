@@ -1,5 +1,5 @@
 import { Track, LibraryStats, ScanProgress } from './library';
-import { PlaybackStatus, LoopMode, AudioCapabilities, AudioOutputDevice } from './audio';
+import { PlaybackStatus, LoopMode, AudioCapabilities, AudioOutputDevice, EngineStatus, SystemAudioState } from './audio';
 import { LyricData } from './lyrics';
 
 /** Playlist row as stored/returned by the Rust backend. */
@@ -87,6 +87,7 @@ export interface IpcCommands {
   'set_volume': { args: { volume: number }; return: void };
   'set_muted': { args: { muted: boolean }; return: void };
   'toggle_mute': { args: Record<string, never>; return: boolean };
+  'get_system_audio_state': { args: Record<string, never>; return: SystemAudioState };
   'set_loop_mode': { args: { mode: LoopMode }; return: void };
   'set_shuffle': { args: { shuffle: boolean }; return: void };
   'get_playback_status': { args: Record<string, never>; return: PlaybackStatus };
@@ -120,6 +121,7 @@ export interface IpcCommands {
   'get_audio_output_devices': { args: Record<string, never>; return: AudioOutputDevice[] };
   'get_audio_capabilities': { args: Record<string, never>; return: AudioCapabilities };
   'set_audio_output_device': { args: { device_id: string }; return: void };
+  'set_exclusive_mode': { args: { enabled: boolean }; return: void };
   'set_bit_perfect': { args: { enabled: boolean }; return: void };
   'set_equalizer': { args: { enabled: boolean; gains: number[] }; return: void };
   'set_crossfade': { args: { duration_secs: number }; return: void };
@@ -137,11 +139,28 @@ export interface IpcCommands {
  */
 export interface IpcEvents {
   'audio://position': { position_secs: number; duration_secs?: number };
+  'audio://volume_changed': SystemAudioState;
   'audio://state_changed': { state: string };
   'audio://track_changed': Track | null;
   'audio://track_ended': Record<string, never>;
   'audio://error': { message: string };
   'audio://underrun': { count: number; missing_samples: number };
+  'audio://engine_status': EngineStatus;
+  'audio://exclusive_mode': {
+    enabled: boolean;
+    output_mode: string;
+    error?: string | null;
+  };
+  'audio://quality_updated': {
+    sample_rate: number;
+    channels: number;
+    bit_depth?: number | null;
+    bitrate_kbps?: number | null;
+    codec_name: string;
+    container_format: string;
+    is_lossless: boolean;
+    is_hi_res: boolean;
+  } | null;
   'library://scan_progress': ScanProgress;
   'library://scan_finished': { total: number; success: boolean };
 }

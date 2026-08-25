@@ -347,8 +347,10 @@ mod tests {
 
     #[test]
     fn test_equalizer_processor() {
-        let mut config = EqConfig::default();
-        config.enabled = true;
+        let mut config = EqConfig {
+            enabled: true,
+            ..EqConfig::default()
+        };
         config.apply_preset(EqPreset::BassBoost);
 
         let mut eq = EqualizerProcessor::new(44100, 2, &config);

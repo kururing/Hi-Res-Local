@@ -40,7 +40,7 @@ impl OutputDeviceManager {
             if let Ok(name) = dev.name() {
                 let is_default = default_device_name.as_deref() == Some(&name);
                 let is_current = match &self.selected_device_name {
-                    Some(cur) => cur == &name,
+                    Some(cur) => names_match(cur, &name),
                     None => is_default,
                 };
 
@@ -83,23 +83,33 @@ impl OutputDeviceManager {
     }
 
     pub fn select_device(&mut self, device_name: Option<String>) {
-        self.selected_device_name = device_name;
+        self.selected_device_name = match device_name {
+            Some(name) if name.is_empty() || name.eq_ignore_ascii_case("default") => None,
+            other => other,
+        };
     }
 
+    pub fn selected_device_name(&self) -> Option<&str> {
+        self.selected_device_name.as_deref()
+    }
+
+    /// Resolve the selected CPAL device.
+    ///
+    /// When a specific device is selected and cannot be found, returns an error
+    /// instead of silently falling back to the system default.
     pub fn get_active_device(&self) -> AudioResult<Device> {
         if let Some(ref name) = self.selected_device_name {
-            let devices = self
-                .host
-                .output_devices()
-                .map_err(|e| AudioError::DeviceUnavailable(e.to_string()))?;
-
-            for dev in devices {
-                if let Ok(dev_name) = dev.name() {
-                    if dev_name == *name {
-                        return Ok(dev);
-                    }
-                }
+            if let Some(device) = self.find_device_by_name(name)? {
+                tracing::info!(
+                    target: "audio",
+                    device = %name,
+                    "CPAL Shared using selected output device"
+                );
+                return Ok(device);
             }
+            return Err(AudioError::DeviceUnavailable(format!(
+                "Output device not found in CPAL host: {name}"
+            )));
         }
 
         self.host.default_output_device().ok_or_else(|| {
@@ -107,11 +117,43 @@ impl OutputDeviceManager {
         })
     }
 
+    fn find_device_by_name(&self, wanted: &str) -> AudioResult<Option<Device>> {
+        let devices = self
+            .host
+            .output_devices()
+            .map_err(|e| AudioError::DeviceUnavailable(e.to_string()))?;
+
+        let mut fallback: Option<Device> = None;
+        for dev in devices {
+            let Ok(dev_name) = dev.name() else {
+                continue;
+            };
+            if names_match(&dev_name, wanted) {
+                return Ok(Some(dev));
+            }
+            // Soft match: CPAL name contains WASAPI name or vice versa.
+            if fallback.is_none() && names_soft_match(&dev_name, wanted) {
+                fallback = Some(dev);
+            }
+        }
+        Ok(fallback)
+    }
+
     pub fn get_best_output_config(device: &Device) -> AudioResult<SupportedStreamConfig> {
         device
             .default_output_config()
             .map_err(|e| AudioError::StreamInitialization(e.to_string()))
     }
+}
+
+fn names_match(a: &str, b: &str) -> bool {
+    a.trim() == b.trim() || a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+fn names_soft_match(a: &str, b: &str) -> bool {
+    let a = a.trim().to_lowercase();
+    let b = b.trim().to_lowercase();
+    !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a))
 }
 
 /// Sample format conversion helpers
@@ -149,5 +191,20 @@ mod tests {
         assert_eq!(convert_f32_to_u16(0.0), 32767);
         assert_eq!(convert_f32_to_u16(1.0), 65535);
         assert_eq!(convert_f32_to_u16(-1.0), 0);
+    }
+
+    #[test]
+    fn names_match_trims_and_ignores_case() {
+        assert!(names_match(" Speakers ", "speakers"));
+        assert!(!names_match("A", "B"));
+    }
+
+    #[test]
+    fn select_default_clears_pinned_device() {
+        let mut mgr = OutputDeviceManager::new();
+        mgr.select_device(Some("Speakers".into()));
+        assert_eq!(mgr.selected_device_name(), Some("Speakers"));
+        mgr.select_device(Some("default".into()));
+        assert_eq!(mgr.selected_device_name(), None);
     }
 }

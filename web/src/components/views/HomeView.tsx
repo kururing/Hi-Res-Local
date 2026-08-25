@@ -16,6 +16,7 @@ import { useSettings } from '../../context/SettingsContext';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { t } from '../../i18n';
+import { activateOnKeyboard } from '../../services/keyboard';
 
 function formatDurationSecs(totalSecs: number): string {
   const hours = Math.floor(totalSecs / 3600);
@@ -198,7 +199,11 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
             <div
               key={tr.id}
               onClick={() => playTrack(tr, recentlyAdded)}
-              className="group p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex items-center justify-between gap-3"
+              onKeyDown={event => activateOnKeyboard(event, () => void playTrack(tr, recentlyAdded))}
+              role="button"
+              tabIndex={0}
+              aria-label={`Play ${tr.title} by ${tr.artist}`}
+              className="group p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex items-center justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
             >
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-11 h-11 rounded-lg bg-brand-primary/90 border border-brand-border flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
@@ -236,18 +241,25 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           {albums.slice(0, 6).map(al => (
             <div
               key={al.id}
-              onClick={() => onNavigate('album_detail', al)}
-              className="group p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col"
+              className="group relative p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col"
             >
+              <button
+                type="button"
+                onClick={() => onNavigate('album_detail', al)}
+                aria-label={`Open album ${al.name} by ${al.artist}`}
+                className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+              />
               <div className="relative aspect-square rounded-lg bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-2.5 flex items-center justify-center overflow-hidden">
                 <Disc className="w-12 h-12 text-brand-accent/40 group-hover:rotate-45 transition-transform duration-500" />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <button
+                    type="button"
                     onClick={e => {
                       e.stopPropagation();
                       if (al.tracks.length > 0) playQueue(al.tracks, 0);
                     }}
-                    className="w-10 h-10 rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-110 active:scale-95 transition-all"
+                    className="relative z-20 w-10 h-10 rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-110 active:scale-95 transition-all"
+                    aria-label={`Play album ${al.name}`}
                   >
                     <Play className="w-4 h-4 fill-current ml-0.5" />
                   </button>
@@ -283,7 +295,11 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
               <div
                 key={pl.id}
                 onClick={() => onNavigate('playlist_detail', pl)}
-                className="p-4 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col justify-between h-32"
+                onKeyDown={event => activateOnKeyboard(event, () => onNavigate('playlist_detail', pl))}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open playlist ${pl.name}`}
+                className="p-4 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col justify-between h-32 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               >
                 <div>
                   <div className="flex items-center justify-between mb-1">

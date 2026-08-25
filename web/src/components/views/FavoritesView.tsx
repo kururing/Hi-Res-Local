@@ -8,6 +8,7 @@ import { Badge } from '../common/Badge';
 import { VirtualList } from '../common/VirtualList';
 import { Track } from '../../types/library';
 import { t } from '../../i18n';
+import { activateOnKeyboard } from '../../services/keyboard';
 
 type FavTab = 'tracks' | 'albums' | 'artists';
 
@@ -182,7 +183,11 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
               <div
                 key={al.id}
                 onClick={() => onNavigate('album_detail', al)}
-                className="group p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col"
+                onKeyDown={event => activateOnKeyboard(event, () => onNavigate('album_detail', al))}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open album ${al.name} by ${al.artist}`}
+                className="group p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               >
                 <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
                   <Disc className="w-14 h-14 text-brand-accent/40" />
@@ -208,7 +213,11 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
               <div
                 key={ar.id}
                 onClick={() => onNavigate('artist_detail', ar)}
-                className="group p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center"
+                onKeyDown={event => activateOnKeyboard(event, () => onNavigate('artist_detail', ar))}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open artist ${ar.name}`}
+                className="group p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               >
                 <div className="relative w-24 h-24 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border mb-3 flex items-center justify-center">
                   <User className="w-10 h-10 text-brand-accent/60" />

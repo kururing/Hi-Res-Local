@@ -111,10 +111,8 @@ impl PlaybackQueue {
         self.planned_next = None;
         match self.current_index {
             Some(idx) => {
-                let mut insert_pos = idx + 1;
-                for track in tracks {
+                for (insert_pos, track) in (idx + 1..).zip(tracks) {
                     self.tracks.insert(insert_pos, track);
-                    insert_pos += 1;
                 }
             }
             None => {
@@ -163,10 +161,8 @@ impl PlaybackQueue {
         } else if let Some(curr) = self.current_index {
             if index < curr {
                 self.current_index = Some(curr - 1);
-            } else if index == curr {
-                if curr >= self.tracks.len() {
-                    self.current_index = Some(self.tracks.len() - 1);
-                }
+            } else if index == curr && curr >= self.tracks.len() {
+                self.current_index = Some(self.tracks.len() - 1);
             }
         }
 
@@ -245,6 +241,7 @@ impl PlaybackQueue {
         Ok(self.current_track())
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<&AudioTrack> {
         if self.tracks.is_empty() {
             return None;
@@ -655,7 +652,7 @@ mod tests {
         queue.set_shuffle_enabled(true);
         queue.set_current_index(0).unwrap();
 
-        let mut picked_counts = vec![0; 10];
+        let mut picked_counts = [0; 10];
         let weights = queue.calculate_recency_weights();
         assert!(
             weights[0] < 0.01,

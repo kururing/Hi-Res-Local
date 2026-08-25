@@ -1,4 +1,4 @@
-import { AppSettings, DEFAULT_SETTINGS } from '../types/settings';
+import { AppSettings, DEFAULT_SETTINGS, normalizeWasapiExclusiveSettings } from '../types/settings';
 import { Playlist } from '../types/playlist';
 import { EqualizerPreset } from '../types/audio';
 import { LyricsMode } from '../types/lyrics';
@@ -30,7 +30,7 @@ export const Storage = {
       const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       if (!data) return DEFAULT_SETTINGS;
       const parsed = JSON.parse(data) as Partial<AppSettings>;
-      const settings = { ...DEFAULT_SETTINGS, ...parsed };
+      const settings = normalizeWasapiExclusiveSettings({ ...DEFAULT_SETTINGS, ...parsed });
       if (settings.custom_image_theme && settings.custom_image_themes.length === 0) {
         const migrated = {
           ...settings.custom_image_theme,

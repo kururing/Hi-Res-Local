@@ -327,34 +327,42 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
           {/* Table Header */}
           <div className="tracks-table-grid grid gap-3 px-4 py-3.5 bg-oled-card border-b border-brand-border text-xs font-bold text-brand-muted uppercase tracking-wider items-center whitespace-nowrap">
             <div className="text-center">#</div>
-            <div
-              className="flex items-center gap-1.5 cursor-pointer hover:text-brand-foreground"
+            <button
+              type="button"
+              className="flex items-center gap-1.5 cursor-pointer text-left hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               onClick={() => handleSort('title')}
+              aria-label="Sort tracks by title"
             >
               <span>{t('col_title', settings.language)}</span>
               <ArrowUpDown className="w-3 h-3" />
-            </div>
-            <div
-              className="hidden sm:block cursor-pointer hover:text-brand-foreground"
+            </button>
+            <button
+              type="button"
+              className="hidden sm:block cursor-pointer text-left hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               onClick={() => handleSort('artist')}
+              aria-label="Sort tracks by artist"
             >
               <span>{t('col_artist', settings.language)}</span>
-            </div>
-            <div
-              className="hidden md:block cursor-pointer hover:text-brand-foreground"
+            </button>
+            <button
+              type="button"
+              className="hidden md:block cursor-pointer text-left hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               onClick={() => handleSort('album')}
+              aria-label="Sort tracks by album"
             >
               <span>{t('col_album', settings.language)}</span>
-            </div>
+            </button>
             <div className="hidden min-[1180px]:block">
               <span>{t('col_quality', settings.language)}</span>
             </div>
-            <div
-              className="grid grid-cols-[44px_minmax(44px,auto)_44px] items-center cursor-pointer hover:text-brand-foreground"
+            <button
+              type="button"
+              className="grid grid-cols-[44px_minmax(44px,auto)_44px] items-center cursor-pointer hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               onClick={() => handleSort('duration')}
+              aria-label="Sort tracks by duration"
             >
               <span className="col-start-2 text-center">{t('col_duration', settings.language)}</span>
-            </div>
+            </button>
           </div>
 
           {/* Table Rows */}

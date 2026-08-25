@@ -177,6 +177,21 @@ impl PreloadedTrack {
         })
     }
 
+    /// Open without f32 predecode — used for bit-perfect exclusive output.
+    pub fn open_bit_perfect(track: AudioTrack) -> AudioResult<Self> {
+        let decoder = AudioDecoder::open(&track.path)?;
+        Ok(Self {
+            track,
+            decoder,
+            predecoded_samples: Vec::new(),
+            is_eof: false,
+        })
+    }
+
+    pub fn source_format(&self) -> crate::audio::pcm::AudioFormat {
+        self.decoder.source_format()
+    }
+
     pub fn sample_rate(&self) -> u32 {
         self.decoder.sample_rate()
     }
@@ -355,6 +370,75 @@ impl GaplessController {
             .as_ref()
             .map(|source| source.decoder.duration_ms())
             .unwrap_or(0)
+    }
+
+    pub fn current_source_format(&self) -> Option<crate::audio::pcm::AudioFormat> {
+        self.current_source
+            .as_ref()
+            .map(|s| s.decoder.source_format())
+    }
+
+    pub fn set_decoder_output_format(
+        &mut self,
+        target: Option<crate::audio::pcm::AudioFormat>,
+    ) -> AudioResult<()> {
+        if let Some(ref mut source) = self.current_source {
+            source.decoder.set_output_format(target)?;
+        }
+        Ok(())
+    }
+
+    pub fn configure_bit_perfect_wire(
+        &mut self,
+        target: crate::audio::pcm::AudioFormat,
+        packed_s24: bool,
+        container_bytes: usize,
+    ) -> AudioResult<()> {
+        if let Some(ref mut source) = self.current_source {
+            source
+                .decoder
+                .configure_bit_perfect_wire(target, packed_s24, container_bytes)?;
+        }
+        Ok(())
+    }
+
+    /// Bit-perfect byte pull (no DSP / crossfade / channel remix).
+    ///
+    /// If `scratch` already holds unpushed bytes, they are retained and no new
+    /// packet is decoded until the caller consumes them.
+    pub fn read_pcm_bytes(
+        &mut self,
+        scratch: &mut Vec<u8>,
+    ) -> AudioResult<(usize, Option<PcmTransition>, bool)> {
+        if !scratch.is_empty() {
+            return Ok((scratch.len(), None, false));
+        }
+
+        let Some(ref mut source) = self.current_source else {
+            return Ok((0, None, true));
+        };
+
+        if source.is_eof {
+            return Ok((0, None, true));
+        }
+
+        match source.decoder.decode_next_bytes()? {
+            Some(bytes) => {
+                scratch.extend_from_slice(bytes);
+                let n = scratch.len();
+                let bpf = source.decoder.source_format().bytes_per_frame().max(1);
+                let frames = n / bpf;
+                self.samples_played = self
+                    .samples_played
+                    .saturating_add((frames as u64).saturating_mul(self.output_channels as u64));
+                Ok((n, None, false))
+            }
+            None => {
+                source.is_eof = true;
+                // Keep current_source so the decode loop can drain the PCM ring.
+                Ok((0, None, true))
+            }
+        }
     }
 
     pub fn seek(&mut self, target_ms: u64) -> AudioResult<u64> {
@@ -593,7 +677,7 @@ impl GaplessController {
                             self.current_source = Some(next);
                             self.update_resampler();
                         } else {
-                            self.current_source = None;
+                            // Keep current_source so the pipeline can drain the ring.
                             is_eof = true;
                             break;
                         }

@@ -167,9 +167,37 @@ pub fn run() {
                             );
                         }
                         AudioEvent::QualityUpdated(badge) => {
+                            player.apply_quality_badge(badge.clone());
                             let _ = app_handle.emit("audio://quality_updated", &badge);
                         }
+                        AudioEvent::EngineStatusUpdated(status) => {
+                            player.apply_engine_status(status.clone());
+                            let _ = app_handle.emit("audio://engine_status", &status);
+                        }
+                        AudioEvent::ExclusiveModeChanged {
+                            enabled,
+                            output_mode,
+                            error,
+                        } => {
+                            if !enabled {
+                                // Keep player flags aligned when Exclusive drops at runtime.
+                                if player.exclusive_mode() {
+                                    player.force_disable_exclusive(error.clone());
+                                }
+                            }
+                            let _ = app_handle.emit(
+                                "audio://exclusive_mode",
+                                serde_json::json!({
+                                    "enabled": enabled,
+                                    "output_mode": output_mode,
+                                    "error": error,
+                                }),
+                            );
+                        }
                         AudioEvent::DeviceLost(msg) => {
+                            if player.exclusive_mode() {
+                                player.force_disable_exclusive(Some(msg.clone()));
+                            }
                             let _ = app_handle
                                 .emit("audio://device_lost", serde_json::json!({ "error": msg }));
                         }
@@ -225,10 +253,10 @@ pub fn run() {
             });
 
             // Initialize watcher for active roots if enabled in settings
-            match {
+            let res = {
                 let conn = db.lock();
                 get_app_settings(&conn)
-            } {
+            }; match res {
                 Ok(settings) if settings.watch_directories => {
                     match LibraryWatcher::new(Arc::clone(&db), Some(app.handle().clone())) {
                         Ok(mut watcher) => {
@@ -274,6 +302,7 @@ pub fn run() {
             set_volume,
             set_muted,
             toggle_mute,
+            get_system_audio_state,
             set_loop_mode,
             set_repeat_mode,
             set_shuffle,
@@ -283,6 +312,7 @@ pub fn run() {
             // Hardware & Device
             get_audio_output_devices,
             set_audio_output_device,
+            set_exclusive_mode,
             set_bit_perfect,
             get_audio_capabilities,
             // DSP (EQ, Crossfade, ReplayGain)

@@ -5,6 +5,7 @@ import { useSettings } from '../../context/SettingsContext';
 import { Button } from '../common/Button';
 import { Modal } from '../common/Modal';
 import { t } from '../../i18n';
+import { activateOnKeyboard } from '../../services/keyboard';
 
 interface PlaylistsViewProps {
   onNavigate: (view: string, payload?: unknown) => void;
@@ -82,7 +83,11 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
           <div
             key={pl.id}
             onClick={() => onNavigate('playlist_detail', pl)}
-            className="group p-5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col justify-between h-44 shadow-card-elevated relative overflow-hidden"
+            onKeyDown={event => activateOnKeyboard(event, () => onNavigate('playlist_detail', pl))}
+            role="button"
+            tabIndex={0}
+            aria-label={`Open playlist ${pl.name}`}
+            className="group p-5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col justify-between h-44 shadow-card-elevated relative overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
           >
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -106,7 +111,7 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
                         deletePlaylist(pl.id);
                       }
                     }}
-                    className="p-1 rounded text-brand-muted hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity focus-visible:outline-none"
+                    className="min-h-[44px] min-w-[44px] rounded text-brand-muted hover:text-rose-400 opacity-70 group-hover:opacity-100 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                     aria-label="Delete playlist"
                   >
                     <Trash2 className="w-4 h-4" />

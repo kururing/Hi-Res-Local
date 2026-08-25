@@ -4,6 +4,7 @@ import { useLibrary } from '../../context/LibraryContext';
 import { useSettings } from '../../context/SettingsContext';
 import { VirtualGrid } from '../common/VirtualGrid';
 import { t } from '../../i18n';
+import { activateOnKeyboard } from '../../services/keyboard';
 
 interface ArtistsViewProps {
   onNavigate: (view: string, payload?: unknown) => void;
@@ -39,7 +40,11 @@ export const ArtistsView: React.FC<ArtistsViewProps> = ({ onNavigate }) => {
           renderItem={artist => (
             <div
               onClick={() => onNavigate('artist_detail', artist)}
-              className="group p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center shadow-card-elevated"
+              onKeyDown={event => activateOnKeyboard(event, () => onNavigate('artist_detail', artist))}
+              role="button"
+              tabIndex={0}
+              aria-label={`Open artist ${artist.name}`}
+              className="group p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center shadow-card-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
             >
               {/* Circle Avatar */}
               <div className="relative w-28 h-28 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border-2 border-brand-border/80 mb-3 flex items-center justify-center overflow-hidden group-hover:scale-105 group-hover:border-brand-accent transition-all duration-300 shadow-md">

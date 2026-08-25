@@ -269,6 +269,14 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
       return browserAudioEngine.toggleMute() as IpcCommands[K]['return'];
     }
 
+    case 'get_system_audio_state': {
+      const audio = browserAudioEngine.getStatus();
+      return {
+        volume: audio.volume,
+        is_muted: audio.is_muted,
+      } as IpcCommands[K]['return'];
+    }
+
     case 'set_loop_mode': {
       const mode = (args as { mode: PlaybackStatus['loop_mode'] }).mode;
       browserAudioEngine.setLoopMode(mode);
@@ -300,6 +308,10 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
     }
 
     case 'set_audio_output_device': {
+      return undefined as IpcCommands[K]['return'];
+    }
+
+    case 'set_exclusive_mode': {
       return undefined as IpcCommands[K]['return'];
     }
 
@@ -372,17 +384,8 @@ export const IpcService = {
         const { invoke } = await import('@tauri-apps/api/core');
         return await invoke(command, args as Record<string, unknown>);
       } catch (err) {
-        if (
-          command === 'save_romanized_lyrics' ||
-          command === 'set_discord_presence' ||
-          command === 'set_audio_output_device' ||
-          command === 'set_bit_perfect' ||
-          command === 'set_crossfade' ||
-          command === 'set_replay_gain'
-        ) {
-          throw err;
-        }
-        console.warn(`[Tauri IPC] Command "${command}" failed, falling back to mock:`, err);
+        console.error(`[Tauri IPC] Command "${command}" failed:`, err);
+        throw err;
       }
     }
 
@@ -402,7 +405,8 @@ export const IpcService = {
         const unlisten = await listen(event, (evt: { payload: IpcEvents[K] }) => callback(evt.payload));
         return unlisten;
       } catch (err) {
-        console.warn(`[Tauri IPC] Event "${event}" subscription failed:`, err);
+        console.error(`[Tauri IPC] Event "${event}" subscription failed:`, err);
+        throw err;
       }
     }
 

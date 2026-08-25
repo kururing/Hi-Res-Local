@@ -18,6 +18,12 @@ use crate::audio::dto::{
     ReplayGainConfig,
 };
 use crate::audio::gapless::{GaplessController, PreloadedTrack};
+#[cfg(windows)]
+use crate::audio::pcm::AudioFormat;
+#[cfg(windows)]
+use crate::audio::pcm_convert::f32_to_pcm_bytes;
+#[cfg(windows)]
+use crate::audio::pcm_ring::PcmRingProducer;
 use crate::sync_util::recover_mutex;
 
 /// PCM cushion kept in the lock-free ring (200–500ms band).
@@ -39,6 +45,8 @@ const DECODE_COMMAND_CAPACITY: usize = 128;
 
 const DECODE_CHUNK: usize = 4096;
 const RESET_WAIT: Duration = Duration::from_millis(80);
+#[cfg(windows)]
+const RING_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub enum DecodeCommand {
@@ -50,12 +58,22 @@ pub enum DecodeCommand {
     SetCrossfade(CrossfadeConfig),
     SetReplayGain(ReplayGainConfig),
     SetOutputSpec { sample_rate: u32, channels: u16 },
+    SetExclusiveMode(bool),
+    SetBitPerfect(bool),
     Shutdown,
 }
 
 pub struct AudioPipeline {
     pub producer: Mutex<Option<HeapProd<f32>>>,
-    pub pending_reset: AtomicBool,
+    #[cfg(windows)]
+    pub pcm_producer: Mutex<Option<PcmRingProducer>>,
+    #[cfg(windows)]
+    pub output_pcm_format: Mutex<Option<(AudioFormat, bool)>>,
+    #[cfg(windows)]
+    pub output_device: Mutex<Option<crate::audio::dto::AudioDeviceDTO>>,
+    pub pending_reset: Arc<AtomicBool>,
+    pub exclusive_mode: AtomicBool,
+    pub bit_perfect: AtomicBool,
     pub sample_rate: AtomicU32,
     pub channels: AtomicU32,
     pub position_ms: AtomicU64,
@@ -68,8 +86,8 @@ pub struct AudioPipeline {
     pub underrun_count: AtomicU64,
     pub underrun_samples: AtomicU64,
     pub output_samples_total: AtomicU64,
-    transition_target_total: AtomicU64,
-    transition_ready: AtomicBool,
+    pub transition_target_total: AtomicU64,
+    pub transition_ready: AtomicBool,
     pending_transition: Mutex<Option<ScheduledTransition>>,
     pending_seek: Mutex<Option<(u64, u64)>>,
 }
@@ -93,7 +111,15 @@ impl AudioPipeline {
         let (tx, rx) = crossbeam_channel::bounded(DECODE_COMMAND_CAPACITY);
         let pipeline = Arc::new(Self {
             producer: Mutex::new(Some(prod)),
-            pending_reset: AtomicBool::new(false),
+            #[cfg(windows)]
+            pcm_producer: Mutex::new(None),
+            #[cfg(windows)]
+            output_pcm_format: Mutex::new(None),
+            #[cfg(windows)]
+            output_device: Mutex::new(None),
+            pending_reset: Arc::new(AtomicBool::new(false)),
+            exclusive_mode: AtomicBool::new(false),
+            bit_perfect: AtomicBool::new(false),
             sample_rate: AtomicU32::new(44100),
             channels: AtomicU32::new(2),
             position_ms: AtomicU64::new(0),
@@ -119,6 +145,30 @@ impl AudioPipeline {
         let (prod, cons) = rb.split();
         *recover_mutex(&self.producer) = Some(prod);
         cons
+    }
+
+    pub fn pending_reset_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.pending_reset)
+    }
+
+    #[cfg(windows)]
+    pub fn set_pcm_producer(&self, producer: PcmRingProducer) {
+        *recover_mutex(&self.pcm_producer) = Some(producer);
+    }
+
+    #[cfg(windows)]
+    pub fn set_output_pcm_format(&self, format: AudioFormat, packed_s24: bool) {
+        *recover_mutex(&self.output_pcm_format) = Some((format, packed_s24));
+    }
+
+    #[cfg(windows)]
+    pub fn set_output_device(&self, device: crate::audio::dto::AudioDeviceDTO) {
+        *recover_mutex(&self.output_device) = Some(device);
+    }
+
+    #[cfg(windows)]
+    pub fn output_pcm_format(&self) -> Option<(AudioFormat, bool)> {
+        *recover_mutex(&self.output_pcm_format)
     }
 
     pub fn next_generation(&self) -> u64 {
@@ -258,11 +308,15 @@ pub fn spawn_decode_thread(
     pipeline: Arc<AudioPipeline>,
     cmd_rx: Receiver<DecodeCommand>,
     event_tx: broadcast::Sender<AudioEvent>,
+    #[cfg(windows)] control: crate::audio::control::AudioControlHandle,
 ) -> Option<JoinHandle<()>> {
     let spawn_result = thread::Builder::new()
         .name("audio-decode".into())
         .spawn(move || {
             crate::sync_util::set_current_thread_priority_high();
+            #[cfg(windows)]
+            decode_loop(pipeline, cmd_rx, event_tx, control);
+            #[cfg(not(windows))]
             decode_loop(pipeline, cmd_rx, event_tx);
         });
     match spawn_result {
@@ -278,12 +332,21 @@ fn decode_loop(
     pipeline: Arc<AudioPipeline>,
     cmd_rx: Receiver<DecodeCommand>,
     event_tx: broadcast::Sender<AudioEvent>,
+    #[cfg(windows)] control: crate::audio::control::AudioControlHandle,
 ) {
     let mut gapless = GaplessController::new(44100, 2);
     let mut eq = EqualizerProcessor::new(44100, 2, &EqConfig::default());
     let mut rg = ReplayGainProcessor::new();
     let mut rg_config = ReplayGainConfig::default();
     let mut scratch = vec![0.0f32; DECODE_CHUNK];
+    #[cfg(windows)]
+    let mut byte_scratch = Vec::with_capacity(DECODE_CHUNK * 4);
+    #[cfg(windows)]
+    let mut pcm_scratch = Vec::with_capacity(DECODE_CHUNK * 4);
+    #[cfg(windows)]
+    let mut pcm_leftover = Vec::new();
+    #[cfg(windows)]
+    let mut drain_deadline: Option<Instant> = None;
 
     loop {
         if let Some((position_ms, generation)) = pipeline.take_pending_seek() {
@@ -320,6 +383,11 @@ fn decode_loop(
             match cmd {
                 DecodeCommand::Shutdown => return,
                 DecodeCommand::OpenTrack { track, generation } => {
+                    #[cfg(windows)]
+                    {
+                        pcm_leftover.clear();
+                        drain_deadline = None;
+                    }
                     handle_open(
                         &pipeline,
                         &mut gapless,
@@ -329,10 +397,14 @@ fn decode_loop(
                         &event_tx,
                         track,
                         generation,
+                        #[cfg(windows)]
+                        &control,
                     );
                 }
                 DecodeCommand::PreloadNext { track, generation } => {
-                    if pipeline.is_current(generation) {
+                    if pipeline.is_current(generation)
+                        && !pipeline.bit_perfect.load(Ordering::Relaxed)
+                    {
                         match PreloadedTrack::open(track) {
                             Ok(preloaded) => {
                                 if pipeline.is_current(generation) {
@@ -349,6 +421,12 @@ fn decode_loop(
                         gapless.clear_current();
                         pipeline.samples_played.store(0, Ordering::Relaxed);
                         pipeline.position_ms.store(0, Ordering::Relaxed);
+                        #[cfg(windows)]
+                        {
+                            pcm_leftover.clear();
+                            drain_deadline = None;
+                        }
+                        emit_engine_status_cleared(&pipeline, &event_tx);
                     }
                 }
                 DecodeCommand::ClearPreload => {
@@ -358,7 +436,9 @@ fn decode_loop(
                     eq.update_config(&config);
                 }
                 DecodeCommand::SetCrossfade(config) => {
-                    gapless.set_crossfade(config);
+                    if !pipeline.bit_perfect.load(Ordering::Relaxed) {
+                        gapless.set_crossfade(config);
+                    }
                 }
                 DecodeCommand::SetReplayGain(config) => {
                     rg_config = config;
@@ -373,23 +453,91 @@ fn decode_loop(
                     gapless.set_output_spec(sample_rate, channels);
                     eq.set_output_spec(sample_rate, channels);
                 }
+                DecodeCommand::SetBitPerfect(enabled) => {
+                    pipeline.bit_perfect.store(enabled, Ordering::SeqCst);
+                    if enabled {
+                        gapless.set_crossfade(CrossfadeConfig {
+                            enabled: false,
+                            ..CrossfadeConfig::default()
+                        });
+                        gapless.clear_preload();
+                    }
+                    #[cfg(windows)]
+                    {
+                        pcm_leftover.clear();
+                        drain_deadline = None;
+                    }
+                    emit_engine_status_cleared(&pipeline, &event_tx);
+                }
+                DecodeCommand::SetExclusiveMode(enabled) => {
+                    pipeline.exclusive_mode.store(enabled, Ordering::SeqCst);
+                    if !enabled {
+                        pipeline.bit_perfect.store(false, Ordering::SeqCst);
+                    }
+                    #[cfg(windows)]
+                    {
+                        pcm_leftover.clear();
+                        drain_deadline = None;
+                    }
+                    emit_engine_status_cleared(&pipeline, &event_tx);
+                }
             }
         }
 
         if pipeline.is_playing.load(Ordering::Relaxed) && gapless.has_current() {
-            fill_ring(
-                &pipeline,
-                &mut gapless,
-                &mut eq,
-                &mut rg,
-                &rg_config,
-                &mut scratch,
-                &event_tx,
-            );
+            #[cfg(windows)]
+            {
+                if !pipeline.exclusive_mode.load(Ordering::Relaxed) {
+                    fill_ring(
+                        &pipeline,
+                        &mut gapless,
+                        &mut eq,
+                        &mut rg,
+                        &rg_config,
+                        &mut scratch,
+                        &event_tx,
+                    );
+                } else if pipeline.bit_perfect.load(Ordering::Relaxed) {
+                    fill_ring_bit_perfect(
+                        &pipeline,
+                        &mut gapless,
+                        &mut byte_scratch,
+                        &mut pcm_leftover,
+                        &mut drain_deadline,
+                        &event_tx,
+                    );
+                } else {
+                    fill_ring_wasapi(
+                        &pipeline,
+                        &mut gapless,
+                        &mut eq,
+                        &mut rg,
+                        &rg_config,
+                        &mut scratch,
+                        &mut pcm_scratch,
+                        &mut pcm_leftover,
+                        &mut drain_deadline,
+                        &event_tx,
+                    );
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                fill_ring(
+                    &pipeline,
+                    &mut gapless,
+                    &mut eq,
+                    &mut rg,
+                    &rg_config,
+                    &mut scratch,
+                    &event_tx,
+                );
+            }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_open(
     pipeline: &AudioPipeline,
     gapless: &mut GaplessController,
@@ -399,32 +547,157 @@ fn handle_open(
     event_tx: &broadcast::Sender<AudioEvent>,
     track: AudioTrack,
     generation: u64,
+    #[cfg(windows)] control: &crate::audio::control::AudioControlHandle,
 ) {
     if !pipeline.is_current(generation) {
         return;
     }
-    match PreloadedTrack::open(track.clone()) {
+
+    let exclusive_mode = pipeline.exclusive_mode.load(Ordering::Relaxed);
+    let bit_perfect = exclusive_mode && pipeline.bit_perfect.load(Ordering::Relaxed);
+    let open_result = if bit_perfect {
+        PreloadedTrack::open_bit_perfect(track.clone())
+    } else {
+        PreloadedTrack::open(track.clone())
+    };
+
+    match open_result {
         Ok(preloaded) => {
             if !pipeline.is_current(generation) {
                 return;
             }
-            pipeline.request_reset();
-            if !pipeline.is_current(generation) {
-                return;
+
+            let quality = preloaded.quality_badge().clone();
+            #[cfg(windows)]
+            let source = preloaded.source_format();
+
+            #[cfg(windows)]
+            {
+                if !exclusive_mode {
+                    pipeline.request_reset();
+                    if !pipeline.is_current(generation) {
+                        return;
+                    }
+                    gapless.set_current(preloaded);
+                    if let Err(err) = control.ensure_stream() {
+                        pipeline.is_playing.store(false, Ordering::SeqCst);
+                        let _ = event_tx.send(AudioEvent::ErrorOccurred(err.to_string()));
+                        let _ = event_tx.send(AudioEvent::StateChanged(PlaybackState::Stopped));
+                        return;
+                    }
+                    let rate = pipeline.sample_rate.load(Ordering::Relaxed);
+                    let ch = pipeline.channels.load(Ordering::Relaxed) as u16;
+                    gapless.set_output_spec(rate, ch);
+                    eq.set_output_spec(rate, ch);
+                    let status = crate::audio::dto::EngineStatus {
+                        output_mode: "WASAPI Shared".into(),
+                        bit_perfect: false,
+                        is_native: source.sample_rate == rate && source.channels == ch,
+                        output_sample_rate: rate,
+                        output_bit_depth: source.bit_depth,
+                        source_label: crate::audio::control::source_label_from_format(
+                            &source,
+                            Some(&quality),
+                        ),
+                    };
+                    let _ = event_tx.send(AudioEvent::EngineStatusUpdated(status));
+                } else {
+                    match control.configure_exclusive(source, bit_perfect) {
+                        Ok(cfg) => {
+                            let rate = cfg.negotiated.format.sample_rate;
+                            let ch = cfg.negotiated.format.channels;
+                            gapless.set_output_spec(rate, ch);
+                            eq.set_output_spec(rate, ch);
+                            pipeline.request_reset();
+                            if !pipeline.is_current(generation) {
+                                return;
+                            }
+                            gapless.set_current(preloaded);
+                            if bit_perfect {
+                                if let Err(err) = gapless.configure_bit_perfect_wire(
+                                    cfg.negotiated.format,
+                                    cfg.negotiated.packed_s24,
+                                    cfg.negotiated.container_bytes_per_sample,
+                                ) {
+                                    pipeline.is_playing.store(false, Ordering::SeqCst);
+                                    let _ =
+                                        event_tx.send(AudioEvent::ErrorOccurred(err.to_string()));
+                                    let _ = event_tx
+                                        .send(AudioEvent::StateChanged(PlaybackState::Stopped));
+                                    return;
+                                }
+                            } else {
+                                let _ =
+                                    gapless.set_decoder_output_format(Some(cfg.negotiated.format));
+                            }
+                            let status = crate::audio::dto::EngineStatus {
+                                output_mode: "WASAPI Exclusive".into(),
+                                bit_perfect,
+                                is_native: cfg.negotiated.is_native,
+                                output_sample_rate: rate,
+                                output_bit_depth: cfg.negotiated.format.bit_depth,
+                                source_label: crate::audio::control::source_label_from_format(
+                                    &source,
+                                    Some(&quality),
+                                ),
+                            };
+                            let _ = event_tx.send(AudioEvent::EngineStatusUpdated(status));
+                        }
+                        Err(err) => {
+                            if pipeline.is_current(generation) {
+                                pipeline.is_playing.store(false, Ordering::SeqCst);
+                                pipeline.exclusive_mode.store(false, Ordering::SeqCst);
+                                pipeline.bit_perfect.store(false, Ordering::SeqCst);
+                                // Roll back Exclusive → Shared; do not leave the
+                                // engine flagged exclusive with no output.
+                                let rollback = control.set_exclusive_mode(
+                                    false,
+                                    crate::audio::pcm::AudioFormat::s16(48_000, 2),
+                                );
+                                if let Err(rollback_err) = rollback {
+                                    tracing::warn!(
+                                        target: "wasapi",
+                                        error = %rollback_err,
+                                        "failed to restore Shared after Exclusive OpenTrack error"
+                                    );
+                                }
+                                let msg = err.to_string();
+                                let _ = event_tx.send(AudioEvent::ErrorOccurred(msg.clone()));
+                                let _ = event_tx.send(AudioEvent::ExclusiveModeChanged {
+                                    enabled: false,
+                                    output_mode: "WASAPI Shared".into(),
+                                    error: Some(msg),
+                                });
+                                let _ =
+                                    event_tx.send(AudioEvent::StateChanged(PlaybackState::Stopped));
+                            }
+                            return;
+                        }
+                    }
+                }
             }
-            gapless.set_current(preloaded);
-            let sample_rate = pipeline.sample_rate.load(Ordering::Relaxed);
-            let channels = pipeline.channels.load(Ordering::Relaxed) as u16;
-            if sample_rate > 0 && channels > 0 {
-                gapless.set_output_spec(sample_rate, channels);
-                eq.set_output_spec(sample_rate, channels);
+
+            #[cfg(not(windows))]
+            {
+                pipeline.request_reset();
+                if !pipeline.is_current(generation) {
+                    return;
+                }
+                gapless.set_current(preloaded);
+                let sample_rate = pipeline.sample_rate.load(Ordering::Relaxed);
+                let channels = pipeline.channels.load(Ordering::Relaxed) as u16;
+                if sample_rate > 0 && channels > 0 {
+                    gapless.set_output_spec(sample_rate, channels);
+                    eq.set_output_spec(sample_rate, channels);
+                }
             }
+
             let duration_ms = gapless.current_duration_ms();
             pipeline.duration_ms.store(duration_ms, Ordering::Relaxed);
             apply_position(pipeline, 0);
             rg.update(rg_config, gapless.current_replay_gain().as_ref());
             let _ = event_tx.send(AudioEvent::TrackChanged(Some(track)));
-            let _ = event_tx.send(AudioEvent::QualityUpdated(gapless.current_quality_badge()));
+            let _ = event_tx.send(AudioEvent::QualityUpdated(Some(quality)));
         }
         Err(err) => {
             if pipeline.is_current(generation) {
@@ -489,6 +762,239 @@ fn fill_ring(
             if is_eof && written == 0 {
                 pipeline.is_playing.store(false, Ordering::Relaxed);
                 let _ = event_tx.send(AudioEvent::StateChanged(PlaybackState::Ended));
+            }
+        }
+        Err(err) => {
+            let _ = event_tx.send(AudioEvent::ErrorOccurred(err.to_string()));
+            thread::sleep(Duration::from_millis(4));
+        }
+    }
+}
+
+#[cfg(windows)]
+fn output_bytes_per_sample(pipeline: &AudioPipeline) -> usize {
+    pipeline
+        .output_pcm_format()
+        .map(|(f, packed)| if packed { 3 } else { f.bytes_per_sample() })
+        .unwrap_or(4)
+        .max(1)
+}
+
+#[cfg(windows)]
+fn ring_vacant_bytes(pipeline: &AudioPipeline) -> usize {
+    let guard = recover_mutex(&pipeline.pcm_producer);
+    guard.as_ref().map(|prod| prod.available()).unwrap_or(0)
+}
+
+#[cfg(windows)]
+fn ring_occupied_bytes(pipeline: &AudioPipeline) -> usize {
+    let guard = recover_mutex(&pipeline.pcm_producer);
+    guard.as_ref().map(|prod| prod.occupied()).unwrap_or(0)
+}
+
+/// Push as many leftover + new bytes as fit (frame-aligned). Retains the rest.
+#[cfg(windows)]
+fn push_pcm_bytes(pipeline: &AudioPipeline, leftover: &mut Vec<u8>, incoming: &[u8]) -> usize {
+    if !incoming.is_empty() {
+        leftover.extend_from_slice(incoming);
+    }
+    if leftover.is_empty() {
+        return 0;
+    }
+    let bpf = output_bytes_per_sample(pipeline)
+        .saturating_mul(pipeline.channels.load(Ordering::Relaxed).max(1) as usize)
+        .max(1);
+    let mut guard = recover_mutex(&pipeline.pcm_producer);
+    let Some(prod) = guard.as_mut() else {
+        return 0;
+    };
+    let aligned = (prod.available() / bpf) * bpf;
+    if aligned == 0 {
+        return 0;
+    }
+    let n = leftover.len().min(aligned);
+    let written = prod.push_bytes(&leftover[..n]);
+    if written == leftover.len() {
+        leftover.clear();
+    } else if written > 0 {
+        leftover.drain(..written);
+    }
+    written
+}
+
+#[cfg(windows)]
+fn maybe_emit_ended(
+    pipeline: &AudioPipeline,
+    leftover: &[u8],
+    input_drained: bool,
+    drain_deadline: &mut Option<Instant>,
+    event_tx: &broadcast::Sender<AudioEvent>,
+) -> bool {
+    if !input_drained || !leftover.is_empty() {
+        return false;
+    }
+    let occupied = ring_occupied_bytes(pipeline);
+    let deadline = *drain_deadline.get_or_insert_with(|| Instant::now() + RING_DRAIN_TIMEOUT);
+    if occupied == 0 || Instant::now() >= deadline {
+        pipeline.is_playing.store(false, Ordering::Relaxed);
+        let _ = event_tx.send(AudioEvent::StateChanged(PlaybackState::Ended));
+        *drain_deadline = None;
+        true
+    } else {
+        thread::sleep(Duration::from_millis(2));
+        false
+    }
+}
+
+fn emit_engine_status_cleared(pipeline: &AudioPipeline, event_tx: &broadcast::Sender<AudioEvent>) {
+    let status = crate::audio::dto::EngineStatus {
+        output_mode: String::new(),
+        bit_perfect: pipeline.bit_perfect.load(Ordering::Relaxed),
+        is_native: false,
+        output_sample_rate: 0,
+        output_bit_depth: 0,
+        source_label: String::new(),
+    };
+    let _ = event_tx.send(AudioEvent::EngineStatusUpdated(status));
+}
+
+#[cfg(windows)]
+fn emit_engine_status_from_gapless(
+    pipeline: &AudioPipeline,
+    gapless: &crate::audio::gapless::GaplessController,
+    event_tx: &broadcast::Sender<AudioEvent>,
+) {
+    let Some(source) = gapless.current_source_format() else {
+        emit_engine_status_cleared(pipeline, event_tx);
+        return;
+    };
+    let quality = gapless.current_quality_badge();
+    let (out_rate, out_depth) = pipeline
+        .output_pcm_format()
+        .map(|(f, _)| (f.sample_rate, f.bit_depth))
+        .unwrap_or((source.sample_rate, source.bit_depth));
+    let status = crate::audio::dto::EngineStatus {
+        output_mode: "WASAPI Exclusive".into(),
+        bit_perfect: pipeline.bit_perfect.load(Ordering::Relaxed),
+        is_native: pipeline.bit_perfect.load(Ordering::Relaxed),
+        output_sample_rate: out_rate,
+        output_bit_depth: out_depth,
+        source_label: crate::audio::control::source_label_from_format(&source, quality.as_ref()),
+    };
+    let _ = event_tx.send(AudioEvent::EngineStatusUpdated(status));
+}
+
+#[cfg(windows)]
+fn fill_ring_bit_perfect(
+    pipeline: &AudioPipeline,
+    gapless: &mut GaplessController,
+    byte_scratch: &mut Vec<u8>,
+    leftover: &mut Vec<u8>,
+    drain_deadline: &mut Option<Instant>,
+    event_tx: &broadcast::Sender<AudioEvent>,
+) {
+    if leftover.is_empty() {
+        match gapless.read_pcm_bytes(byte_scratch) {
+            Ok((written, _, input_drained)) => {
+                if written > 0 {
+                    leftover.extend_from_slice(&byte_scratch[..written]);
+                    byte_scratch.clear();
+                }
+                push_pcm_bytes(pipeline, leftover, &[]);
+                if maybe_emit_ended(pipeline, leftover, input_drained, drain_deadline, event_tx) {
+                    gapless.clear_current();
+                }
+            }
+            Err(err) => {
+                let _ = event_tx.send(AudioEvent::ErrorOccurred(err.to_string()));
+                thread::sleep(Duration::from_millis(4));
+            }
+        }
+    } else {
+        push_pcm_bytes(pipeline, leftover, &[]);
+        if leftover.is_empty() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn fill_ring_wasapi(
+    pipeline: &AudioPipeline,
+    gapless: &mut GaplessController,
+    eq: &mut EqualizerProcessor,
+    rg: &mut ReplayGainProcessor,
+    rg_config: &ReplayGainConfig,
+    scratch: &mut [f32],
+    pcm_scratch: &mut Vec<u8>,
+    leftover: &mut Vec<u8>,
+    drain_deadline: &mut Option<Instant>,
+    event_tx: &broadcast::Sender<AudioEvent>,
+) {
+    if !leftover.is_empty() {
+        push_pcm_bytes(pipeline, leftover, &[]);
+        if !leftover.is_empty() {
+            thread::sleep(Duration::from_millis(2));
+            return;
+        }
+    }
+
+    let vacant = ring_vacant_bytes(pipeline);
+    let bps = output_bytes_per_sample(pipeline);
+    if vacant < bps {
+        thread::sleep(Duration::from_millis(2));
+        return;
+    }
+
+    let max_samples = (vacant / bps).min(scratch.len()).min(4096);
+    if max_samples == 0 {
+        thread::sleep(Duration::from_millis(2));
+        return;
+    }
+
+    match gapless.read_samples(&mut scratch[..max_samples]) {
+        Ok((written, transitioned, is_eof)) => {
+            if let Some(transition) = transitioned {
+                rg.update(rg_config, gapless.current_replay_gain().as_ref());
+                let occupied = ring_occupied_bytes(pipeline);
+                let bpf = output_bytes_per_sample(pipeline)
+                    .saturating_mul(pipeline.channels.load(Ordering::Relaxed).max(1) as usize)
+                    .max(1);
+                let samples_ahead = (occupied / bpf)
+                    .saturating_mul(pipeline.channels.load(Ordering::Relaxed) as usize);
+                pipeline.schedule_transition(
+                    ScheduledTransition {
+                        track: transition.track,
+                        duration_ms: gapless.current_duration_ms(),
+                        quality_badge: gapless.current_quality_badge(),
+                    },
+                    samples_ahead.saturating_add(transition.sample_offset) as u64,
+                );
+                emit_engine_status_from_gapless(pipeline, gapless, event_tx);
+            }
+
+            if written > 0 {
+                let buf = &mut scratch[..written];
+                rg.process_interleaved(buf);
+                eq.process_interleaved(buf);
+                let volume = f32::from_bits(pipeline.volume_bits.load(Ordering::Relaxed));
+                if (volume - 1.0).abs() > 0.001 {
+                    for sample in buf.iter_mut() {
+                        *sample *= volume;
+                    }
+                }
+                soft_limit(buf);
+
+                if let Some((format, packed_s24)) = pipeline.output_pcm_format() {
+                    f32_to_pcm_bytes(buf, &format, packed_s24, pcm_scratch);
+                    push_pcm_bytes(pipeline, leftover, pcm_scratch);
+                }
+            }
+
+            if maybe_emit_ended(pipeline, leftover, is_eof, drain_deadline, event_tx) {
+                gapless.clear_current();
             }
         }
         Err(err) => {

@@ -14,6 +14,72 @@ fn audio_player_is_send_and_sync_without_unsafe_impls() {
     assert_send_sync::<AudioPlayer>();
 }
 
+#[test]
+fn exclusive_output_is_opt_in_and_guards_bit_perfect() {
+    let player = AudioPlayer::new();
+    assert!(!player.exclusive_mode());
+    assert!(!player.bit_perfect());
+    assert!(player.set_bit_perfect(true).is_err());
+}
+
+#[test]
+fn exclusive_mode_defaults_off_and_rejects_bit_perfect_without_exclusive() {
+    let player = AudioPlayer::new();
+    assert!(!player.exclusive_mode());
+    assert!(!player.bit_perfect());
+    let err = player
+        .set_bit_perfect(true)
+        .expect_err("bit-perfect requires exclusive");
+    assert!(err.to_string().to_lowercase().contains("exclusive"));
+}
+
+#[cfg(windows)]
+#[test]
+fn invalid_device_selection_does_not_leave_exclusive_flag_set() {
+    let player = AudioPlayer::new();
+    let result = player.select_output_device(Some(
+        "{0.0.0.00000000}.{00000000-0000-0000-0000-000000000000}".into(),
+    ));
+    assert!(result.is_err(), "selecting a missing endpoint must fail");
+    assert!(
+        !player.exclusive_mode(),
+        "exclusive flag must stay off after failed device selection"
+    );
+    assert!(!player.bit_perfect());
+}
+
+#[cfg(windows)]
+#[test]
+fn exclusive_disable_clears_bit_perfect_flag() {
+    let player = AudioPlayer::new();
+    // If Exclusive cannot open on this host, skip the remainder.
+    if player.set_exclusive_mode(true).is_err() {
+        return;
+    }
+    assert!(player.exclusive_mode());
+    let _ = player.set_bit_perfect(true);
+    player
+        .set_exclusive_mode(false)
+        .expect("disabling exclusive should restore Shared");
+    assert!(!player.exclusive_mode());
+    assert!(!player.bit_perfect());
+}
+
+#[cfg(windows)]
+#[test]
+fn exclusive_and_shared_are_not_both_active() {
+    let player = AudioPlayer::new();
+    if player.set_exclusive_mode(true).is_err() {
+        return;
+    }
+    // Exclusive running ⇒ Shared must be down.
+    assert!(
+        !player.both_outputs_active_for_test(),
+        "Shared and Exclusive must never run together"
+    );
+    let _ = player.set_exclusive_mode(false);
+}
+
 fn mock_track(id: &str, title: &str, duration_ms: u64) -> AudioTrack {
     AudioTrack {
         id: id.to_string(),
@@ -134,7 +200,7 @@ fn test_weighted_shuffle_distribution() {
     q.set_shuffle_enabled(true);
     q.set_current_index(0).unwrap();
 
-    let mut picks = vec![0; 8];
+    let mut picks = [0; 8];
     for _ in 0..200 {
         let pick = q.pick_weighted_shuffle_next().unwrap();
         picks[pick] += 1;

@@ -5,13 +5,18 @@ use tokio::sync::broadcast;
 
 use crate::audio::control::AudioControlHandle;
 use crate::audio::dto::{
-    AudioDeviceDTO, AudioEvent, AudioTrack, CrossfadeConfig, EqConfig, EqPreset, PlaybackProgress,
-    PlaybackState, PlayerSnapshot, RepeatMode, ReplayGainConfig,
+    AudioDeviceDTO, AudioEvent, AudioTrack, CrossfadeConfig, EngineStatus, EqConfig, EqPreset,
+    PlaybackProgress, PlaybackState, PlayerSnapshot, RepeatMode, ReplayGainConfig,
+    SystemAudioState,
 };
 use crate::audio::error::{AudioError, AudioResult};
+use crate::audio::pcm::AudioFormat;
 use crate::audio::pipeline::{spawn_decode_thread, AudioPipeline, DecodeCommand};
 use crate::audio::queue::PlaybackQueue;
 use crate::sync_util::{recover_mutex, recover_rw_read, recover_rw_write};
+
+#[cfg(windows)]
+use crate::audio::control::source_label_from_format;
 
 #[derive(Debug)]
 pub enum AudioCommand {
@@ -54,6 +59,9 @@ struct InnerPlayerState {
     replay_gain_config: ReplayGainConfig,
     active_device: Option<AudioDeviceDTO>,
     quality_badge: Option<crate::audio::dto::QualityBadge>,
+    engine_status: Option<EngineStatus>,
+    exclusive_mode: bool,
+    bit_perfect: bool,
 }
 
 pub struct AudioPlayer {
@@ -89,15 +97,23 @@ impl AudioPlayer {
             replay_gain_config: default_rg,
             active_device: None,
             quality_badge: None,
+            engine_status: None,
+            exclusive_mode: false,
+            bit_perfect: false,
         };
 
         let (pipeline, _initial_cons, decode_tx, decode_rx) = AudioPipeline::create();
-        let decode_thread =
-            spawn_decode_thread(Arc::clone(&pipeline), decode_rx, event_sender.clone());
         let audio_control = AudioControlHandle::spawn(
             Arc::clone(&pipeline),
             decode_tx.clone(),
             event_sender.clone(),
+        );
+        let decode_thread = spawn_decode_thread(
+            Arc::clone(&pipeline),
+            decode_rx,
+            event_sender.clone(),
+            #[cfg(windows)]
+            audio_control.clone(),
         );
 
         Self {
@@ -139,6 +155,13 @@ impl AudioPlayer {
             0.0
         };
 
+        #[cfg(windows)]
+        let output_device = recover_mutex(&self.pipeline.output_device)
+            .clone()
+            .or_else(|| inner.active_device.clone());
+        #[cfg(not(windows))]
+        let output_device = inner.active_device.clone();
+
         PlayerSnapshot {
             state: inner.state,
             current_track: curr_track,
@@ -158,7 +181,9 @@ impl AudioPlayer {
             eq: inner.eq_config.clone(),
             crossfade: inner.crossfade_config.clone(),
             replay_gain: inner.replay_gain_config.clone(),
-            output_device: inner.active_device.clone(),
+            output_device,
+            engine_status: inner.engine_status.clone(),
+            bit_perfect: inner.bit_perfect,
         }
     }
 
@@ -267,6 +292,7 @@ impl AudioPlayer {
         if inner.state == PlaybackState::Playing {
             inner.state = PlaybackState::Paused;
             self.pipeline.is_playing.store(false, Ordering::SeqCst);
+            self.audio_control.set_paused(true);
             self.emit_event(AudioEvent::StateChanged(PlaybackState::Paused));
         }
         Ok(())
@@ -280,6 +306,7 @@ impl AudioPlayer {
                 inner.state = PlaybackState::Playing;
             }
             self.pipeline.is_playing.store(true, Ordering::SeqCst);
+            self.audio_control.set_paused(false);
             self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
             Ok(())
         } else if state == PlaybackState::Stopped {
@@ -304,6 +331,7 @@ impl AudioPlayer {
         {
             let mut inner = recover_rw_write(&self.inner);
             inner.state = PlaybackState::Stopped;
+            inner.engine_status = None;
         }
         self.pipeline.is_playing.store(false, Ordering::SeqCst);
         self.pipeline.position_ms.store(0, Ordering::SeqCst);
@@ -353,9 +381,16 @@ impl AudioPlayer {
 
     pub fn set_volume(&self, volume: f32) -> AudioResult<()> {
         let clamped = volume.clamp(0.0, 1.0);
-        self.pipeline
-            .volume_bits
-            .store(clamped.to_bits(), Ordering::Relaxed);
+        let bit_perfect = recover_rw_read(&self.inner).bit_perfect;
+        #[cfg(windows)]
+        if bit_perfect {
+            self.audio_control.set_endpoint_volume(clamped)?;
+        }
+        if !bit_perfect {
+            self.pipeline
+                .volume_bits
+                .store(clamped.to_bits(), Ordering::Relaxed);
+        }
         let is_muted = {
             let mut inner = recover_rw_write(&self.inner);
             inner.volume = clamped;
@@ -369,7 +404,14 @@ impl AudioPlayer {
     }
 
     pub fn set_muted(&self, muted: bool) -> AudioResult<()> {
-        self.pipeline.is_muted.store(muted, Ordering::Relaxed);
+        let bit_perfect = recover_rw_read(&self.inner).bit_perfect;
+        #[cfg(windows)]
+        if bit_perfect {
+            self.audio_control.set_endpoint_muted(muted)?;
+        }
+        if !bit_perfect {
+            self.pipeline.is_muted.store(muted, Ordering::Relaxed);
+        }
         let volume = {
             let mut inner = recover_rw_write(&self.inner);
             inner.is_muted = muted;
@@ -383,17 +425,42 @@ impl AudioPlayer {
     }
 
     pub fn toggle_mute(&self) -> AudioResult<()> {
-        let (vol, muted) = {
-            let mut inner = recover_rw_write(&self.inner);
-            inner.is_muted = !inner.is_muted;
-            (inner.volume, inner.is_muted)
+        let (vol, muted, bit_perfect) = {
+            let inner = recover_rw_read(&self.inner);
+            (inner.volume, !inner.is_muted, inner.bit_perfect)
         };
-        self.pipeline.is_muted.store(muted, Ordering::Relaxed);
+        #[cfg(windows)]
+        if bit_perfect {
+            self.audio_control.set_endpoint_muted(muted)?;
+        }
+        if !bit_perfect {
+            self.pipeline.is_muted.store(muted, Ordering::Relaxed);
+        }
+        recover_rw_write(&self.inner).is_muted = muted;
         self.emit_event(AudioEvent::VolumeChanged {
             volume: vol,
             is_muted: muted,
         });
         Ok(())
+    }
+
+    pub fn get_system_audio_state(&self) -> AudioResult<SystemAudioState> {
+        #[cfg(windows)]
+        {
+            let (volume, is_muted) = self.audio_control.endpoint_audio_state()?;
+            let mut inner = recover_rw_write(&self.inner);
+            inner.volume = volume;
+            inner.is_muted = is_muted;
+            return Ok(SystemAudioState { volume, is_muted });
+        }
+        #[cfg(not(windows))]
+        {
+            let inner = recover_rw_read(&self.inner);
+            Ok(SystemAudioState {
+                volume: inner.volume,
+                is_muted: inner.is_muted,
+            })
+        }
     }
 
     pub fn set_repeat_mode(&self, mode: RepeatMode) -> AudioResult<()> {
@@ -551,12 +618,268 @@ impl AudioPlayer {
     }
 
     pub fn select_output_device(&self, device_name: Option<String>) -> AudioResult<()> {
-        let is_playing = self.pipeline.is_playing.load(Ordering::SeqCst);
+        let state = recover_rw_read(&self.inner).state;
+        let position_ms = self.pipeline.position_ms.load(Ordering::Relaxed);
         self.audio_control.select_device(device_name)?;
-        if is_playing {
-            self.pipeline.is_playing.store(true, Ordering::SeqCst);
+        match state {
+            PlaybackState::Playing => self.reopen_current_preserving_position(true, position_ms),
+            PlaybackState::Paused => self.reopen_current_preserving_position(false, position_ms),
+            _ => Ok(()),
+        }
+    }
+
+    pub fn set_bit_perfect(&self, enabled: bool) -> AudioResult<()> {
+        #[cfg(windows)]
+        let endpoint_state = if enabled {
+            let (volume, is_muted) = self.audio_control.endpoint_audio_state()?;
+            Some((volume, is_muted))
+        } else {
+            None
+        };
+        {
+            let mut inner = recover_rw_write(&self.inner);
+            if enabled && !inner.exclusive_mode {
+                return Err(AudioError::Playback(
+                    "Enable WASAPI Exclusive before Bit-Perfect mode".into(),
+                ));
+            }
+            inner.bit_perfect = enabled;
+            #[cfg(windows)]
+            if let Some((volume, is_muted)) = endpoint_state {
+                inner.volume = volume;
+                inner.is_muted = is_muted;
+            }
+        }
+        self.pipeline.bit_perfect.store(enabled, Ordering::SeqCst);
+        if enabled {
+            self.pipeline
+                .volume_bits
+                .store(1.0f32.to_bits(), Ordering::SeqCst);
+            self.pipeline.is_muted.store(false, Ordering::SeqCst);
+            #[cfg(windows)]
+            if let Some((volume, is_muted)) = endpoint_state {
+                self.emit_event(AudioEvent::VolumeChanged { volume, is_muted });
+            }
+        } else {
+            let inner = recover_rw_read(&self.inner);
+            self.pipeline
+                .volume_bits
+                .store(inner.volume.to_bits(), Ordering::SeqCst);
+            self.pipeline
+                .is_muted
+                .store(inner.is_muted, Ordering::SeqCst);
+        }
+        self.send_decode(DecodeCommand::SetBitPerfect(enabled));
+
+        let position_ms = self.pipeline.position_ms.load(Ordering::Relaxed);
+        let state = recover_rw_read(&self.inner).state;
+        match state {
+            PlaybackState::Playing => {
+                self.reopen_current_preserving_position(true, position_ms)?;
+            }
+            PlaybackState::Paused => {
+                self.reopen_current_preserving_position(false, position_ms)?;
+            }
+            _ => {}
         }
         Ok(())
+    }
+
+    pub fn set_exclusive_mode(&self, enabled: bool) -> AudioResult<()> {
+        #[cfg(not(windows))]
+        {
+            let _ = enabled;
+            return Err(AudioError::Playback(
+                "WASAPI Exclusive is only available on Windows".into(),
+            ));
+        }
+
+        #[cfg(windows)]
+        {
+            let probe_source = AudioFormat::s16(48_000, 2);
+            let position_ms = self.pipeline.position_ms.load(Ordering::Relaxed);
+            let state = recover_rw_read(&self.inner).state;
+
+            let configure = self
+                .audio_control
+                .set_exclusive_mode(enabled, probe_source)?;
+
+            {
+                let mut inner = recover_rw_write(&self.inner);
+                inner.exclusive_mode = enabled;
+                if !enabled {
+                    inner.bit_perfect = false;
+                }
+            }
+            self.pipeline
+                .exclusive_mode
+                .store(enabled, Ordering::SeqCst);
+            if !enabled {
+                self.pipeline.bit_perfect.store(false, Ordering::SeqCst);
+                let inner = recover_rw_read(&self.inner);
+                self.pipeline
+                    .volume_bits
+                    .store(inner.volume.to_bits(), Ordering::SeqCst);
+                self.pipeline
+                    .is_muted
+                    .store(inner.is_muted, Ordering::SeqCst);
+                self.send_decode(DecodeCommand::SetBitPerfect(false));
+            }
+            self.send_decode(DecodeCommand::SetExclusiveMode(enabled));
+
+            if let Some(cfg) = configure {
+                let status = EngineStatus {
+                    output_mode: "WASAPI Exclusive".into(),
+                    bit_perfect: false,
+                    is_native: cfg.negotiated.is_native,
+                    output_sample_rate: cfg.negotiated.format.sample_rate,
+                    output_bit_depth: cfg.negotiated.format.bit_depth,
+                    source_label: source_label_from_format(&cfg.negotiated.format, None),
+                };
+                self.apply_engine_status(status.clone());
+                self.update_active_device(cfg.device);
+                self.emit_event(AudioEvent::EngineStatusUpdated(status));
+                self.emit_event(AudioEvent::ExclusiveModeChanged {
+                    enabled: true,
+                    output_mode: "WASAPI Exclusive".into(),
+                    error: None,
+                });
+            } else {
+                let rate = self.pipeline.sample_rate.load(Ordering::Relaxed);
+                let status = EngineStatus {
+                    output_mode: "WASAPI Shared".into(),
+                    bit_perfect: false,
+                    is_native: false,
+                    output_sample_rate: rate,
+                    output_bit_depth: 32,
+                    source_label: String::new(),
+                };
+                self.apply_engine_status(status.clone());
+                self.emit_event(AudioEvent::EngineStatusUpdated(status));
+                self.emit_event(AudioEvent::ExclusiveModeChanged {
+                    enabled: false,
+                    output_mode: "WASAPI Shared".into(),
+                    error: None,
+                });
+            }
+
+            match state {
+                PlaybackState::Playing => {
+                    self.reopen_current_preserving_position(true, position_ms)?;
+                }
+                PlaybackState::Paused => {
+                    self.reopen_current_preserving_position(false, position_ms)?;
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+    }
+
+    pub fn exclusive_mode(&self) -> bool {
+        recover_rw_read(&self.inner).exclusive_mode
+    }
+
+    /// Re-open the current track for a new engine mode without starting playback.
+    #[allow(dead_code)]
+    fn reconfigure_current_paused(&self) -> AudioResult<()> {
+        let position_ms = self.pipeline.position_ms.load(Ordering::Relaxed);
+        self.reopen_current_preserving_position(false, position_ms)
+    }
+
+    fn reopen_current_preserving_position(
+        &self,
+        resume_playing: bool,
+        position_ms: u64,
+    ) -> AudioResult<()> {
+        let track = recover_rw_read(&self.inner)
+            .queue
+            .current_track()
+            .cloned()
+            .ok_or(AudioError::QueueEmpty)?;
+        let generation = self.pipeline.next_generation();
+        if resume_playing {
+            {
+                let mut inner = recover_rw_write(&self.inner);
+                inner.state = PlaybackState::Playing;
+            }
+            self.pipeline.is_playing.store(true, Ordering::SeqCst);
+            self.audio_control.set_paused(false);
+            self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
+        } else {
+            self.pipeline.is_playing.store(false, Ordering::SeqCst);
+            self.audio_control.set_paused(true);
+        }
+        self.send_decode(DecodeCommand::OpenTrack { track, generation });
+        if position_ms > 0 {
+            self.pipeline.request_seek(position_ms, generation);
+        }
+        self.check_and_preload_next();
+        Ok(())
+    }
+
+    /// Clear exclusive flags after a runtime Exclusive failure (device lost, etc.).
+    pub fn force_disable_exclusive(&self, error: Option<String>) {
+        {
+            let mut inner = recover_rw_write(&self.inner);
+            inner.exclusive_mode = false;
+            inner.bit_perfect = false;
+        }
+        self.pipeline.exclusive_mode.store(false, Ordering::SeqCst);
+        self.pipeline.bit_perfect.store(false, Ordering::SeqCst);
+        {
+            let inner = recover_rw_read(&self.inner);
+            self.pipeline
+                .volume_bits
+                .store(inner.volume.to_bits(), Ordering::SeqCst);
+            self.pipeline
+                .is_muted
+                .store(inner.is_muted, Ordering::SeqCst);
+        }
+        #[cfg(windows)]
+        {
+            let _ = self
+                .audio_control
+                .set_exclusive_mode(false, AudioFormat::s16(48_000, 2));
+        }
+        self.send_decode(DecodeCommand::SetBitPerfect(false));
+        self.send_decode(DecodeCommand::SetExclusiveMode(false));
+        let rate = self.pipeline.sample_rate.load(Ordering::Relaxed);
+        let status = EngineStatus {
+            output_mode: "WASAPI Shared".into(),
+            bit_perfect: false,
+            is_native: false,
+            output_sample_rate: rate,
+            output_bit_depth: 32,
+            source_label: String::new(),
+        };
+        self.apply_engine_status(status.clone());
+        self.emit_event(AudioEvent::EngineStatusUpdated(status));
+        self.emit_event(AudioEvent::ExclusiveModeChanged {
+            enabled: false,
+            output_mode: "WASAPI Shared".into(),
+            error,
+        });
+    }
+
+    pub fn bit_perfect(&self) -> bool {
+        recover_rw_read(&self.inner).bit_perfect
+    }
+
+    pub fn apply_engine_status(&self, status: EngineStatus) {
+        if status.source_label.is_empty() && status.output_sample_rate == 0 {
+            recover_rw_write(&self.inner).engine_status = None;
+        } else {
+            recover_rw_write(&self.inner).engine_status = Some(status);
+        }
+    }
+
+    pub fn apply_quality_badge(&self, badge: Option<crate::audio::dto::QualityBadge>) {
+        recover_rw_write(&self.inner).quality_badge = badge;
+    }
+
+    pub fn update_active_device(&self, device: AudioDeviceDTO) {
+        recover_rw_write(&self.inner).active_device = Some(device);
     }
 
     fn emit_queue_updated(&self, inner: &InnerPlayerState) {
@@ -567,6 +890,10 @@ impl AudioPlayer {
     }
 
     fn check_and_preload_next(&self) {
+        if self.pipeline.bit_perfect.load(Ordering::Relaxed) {
+            self.send_decode(DecodeCommand::ClearPreload);
+            return;
+        }
         // plan_next (not peek_next) pins the shuffle pick so the preloaded track
         // is the one a later queue.next() actually resolves to.
         let next_track = recover_rw_write(&self.inner).queue.plan_next().cloned();
@@ -598,10 +925,12 @@ impl AudioPlayer {
                 .store(track.duration_ms, Ordering::Relaxed);
         }
         self.pipeline.is_playing.store(true, Ordering::SeqCst);
+        self.audio_control.set_paused(false);
         self.pipeline.position_ms.store(0, Ordering::SeqCst);
         self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
         self.send_decode(DecodeCommand::OpenTrack { track, generation });
         self.check_and_preload_next();
+        #[cfg(not(windows))]
         self.audio_control.ensure_stream()?;
         Ok(())
     }
@@ -612,6 +941,11 @@ impl AudioPlayer {
 
     pub fn underrun_stats(&self) -> (u64, u64) {
         self.pipeline.underrun_stats()
+    }
+
+    #[cfg(windows)]
+    pub fn both_outputs_active_for_test(&self) -> bool {
+        self.audio_control.both_outputs_active()
     }
 }
 

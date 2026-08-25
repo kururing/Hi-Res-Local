@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import { Track } from '../types/library';
-import { PlaybackStatus, PlaybackState, LoopMode } from '../types/audio';
+import { PlaybackStatus, PlaybackState, LoopMode, EngineStatus } from '../types/audio';
 import { IpcService, isTauri } from '../services/ipc';
 import { Storage } from '../services/storage';
 import { useToast } from './ToastContext';
@@ -23,6 +23,7 @@ import {
 
 interface PlayerContextType {
   status: PlaybackStatus;
+  engineStatus: EngineStatus | null;
   queue: Track[];
   queueIndex: number;
   playTrack: (track: Track, newQueue?: Track[]) => Promise<void>;
@@ -84,6 +85,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [queueIndex, setQueueIndex] = useState<number>(-1);
   const [isQueueDrawerOpen, setIsQueueDrawerOpen] = useState<boolean>(false);
   const [isEqualizerOpen, setIsEqualizerOpen] = useState<boolean>(false);
+  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
 
   const queueRef = useRef(queue);
   queueRef.current = queue;
@@ -167,6 +169,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let unlistenState: (() => void) | undefined;
     let unlistenTrack: (() => void) | undefined;
     let unlistenEnded: (() => void) | undefined;
+    let unlistenEngine: (() => void) | undefined;
+    let unlistenExclusive: (() => void) | undefined;
     let disposed = false;
 
     (async () => {
@@ -261,6 +265,54 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return;
       }
       unlistenEnded = disposeEnded;
+
+      const disposeEngine = await IpcService.listen('audio://engine_status', statusPayload => {
+        const empty =
+          !statusPayload?.source_label &&
+          !statusPayload?.output_sample_rate &&
+          !statusPayload?.output_mode;
+        setEngineStatus(empty ? null : statusPayload);
+      });
+      if (disposed) {
+        disposeEngine();
+        return;
+      }
+      unlistenEngine = disposeEngine;
+
+      const disposeExclusive = await IpcService.listen('audio://exclusive_mode', payload => {
+        if (!payload?.enabled) {
+          setEngineStatus(prev =>
+            prev
+              ? { ...prev, output_mode: payload.output_mode || 'WASAPI Shared', bit_perfect: false }
+              : {
+                  output_mode: payload.output_mode || 'WASAPI Shared',
+                  bit_perfect: false,
+                  is_native: false,
+                  output_sample_rate: 0,
+                  output_bit_depth: 0,
+                  source_label: '',
+                }
+          );
+        } else if (payload.output_mode) {
+          setEngineStatus(prev =>
+            prev
+              ? { ...prev, output_mode: payload.output_mode }
+              : {
+                  output_mode: payload.output_mode,
+                  bit_perfect: false,
+                  is_native: false,
+                  output_sample_rate: 0,
+                  output_bit_depth: 0,
+                  source_label: '',
+                }
+          );
+        }
+      });
+      if (disposed) {
+        disposeExclusive();
+        return;
+      }
+      unlistenExclusive = disposeExclusive;
     })();
 
     return () => {
@@ -269,8 +321,45 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (unlistenState) unlistenState();
       if (unlistenTrack) unlistenTrack();
       if (unlistenEnded) unlistenEnded();
+      if (unlistenEngine) unlistenEngine();
+      if (unlistenExclusive) unlistenExclusive();
     };
   }, [persistLastPlayback]);
+
+  // In Bit-Perfect mode the UI mirrors Windows Endpoint Volume. Polling also
+  // catches hardware keys and taskbar changes made outside this application.
+  useEffect(() => {
+    if (!engineStatus?.bit_perfect || !isTauri()) return;
+    let disposed = false;
+
+    const syncEndpointVolume = async () => {
+      try {
+        const endpoint = await IpcService.invoke('get_system_audio_state', {});
+        if (disposed) return;
+        const current = statusRef.current;
+        if (
+          Math.abs(current.volume - endpoint.volume) > 0.0005 ||
+          current.is_muted !== endpoint.is_muted
+        ) {
+          Storage.saveAudioState(endpoint.volume, endpoint.is_muted);
+          setStatus(prev => ({
+            ...prev,
+            volume: endpoint.volume,
+            is_muted: endpoint.is_muted,
+          }));
+        }
+      } catch (error) {
+        console.warn('Failed to sync Windows endpoint volume', error);
+      }
+    };
+
+    void syncEndpointVolume();
+    const intervalId = window.setInterval(() => void syncEndpointVolume(), 400);
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [engineStatus?.bit_perfect]);
 
   const playTrackAtPosition = useCallback(async (track: Track, startPosition = 0, newQueue?: Track[]) => {
     const requestId = ++playRequestIdRef.current;
@@ -592,6 +681,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const playerValue = useMemo<PlayerContextType>(
     () => ({
       status,
+      engineStatus,
       queue,
       queueIndex,
       playTrack,
@@ -619,6 +709,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }),
     [
       status,
+      engineStatus,
       queue,
       queueIndex,
       playTrack,

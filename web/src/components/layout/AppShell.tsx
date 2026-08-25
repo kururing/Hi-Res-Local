@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useCallback, useEffect, useRef } from 'react';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { WindowTitleBar } from './WindowTitleBar';
@@ -8,19 +8,20 @@ import { EqualizerModal } from '../player/EqualizerModal';
 import { TrackDetailsModal } from '../views/TrackDetailsModal';
 
 import { HomeView } from '../views/HomeView';
-import { TracksView } from '../views/TracksView';
-import { AlbumsView } from '../views/AlbumsView';
-import { AlbumDetailView } from '../views/AlbumDetailView';
-import { ArtistsView } from '../views/ArtistsView';
-import { ArtistDetailView } from '../views/ArtistDetailView';
-import { GenresView } from '../views/GenresView';
-import { GenreDetailView } from '../views/GenreDetailView';
-import { FavoritesView } from '../views/FavoritesView';
-import { PlaylistsView } from '../views/PlaylistsView';
-import { PlaylistDetailView } from '../views/PlaylistDetailView';
-import { HistoryView } from '../views/HistoryView';
-import { LyricsView } from '../views/LyricsView';
-import { SettingsView } from '../views/SettingsView';
+
+const TracksView = lazy(() => import('../views/TracksView').then(module => ({ default: module.TracksView })));
+const AlbumsView = lazy(() => import('../views/AlbumsView').then(module => ({ default: module.AlbumsView })));
+const AlbumDetailView = lazy(() => import('../views/AlbumDetailView').then(module => ({ default: module.AlbumDetailView })));
+const ArtistsView = lazy(() => import('../views/ArtistsView').then(module => ({ default: module.ArtistsView })));
+const ArtistDetailView = lazy(() => import('../views/ArtistDetailView').then(module => ({ default: module.ArtistDetailView })));
+const GenresView = lazy(() => import('../views/GenresView').then(module => ({ default: module.GenresView })));
+const GenreDetailView = lazy(() => import('../views/GenreDetailView').then(module => ({ default: module.GenreDetailView })));
+const FavoritesView = lazy(() => import('../views/FavoritesView').then(module => ({ default: module.FavoritesView })));
+const PlaylistsView = lazy(() => import('../views/PlaylistsView').then(module => ({ default: module.PlaylistsView })));
+const PlaylistDetailView = lazy(() => import('../views/PlaylistDetailView').then(module => ({ default: module.PlaylistDetailView })));
+const HistoryView = lazy(() => import('../views/HistoryView').then(module => ({ default: module.HistoryView })));
+const LyricsView = lazy(() => import('../views/LyricsView').then(module => ({ default: module.LyricsView })));
+const SettingsView = lazy(() => import('../views/SettingsView').then(module => ({ default: module.SettingsView })));
 
 import { Album, Artist, Genre, Track } from '../../types/library';
 import { Playlist } from '../../types/playlist';
@@ -32,6 +33,7 @@ interface HistoryEntry {
 }
 
 export const AppShell: React.FC = () => {
+  const mainRef = useRef<HTMLElement>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([{ view: 'home' }]);
   const [historyIndex, setHistoryIndex] = useState(0);
 
@@ -77,6 +79,11 @@ export const AppShell: React.FC = () => {
   const currentEntry = history[historyIndex] || { view: 'home' };
   const currentView = currentEntry.view;
   const currentPayload = currentEntry.payload;
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => mainRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [currentView]);
 
   const navigate = useCallback((view: string, payload?: unknown) => {
     setHistory(prev => {
@@ -192,6 +199,7 @@ export const AppShell: React.FC = () => {
 
         {/* Scrollable View Content */}
         <main
+          ref={mainRef}
           id="main-content"
           tabIndex={-1}
           className={`app-main min-h-0 flex-1 focus:outline-none ${
@@ -202,7 +210,15 @@ export const AppShell: React.FC = () => {
             key={currentView}
             className={`view-stage ${currentView === 'lyrics' ? 'h-full min-h-0' : 'min-h-full'}`}
           >
-            {renderCurrentView()}
+            <Suspense
+              fallback={(
+                <div className="flex min-h-[240px] items-center justify-center text-sm text-brand-muted" role="status">
+                  Loading view…
+                </div>
+              )}
+            >
+              {renderCurrentView()}
+            </Suspense>
           </div>
         </main>
 

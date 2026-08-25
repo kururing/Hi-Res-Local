@@ -45,7 +45,7 @@ pub fn fuzzy_search_all(
             }
         })
         .collect();
-    scored_tracks.sort_by(|a, b| b.0.cmp(&a.0));
+    scored_tracks.sort_by_key(|item| std::cmp::Reverse(item.0));
     let matched_tracks = scored_tracks
         .into_iter()
         .take(limit_per_category)
@@ -67,7 +67,7 @@ pub fn fuzzy_search_all(
             }
         })
         .collect();
-    scored_albums.sort_by(|a, b| b.0.cmp(&a.0));
+    scored_albums.sort_by_key(|item| std::cmp::Reverse(item.0));
     let matched_albums = scored_albums
         .into_iter()
         .take(limit_per_category)
@@ -87,7 +87,7 @@ pub fn fuzzy_search_all(
             }
         })
         .collect();
-    scored_artists.sort_by(|a, b| b.0.cmp(&a.0));
+    scored_artists.sort_by_key(|item| std::cmp::Reverse(item.0));
     let matched_artists = scored_artists
         .into_iter()
         .take(limit_per_category)
@@ -107,7 +107,7 @@ pub fn fuzzy_search_all(
             }
         })
         .collect();
-    scored_genres.sort_by(|a, b| b.0.cmp(&a.0));
+    scored_genres.sort_by_key(|item| std::cmp::Reverse(item.0));
     let matched_genres = scored_genres
         .into_iter()
         .take(limit_per_category)
@@ -127,7 +127,7 @@ pub fn fuzzy_search_all(
             }
         })
         .collect();
-    scored_playlists.sort_by(|a, b| b.0.cmp(&a.0));
+    scored_playlists.sort_by_key(|item| std::cmp::Reverse(item.0));
     let matched_playlists = scored_playlists
         .into_iter()
         .take(limit_per_category)

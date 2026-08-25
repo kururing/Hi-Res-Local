@@ -11,6 +11,7 @@ interface SliderProps {
   showTooltip?: boolean;
   formatTooltip?: (value: number) => string;
   compact?: boolean;
+  disabled?: boolean;
 }
 
 export const Slider: React.FC<SliderProps> = ({
@@ -22,12 +23,13 @@ export const Slider: React.FC<SliderProps> = ({
   ariaLabel = 'Seek Slider',
   className = '',
   compact = false,
+  disabled = false,
 }) => {
   const percentage = max > min ? Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100)) : 0;
   const sliderRef = useRef<HTMLDivElement>(null);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!sliderRef.current) return;
+    if (disabled || !sliderRef.current) return;
     const rect = sliderRef.current.getBoundingClientRect();
     const calculateValue = (clientX: number) => {
       const offsetX = Math.max(0, Math.min(clientX - rect.left, rect.width));
@@ -53,6 +55,7 @@ export const Slider: React.FC<SliderProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
     if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
       e.preventDefault();
       onChange(Math.min(max, value + (step || 1)));
@@ -72,14 +75,15 @@ export const Slider: React.FC<SliderProps> = ({
     <div
       ref={sliderRef}
       role="slider"
-      tabIndex={0}
+      tabIndex={disabled ? -1 : 0}
       aria-label={ariaLabel}
       aria-valuemin={min}
       aria-valuemax={max}
       aria-valuenow={value}
+      aria-disabled={disabled}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
-      className={`group relative ${compact ? 'min-h-9' : 'min-h-[44px]'} flex items-center cursor-pointer touch-none select-none rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/70 ${className}`}
+      className={`group relative ${compact ? 'min-h-9' : 'min-h-[44px]'} flex items-center ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'} touch-none select-none rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/70 ${className}`}
     >
       {/* Background Track */}
       <div className="w-full h-1.5 bg-oled-base/80 border border-brand-border/50 rounded-full relative overflow-hidden transition-all duration-150 group-hover:h-2">

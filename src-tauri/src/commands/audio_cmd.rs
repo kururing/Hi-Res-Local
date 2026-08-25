@@ -6,7 +6,7 @@ use tauri::{AppHandle, State};
 use crate::audio::adapters::ExclusiveAudioAdapter;
 use crate::audio::dto::{
     AudioDeviceDTO, AudioTrack, CrossfadeConfig, CrossfadeCurve, EqConfig, EqPreset,
-    PlayerSnapshot, RepeatMode, ReplayGainConfig, ReplayGainMode,
+    PlayerSnapshot, RepeatMode, ReplayGainConfig, ReplayGainMode, SystemAudioState,
 };
 use crate::db::queries_tracks::{
     get_track_by_id as db_get_track_by_id, get_tracks_summary as db_get_tracks_summary,
@@ -224,6 +224,16 @@ pub async fn toggle_mute(state: State<'_, AppState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub async fn get_system_audio_state(
+    state: State<'_, AppState>,
+) -> Result<SystemAudioState, String> {
+    state
+        .player
+        .get_system_audio_state()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn set_loop_mode(mode: String, state: State<'_, AppState>) -> Result<(), String> {
     let repeat = match mode.to_lowercase().as_str() {
         "track" | "one" => RepeatMode::One,
@@ -287,14 +297,41 @@ pub async fn set_audio_output_device(
 
 #[tauri::command]
 pub async fn set_bit_perfect(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
-    let mut adapter = crate::sync_util::recover_mutex(&state.exclusive_adapter);
-    adapter.set_exclusive(enabled).map_err(|e| e.to_string())
+    state
+        .player
+        .set_bit_perfect(enabled)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_exclusive_mode(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    // Keep the adapter flag in sync for capability/legacy readers, but Exclusive
+    // I/O is owned exclusively by the Player / WASAPI control plane.
+    {
+        let mut adapter = crate::sync_util::recover_mutex(&state.exclusive_adapter);
+        let _ = adapter.set_exclusive(enabled);
+    }
+    state
+        .player
+        .set_exclusive_mode(enabled)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_audio_capabilities(
     state: State<'_, AppState>,
 ) -> Result<AudioCapabilitiesDTO, String> {
+    #[cfg(windows)]
+    let excl = {
+        use crate::audio::wasapi::{FormatNegotiator, WasapiDeviceManager};
+        let _ = &state;
+        let mgr = WasapiDeviceManager::new();
+        match mgr.get_active_device() {
+            Ok(device) => FormatNegotiator::exclusive_supported(&device),
+            Err(_) => false,
+        }
+    };
+    #[cfg(not(windows))]
     let excl = crate::sync_util::recover_mutex(&state.exclusive_adapter).is_supported();
     let smtc = false; // Fallback adapter reports honest capability (no fake SMTC)
     Ok(AudioCapabilitiesDTO {

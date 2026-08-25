@@ -18,7 +18,6 @@ import { usePlayer, usePlaybackProgress } from '../../context/PlayerContext';
 import { useLibrary } from '../../context/LibraryContext';
 import { useSettings } from '../../context/SettingsContext';
 import { Slider } from '../common/Slider';
-import { Badge } from '../common/Badge';
 import { TrackArtwork } from '../common/TrackArtwork';
 import { t } from '../../i18n';
 
@@ -64,6 +63,7 @@ PlayerSeekBar.displayName = 'PlayerSeekBar';
 export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onNavigateNowPlaying }) => {
   const {
     status,
+    engineStatus,
     togglePlayPause,
     prev,
     next,
@@ -84,6 +84,15 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
 
   const track = status.current_track;
   const isFav = track ? favoriteTrackIds.has(track.id) : false;
+  const bitDepth = track?.bit_depth ?? track?.bits_per_sample ?? engineStatus?.output_bit_depth;
+  const sampleRate = track?.sample_rate ?? engineStatus?.output_sample_rate;
+  const sampleRateLabel = sampleRate && sampleRate > 0
+    ? `${Number((sampleRate / 1000).toFixed(1))} kHz`
+    : null;
+  const qualityLabel = [
+    bitDepth && bitDepth > 0 ? `${bitDepth}-bit` : null,
+    sampleRateLabel,
+  ].filter(Boolean).join(' / ');
 
   const cycleLoopMode = () => {
     if (status.loop_mode === 'off') setLoopMode('playlist');
@@ -100,10 +109,13 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
       {/* Left: Track Details */}
       <div className="player-track flex min-w-0 items-center gap-3.5">
         {/* Cover Art */}
-        <div
+        <button
+          type="button"
           onClick={() => track && onNavigateNowPlaying?.()}
-          className="player-artwork relative w-14 h-14 rounded-lg bg-brand-accent/12 border border-brand-accent/30 overflow-hidden flex items-center justify-center shrink-0 cursor-pointer group shadow-sm"
+          disabled={!track}
+          className="player-artwork relative w-14 h-14 rounded-lg bg-brand-accent/12 border border-brand-accent/30 overflow-hidden flex items-center justify-center shrink-0 cursor-pointer group shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:cursor-default"
           title={track ? 'Expand Now Playing' : 'No track loaded'}
+          aria-label={track ? `Open now playing: ${track.title}` : 'No track loaded'}
         >
           <TrackArtwork
             track={track}
@@ -113,26 +125,35 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
             <Disc3 className="w-4 h-4 text-white" />
           </div>
-        </div>
+        </button>
 
         {/* Title & Artist & Badge */}
         <div className="flex flex-col min-w-0 pr-2">
           {track ? (
             <>
               <div className="flex items-center gap-2">
-                <span
+                <button
+                  type="button"
                   onClick={() => onNavigateNowPlaying?.()}
-                  className="font-medium text-sm text-brand-foreground truncate cursor-pointer hover:underline hover:text-brand-accent transition-colors"
+                  className="font-medium text-sm text-brand-foreground truncate cursor-pointer text-left hover:underline hover:text-brand-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                   title={track.title}
                 >
                   {track.title}
-                </span>
+                </button>
               </div>
               <span className="text-xs text-brand-muted truncate" title={track.artist}>
                 {track.artist}
               </span>
-              <div className="mt-1 flex items-center gap-1.5">
-                <Badge track={track} />
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                {qualityLabel && (
+                  <span
+                    className="inline-flex items-center whitespace-nowrap rounded-md border border-cyan-400 bg-cyan-100 px-1.5 py-0.5 text-[10px] font-bold text-cyan-950 shadow-sm"
+                    title={qualityLabel}
+                    aria-label={`Audio quality: ${qualityLabel}`}
+                  >
+                    {qualityLabel}
+                  </span>
+                )}
               </div>
             </>
           ) : (
@@ -282,9 +303,10 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
         {/* Volume Mute Toggle */}
         <button
           onClick={toggleMute}
-          className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
+          className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none disabled:opacity-40 disabled:pointer-events-none"
           aria-label={status.is_muted ? t('player_unmute', settings.language) : t('player_mute', settings.language)}
           aria-pressed={status.is_muted}
+          title={engineStatus?.bit_perfect ? 'Đồng bộ với âm lượng thiết bị Windows' : undefined}
         >
           {status.is_muted || status.volume === 0 ? (
             <VolumeX className="w-4 h-4 text-rose-400" aria-hidden="true" />

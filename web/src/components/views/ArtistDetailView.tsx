@@ -190,18 +190,24 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
           {artist.albums.map(album => (
             <div
               key={album.id}
-              onClick={() => onNavigate('album_detail', album)}
-              className="group p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col shadow-card-elevated"
+              className="group relative p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col shadow-card-elevated"
             >
+              <button
+                type="button"
+                onClick={() => onNavigate('album_detail', album)}
+                aria-label={`Open album ${album.name}`}
+                className="absolute inset-0 z-10 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+              />
               <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
                 <Disc className="w-14 h-14 text-brand-accent/40 group-hover:rotate-90 transition-transform duration-700" aria-hidden="true" />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <button
+                    type="button"
                     onClick={e => {
                       e.stopPropagation();
                       playQueue(album.tracks, 0);
                     }}
-                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-105 transition-transform focus-visible:outline-none"
+                    className="relative z-20 w-11 h-11 min-h-[44px] min-w-[44px] rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-105 transition-transform focus-visible:outline-none"
                     aria-label={`Play ${album.name}`}
                   >
                     <Play className="w-5 h-5 fill-oled-base ml-0.5" aria-hidden="true" />

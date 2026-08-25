@@ -56,9 +56,7 @@ pub fn clean_filename_fallback(path: &Path) -> String {
     if let Some(pos) = stem.find(|c: char| !c.is_ascii_digit()) {
         if pos > 0 && pos <= 4 {
             let rest = &stem[pos..];
-            let rest_trimmed = rest
-                .trim_start_matches(|c: char| c == '-' || c == '.' || c == '_' || c == ' ')
-                .trim();
+            let rest_trimmed = rest.trim_start_matches(['-', '.', '_', ' ']).trim();
             if !rest_trimmed.is_empty() {
                 cleaned = rest_trimmed;
             }

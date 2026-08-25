@@ -194,14 +194,15 @@ export const Header: React.FC<HeaderProps> = ({
                     </span>
                     <div className="space-y-0.5">
                       {matchedTracks.map(tr => (
-                        <div
+                        <button
+                          type="button"
                           key={tr.id}
                           onClick={() => {
                             playTrack(tr);
                             setIsDropdownOpen(false);
                             setIsSearchOpen(false);
                           }}
-                          className="flex items-center justify-between p-2 rounded-lg hover:bg-oled-hover cursor-pointer transition-colors"
+                          className="flex w-full items-center justify-between p-2 rounded-lg text-left hover:bg-oled-hover cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
                             <Music className="w-4 h-4 text-brand-accent shrink-0" aria-hidden="true" />
@@ -214,7 +215,7 @@ export const Header: React.FC<HeaderProps> = ({
                               </span>
                             </div>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>
@@ -228,14 +229,15 @@ export const Header: React.FC<HeaderProps> = ({
                     </span>
                     <div className="space-y-0.5">
                       {matchedAlbums.map(al => (
-                        <div
+                        <button
+                          type="button"
                           key={al.id}
                           onClick={() => {
                             onNavigate('album_detail', al);
                             setIsDropdownOpen(false);
                             setIsSearchOpen(false);
                           }}
-                          className="flex items-center gap-2.5 p-2 rounded-lg hover:bg-oled-hover cursor-pointer transition-colors"
+                          className="flex w-full items-center gap-2.5 p-2 rounded-lg text-left hover:bg-oled-hover cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                         >
                           <Disc className="w-4 h-4 text-brand-accent shrink-0" aria-hidden="true" />
                           <div className="flex flex-col min-w-0">
@@ -246,7 +248,7 @@ export const Header: React.FC<HeaderProps> = ({
                               {al.artist}
                             </span>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>
@@ -260,20 +262,21 @@ export const Header: React.FC<HeaderProps> = ({
                     </span>
                     <div className="space-y-0.5">
                       {matchedArtists.map(ar => (
-                        <div
+                        <button
+                          type="button"
                           key={ar.id}
                           onClick={() => {
                             onNavigate('artist_detail', ar);
                             setIsDropdownOpen(false);
                             setIsSearchOpen(false);
                           }}
-                          className="flex items-center gap-2.5 p-2 rounded-lg hover:bg-oled-hover cursor-pointer transition-colors"
+                          className="flex w-full items-center gap-2.5 p-2 rounded-lg text-left hover:bg-oled-hover cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                         >
                           <User className="w-4 h-4 text-brand-muted shrink-0" aria-hidden="true" />
                           <span className="text-xs font-medium text-brand-foreground truncate">
                             {ar.name}
                           </span>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>

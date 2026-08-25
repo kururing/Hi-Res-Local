@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PlaybackState {
+    #[default]
     Stopped,
     Playing,
     Paused,
@@ -10,27 +12,17 @@ pub enum PlaybackState {
     Ended,
 }
 
-impl Default for PlaybackState {
-    fn default() -> Self {
-        Self::Stopped
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum RepeatMode {
+    #[default]
     Off,
     One,
     All,
 }
 
-impl Default for RepeatMode {
-    fn default() -> Self {
-        Self::Off
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ReplayGainInfo {
     pub track_gain_db: Option<f32>,
     pub track_peak: Option<f32>,
@@ -38,29 +30,14 @@ pub struct ReplayGainInfo {
     pub album_peak: Option<f32>,
 }
 
-impl Default for ReplayGainInfo {
-    fn default() -> Self {
-        Self {
-            track_gain_db: None,
-            track_peak: None,
-            album_gain_db: None,
-            album_peak: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ReplayGainMode {
     Off,
+    #[default]
     Track,
     Album,
-}
-
-impl Default for ReplayGainMode {
-    fn default() -> Self {
-        Self::Track
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,7 +93,9 @@ impl QualityBadge {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum EqPreset {
+    #[default]
     Flat,
     BassBoost,
     TrebleBoost,
@@ -128,12 +107,6 @@ pub enum EqPreset {
     Classical,
     Acoustic,
     Custom,
-}
-
-impl Default for EqPreset {
-    fn default() -> Self {
-        Self::Flat
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -208,15 +181,11 @@ impl EqConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CrossfadeCurve {
     Linear,
+    #[default]
     EqualPower,
-}
-
-impl Default for CrossfadeCurve {
-    fn default() -> Self {
-        Self::EqualPower
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -266,6 +235,22 @@ impl Default for PlaybackProgress {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineStatus {
+    pub output_mode: String,
+    pub bit_perfect: bool,
+    pub is_native: bool,
+    pub output_sample_rate: u32,
+    pub output_bit_depth: u32,
+    pub source_label: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SystemAudioState {
+    pub volume: f32,
+    pub is_muted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerSnapshot {
     pub state: PlaybackState,
     pub current_track: Option<AudioTrack>,
@@ -281,6 +266,8 @@ pub struct PlayerSnapshot {
     pub crossfade: CrossfadeConfig,
     pub replay_gain: ReplayGainConfig,
     pub output_device: Option<AudioDeviceDTO>,
+    pub engine_status: Option<EngineStatus>,
+    pub bit_perfect: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,6 +290,12 @@ pub enum AudioEvent {
     RepeatModeChanged(RepeatMode),
     ShuffleChanged(bool),
     QualityUpdated(Option<QualityBadge>),
+    EngineStatusUpdated(EngineStatus),
+    ExclusiveModeChanged {
+        enabled: bool,
+        output_mode: String,
+        error: Option<String>,
+    },
     DeviceLost(String),
     ErrorOccurred(String),
 }

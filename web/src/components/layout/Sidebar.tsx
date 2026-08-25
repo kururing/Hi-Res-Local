@@ -74,9 +74,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
       {/* Top: Branding & Navigation */}
       <div className="flex flex-col p-4 gap-6">
         {/* Brand */}
-        <div
+        <button
+          type="button"
           onClick={() => onNavigate('home')}
-          className="flex items-center gap-3 px-2 cursor-pointer group rounded-2xl"
+          className="flex min-h-[44px] items-center gap-3 px-2 cursor-pointer group rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+          aria-label="Go to home"
         >
           <div className="brand-orb w-10 h-10 rounded-2xl flex items-center justify-center group-hover:scale-105 transition-transform duration-300">
             <Music2 className="w-5 h-5 text-brand-accent" aria-hidden="true" />
@@ -89,7 +91,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
               Hi-Res Audio
             </span>
           </div>
-        </div>
+        </button>
 
         {/* Main Navigation */}
         <nav className="flex flex-col gap-1" aria-label="Main Navigation">

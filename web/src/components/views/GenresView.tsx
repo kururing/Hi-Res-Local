@@ -3,6 +3,7 @@ import { Radio, Music2 } from 'lucide-react';
 import { useLibrary } from '../../context/LibraryContext';
 import { useSettings } from '../../context/SettingsContext';
 import { t } from '../../i18n';
+import { activateOnKeyboard } from '../../services/keyboard';
 
 interface GenresViewProps {
   onNavigate: (view: string, payload?: unknown) => void;
@@ -30,7 +31,11 @@ export const GenresView: React.FC<GenresViewProps> = ({ onNavigate }) => {
           <div
             key={genre.name}
             onClick={() => onNavigate('genre_detail', genre)}
-            className={`group p-5 rounded-2xl bg-gradient-to-br ${genre.color_gradient} border border-white/10 hover:border-white/30 cursor-pointer transition-all duration-300 transform hover:-translate-y-1 hover:shadow-card-elevated flex flex-col justify-between h-36 relative overflow-hidden`}
+            onKeyDown={event => activateOnKeyboard(event, () => onNavigate('genre_detail', genre))}
+            role="button"
+            tabIndex={0}
+            aria-label={`Open genre ${genre.name}`}
+            className={`group p-5 rounded-2xl bg-gradient-to-br ${genre.color_gradient} border border-white/10 hover:border-white/30 cursor-pointer transition-all duration-300 transform hover:-translate-y-1 hover:shadow-card-elevated flex flex-col justify-between h-36 relative overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent`}
           >
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-white/80 uppercase tracking-wider">

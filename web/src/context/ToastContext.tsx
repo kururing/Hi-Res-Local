@@ -39,6 +39,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         className="fixed bottom-24 right-6 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full"
         role="region"
         aria-label="Notifications"
+        aria-live="polite"
       >
         {toasts.map(toast => (
           <div
@@ -52,17 +53,17 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             }`}
           >
             <div className="flex items-center gap-3">
-              {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />}
-              {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />}
-              {toast.type === 'info' && <Info className="w-5 h-5 text-indigo-400 shrink-0" />}
+              {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" aria-hidden="true" />}
+              {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" aria-hidden="true" />}
+              {toast.type === 'info' && <Info className="w-5 h-5 text-indigo-400 shrink-0" aria-hidden="true" />}
               <span className="text-sm font-medium leading-snug">{toast.text}</span>
             </div>
             <button
               onClick={() => removeToast(toast.id)}
-              className="p-1 hover:bg-brand-accent/10 rounded-md text-brand-muted hover:text-brand-foreground transition-colors"
+              className="min-h-[44px] min-w-[44px] flex items-center justify-center hover:bg-brand-accent/10 rounded-md text-brand-muted hover:text-brand-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               aria-label="Close notification"
             >
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
         ))}

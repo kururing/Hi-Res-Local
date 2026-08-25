@@ -1,1 +1,7 @@
 /target
+
+# Vendored FFmpeg binaries (run scripts/fetch-ffmpeg-windows.ps1)
+/vendor/ffmpeg/bin/
+/vendor/ffmpeg/lib/
+/vendor/ffmpeg/include/
+/vendor/llvm-bindgen/

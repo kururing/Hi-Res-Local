@@ -29,6 +29,21 @@ export interface AudioCapabilities {
   equalizer_supported: boolean;
 }
 
+/** Live exclusive-engine status from the Rust WASAPI path. */
+export interface EngineStatus {
+  output_mode: string;
+  bit_perfect: boolean;
+  is_native: boolean;
+  output_sample_rate: number;
+  output_bit_depth: number;
+  source_label: string;
+}
+
+export interface SystemAudioState {
+  volume: number;
+  is_muted: boolean;
+}
+
 export interface EqualizerBand {
   frequency: number; // e.g. 31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000
   label: string; // e.g. "31Hz", "1kHz"

@@ -254,7 +254,7 @@ pub fn get_album_detail(
         .into_iter()
         .find(|a| {
             a.title.eq_ignore_ascii_case(album_title)
-                && artist_name.map_or(true, |art| {
+                && artist_name.is_none_or(|art| {
                     a.artist.eq_ignore_ascii_case(art)
                         || a.album_artist
                             .as_deref()

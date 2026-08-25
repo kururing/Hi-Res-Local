@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { X, Trash2, ArrowUp, ArrowDown, Save, Music2 } from 'lucide-react';
 import { usePlayer } from '../../context/PlayerContext';
 import { usePlaylists } from '../../context/PlaylistContext';
@@ -7,6 +7,7 @@ import { t } from '../../i18n';
 import { VirtualList } from '../common/VirtualList';
 
 export const QueueDrawer: React.FC = () => {
+  const drawerRef = useRef<HTMLDivElement>(null);
   const {
     queue,
     queueIndex,
@@ -33,6 +34,40 @@ export const QueueDrawer: React.FC = () => {
     originalIndex: queueStartIndex + visibleIndex,
   }));
 
+  useEffect(() => {
+    if (!isQueueDrawerOpen) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setIsQueueDrawerOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab' || !drawerRef.current) return;
+      const focusable = Array.from(
+        drawerRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    requestAnimationFrame(() => drawerRef.current?.querySelector<HTMLElement>('button')?.focus());
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      previous?.focus();
+    };
+  }, [isQueueDrawerOpen, setIsQueueDrawerOpen]);
+
   if (!isQueueDrawerOpen) return null;
 
   const handleSaveQueueAsPlaylist = async () => {
@@ -44,6 +79,7 @@ export const QueueDrawer: React.FC = () => {
 
   return (
     <div
+      ref={drawerRef}
       role="dialog"
       aria-modal="true"
       aria-label={t('queue_title', settings.language)}
@@ -116,9 +152,11 @@ export const QueueDrawer: React.FC = () => {
                       : 'bg-oled-base/40 border-brand-border/40 hover:bg-oled-hover'
                   }`}
                 >
-                  <div
+                  <button
+                    type="button"
                     onClick={() => void playQueue(queue, originalIndex)}
-                    className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer pr-2"
+                    className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer pr-2 text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                    aria-label={`Play ${track.title} by ${track.artist}`}
                   >
                     <div className="w-8 h-8 rounded bg-brand-primary/80 border border-brand-border flex items-center justify-center shrink-0">
                       {isPlaying ? (
@@ -139,7 +177,7 @@ export const QueueDrawer: React.FC = () => {
                       </span>
                       <span className="text-xs text-brand-muted truncate">{track.artist}</span>
                     </div>
-                  </div>
+                  </button>
                   <div className="flex items-center gap-0.5 shrink-0">
                     <button
                       disabled={isPlaying || idx <= 1}

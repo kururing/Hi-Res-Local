@@ -130,9 +130,7 @@ impl StandardAudioAdapter {
 
 impl ExclusiveAudioAdapter for StandardAudioAdapter {
     fn is_supported(&self) -> bool {
-        // CPAL's current output path is shared-mode. Report the real capability
-        // instead of presenting an in-memory flag as WASAPI Exclusive.
-        false
+        cfg!(windows)
     }
 
     fn set_exclusive(&mut self, enabled: bool) -> AudioResult<()> {

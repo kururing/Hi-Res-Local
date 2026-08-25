@@ -18,11 +18,12 @@ const env = {
   TMPDIR: tmp,
 };
 
-const child = spawn('npx', ['tauri', ...process.argv.slice(2)], {
+const tauriCli = path.join(root, 'node_modules', '@tauri-apps', 'cli', 'tauri.js');
+const child = spawn(process.execPath, [tauriCli, ...process.argv.slice(2)], {
   cwd: root,
   env,
   stdio: 'inherit',
-  shell: true,
+  shell: false,
 });
 
 child.on('exit', (code, signal) => {
