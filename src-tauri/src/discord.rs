@@ -54,7 +54,7 @@ impl DiscordPresence {
             .as_mut()
             .ok_or_else(|| "Discord Rich Presence is unavailable".to_string())?;
 
-        match now_playing {
+        let update_result = match now_playing {
             Some(track) => {
                 let title = discord_text(&track.title);
                 let artist = discord_text(&track.artist);
@@ -74,7 +74,15 @@ impl DiscordPresence {
             None => connected
                 .clear_activity()
                 .map_err(|error| format!("Could not clear Discord activity: {error}")),
+        };
+
+        if update_result.is_err() {
+            if let Some(mut disconnected) = client.take() {
+                let _ = disconnected.close();
+            }
         }
+
+        update_result
     }
 }
 

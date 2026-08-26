@@ -99,18 +99,18 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
   };
 
   return (
-    <div className="p-6 md:p-8 space-y-8 max-w-7xl mx-auto w-full select-none">
+    <div className="view-page mx-auto w-full max-w-7xl space-y-8 p-6 select-none md:p-8">
       {/* Back Button */}
       <button
         onClick={() => onNavigate('playlists')}
-        className="inline-flex items-center gap-2 text-xs font-semibold text-brand-muted hover:text-brand-foreground transition-colors focus-visible:outline-none"
+        className="inline-flex items-center gap-2 text-xs font-semibold text-brand-muted transition-colors hover:text-brand-foreground focus-visible:outline-none"
       >
         <ArrowLeft className="w-4 h-4" />
         <span>Back to Playlists</span>
       </button>
 
       {/* Playlist Header Banner */}
-      <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-brand-primary/60 to-oled-card border border-brand-border shadow-card-elevated">
+      <div className="flex flex-col items-center gap-6 rounded-2xl border border-brand-border bg-gradient-to-r from-brand-primary via-brand-primary/60 to-oled-card p-6 shadow-card-elevated sm:flex-row sm:items-end">
         <div className="w-40 h-40 sm:w-48 sm:h-48 rounded-2xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
           {playlist.is_smart ? (
             <Sparkles className="w-20 h-20 text-amber-400" />
@@ -199,7 +199,6 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
           items={playlistTracks}
           rowHeight={68}
           className="rounded-xl border border-brand-border bg-oled-card/60"
-          style={{ maxHeight: 650 }}
           getKey={(tr, idx) => `${tr.id}-${idx}`}
           renderRow={(tr, idx) => {
             const isPlaying = status.current_track?.id === tr.id;

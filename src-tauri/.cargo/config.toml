@@ -1,8 +1,0 @@
-[build]
-target-dir = "D:\\App\\nghenhacpromax\\src-tauri\\target"
-
-[env]
-# Used by ffmpeg-sys-next build script (must be absolute or relative to workspace).
-FFMPEG_DIR = { value = "vendor/ffmpeg", relative = true }
-# Portable libclang for bindgen on Windows (vendored next to FFmpeg).
-LIBCLANG_PATH = { value = "vendor/llvm-bindgen", relative = true }

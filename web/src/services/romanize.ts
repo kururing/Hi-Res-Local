@@ -16,6 +16,14 @@ interface JapaneseRomanizer {
 let japaneseRomanizerPromise: Promise<JapaneseRomanizer> | undefined;
 let universalTransliteratorPromise: Promise<typeof import('any-ascii').default> | undefined;
 
+export const japaneseDictionaryPath = (basePath: string): string => {
+  const normalizedBase = basePath.startsWith('/') ? basePath : `/${basePath}`;
+  return `${normalizedBase.replace(/\/?$/u, '/')}kuromoji-dict/`;
+};
+
+export const japaneseDictionaryPathFromBaseUri = (baseUri: string): string =>
+  japaneseDictionaryPath(new URL('.', baseUri).pathname);
+
 const getJapaneseRomanizer = async (): Promise<JapaneseRomanizer> => {
   if (!japaneseRomanizerPromise) {
     japaneseRomanizerPromise = Promise.all([
@@ -25,10 +33,14 @@ const getJapaneseRomanizer = async (): Promise<JapaneseRomanizer> => {
       const converter = new Kuroshiro();
       const dictPath = typeof document === 'undefined'
         ? undefined
-        : new URL('kuromoji-dict/', document.baseURI).href;
+        : japaneseDictionaryPathFromBaseUri(document.baseURI);
       const analyzer = new KuromojiAnalyzer({ dictPath });
       await converter.init(analyzer);
       return { converter, analyzer };
+    }).catch(error => {
+      // Allow a later attempt after a transient asset-loading failure.
+      japaneseRomanizerPromise = undefined;
+      throw error;
     });
   }
   return japaneseRomanizerPromise;

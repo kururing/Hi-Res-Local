@@ -444,8 +444,20 @@ body {
 }
 
 .view-stage {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
   animation: view-enter 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
   transform-origin: 50% 20%;
+}
+
+.view-page {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .view-stage section[class*='bg-oled-card'],

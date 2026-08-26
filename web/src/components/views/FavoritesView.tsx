@@ -47,9 +47,9 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
   }, [artists, favoriteArtistNames]);
 
   return (
-    <div className="p-6 md:p-8 space-y-6 max-w-7xl mx-auto w-full select-none">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-6 p-6 select-none md:p-8">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex shrink-0 flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold font-display text-brand-foreground flex items-center gap-2.5">
             <Heart className="w-6 h-6 text-rose-500 fill-rose-500" />
@@ -73,7 +73,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
       </div>
 
       {/* Sub Tabs */}
-      <div className="flex items-center gap-2 border-b border-brand-border/60 pb-3">
+      <div className="flex shrink-0 items-center gap-2 border-b border-brand-border/60 pb-3">
         <button
           onClick={() => setActiveTab('tracks')}
           className={`min-h-[44px] px-4 py-2 rounded-lg text-xs font-semibold transition-colors focus-visible:outline-none ${
@@ -113,7 +113,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
 
       {/* Tab Contents */}
       {activeTab === 'tracks' && (
-        <div>
+        <div className="min-h-0 flex-1">
           {favTracks.length === 0 ? (
             <div className="p-12 text-center text-brand-muted">
               {t('empty_favorites_desc', settings.language)}
@@ -122,8 +122,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
             <VirtualList
               items={favTracks}
               rowHeight={64}
-              className="rounded-xl border border-brand-border bg-oled-card/60"
-              style={{ maxHeight: 650 }}
+              className="h-full min-h-0 rounded-xl border border-brand-border bg-oled-card/60"
               getKey={item => item.id}
               renderRow={(tr, idx) => {
                 const isPlaying = status.current_track?.id === tr.id;
@@ -173,7 +172,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
       )}
 
       {activeTab === 'albums' && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
+        <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-5 overflow-y-auto overscroll-contain sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {favAlbums.length === 0 ? (
             <div className="col-span-full p-12 text-center text-brand-muted">
               {t('empty_favorites_desc', settings.language)}
@@ -203,7 +202,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
       )}
 
       {activeTab === 'artists' && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
+        <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-5 overflow-y-auto overscroll-contain sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {favArtists.length === 0 ? (
             <div className="col-span-full p-12 text-center text-brand-muted">
               {t('empty_favorites_desc', settings.language)}

@@ -45,7 +45,7 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
   };
 
   return (
-    <div className="p-6 md:p-8 space-y-6 max-w-7xl mx-auto w-full select-none">
+    <div className="view-page mx-auto w-full max-w-7xl space-y-6 p-6 select-none md:p-8">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold font-display text-brand-foreground">

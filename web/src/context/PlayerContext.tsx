@@ -59,6 +59,7 @@ const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
 const PlaybackProgressContext = createContext<PlaybackProgressValue>({ position: 0, duration: 0 });
 
 const LAST_PLAYBACK_SAVE_MS = 2000;
+const DISCORD_RECONNECT_INTERVAL_MS = 15_000;
 
 // In the Tauri desktop shell the Rust backend owns the queue: next/previous,
 // weighted shuffle, gapless preloading and auto-advance all happen there.
@@ -102,20 +103,31 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const lastSyncedQueueRef = useRef<Track[] | null>(null);
 
   useEffect(() => {
-    const track = status.current_track;
-    const activity = track && status.state === 'playing'
-      ? {
-          title: track.title,
-          artist: track.artist,
-          position_secs: progressRef.current.position,
-          duration_secs: progressRef.current.duration || status.duration || track.duration,
-        }
-      : null;
+    const syncDiscordActivity = () => {
+      const track = status.current_track;
+      const activity = track && status.state === 'playing'
+        ? {
+            title: track.title,
+            artist: track.artist,
+            position_secs: progressRef.current.position,
+            duration_secs: progressRef.current.duration || status.duration || track.duration,
+          }
+        : null;
 
-    void IpcService.invoke('set_discord_presence', {
-      enabled: settings.discord_presence_enabled,
-      activity,
-    }).catch(error => console.warn('Failed to sync Discord activity', error));
+      void IpcService.invoke('set_discord_presence', {
+        enabled: settings.discord_presence_enabled,
+        activity,
+      }).catch(error => console.warn('Failed to sync Discord activity', error));
+    };
+
+    syncDiscordActivity();
+    if (!settings.discord_presence_enabled) return;
+
+    const reconnectTimer = window.setInterval(
+      syncDiscordActivity,
+      DISCORD_RECONNECT_INTERVAL_MS
+    );
+    return () => window.clearInterval(reconnectTimer);
   }, [
     settings.discord_presence_enabled,
     status.current_track,

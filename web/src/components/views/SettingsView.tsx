@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { useSettings } from '../../context/SettingsContext';
 import { useLibrary } from '../../context/LibraryContext';
-import { usePlaybackProgress, usePlayer } from '../../context/PlayerContext';
+import { usePlayer } from '../../context/PlayerContext';
 import { useToast } from '../../context/ToastContext';
 import { Button } from '../common/Button';
 import { Storage } from '../../services/storage';
@@ -218,15 +218,13 @@ export const SettingsView: React.FC = () => {
   } = useSettings();
 
   const { scanDirectory, scanProgress } = useLibrary();
-  const { status, setIsEqualizerOpen, engineStatus } = usePlayer();
-  const playbackProgress = usePlaybackProgress();
+  const { setIsEqualizerOpen, engineStatus } = usePlayer();
   const { showToast } = useToast();
 
   const [outputDevices, setOutputDevices] = useState<AudioOutputDevice[]>([]);
   const [audioCapabilities, setAudioCapabilities] = useState<AudioCapabilities | null>(null);
   const [isUpdatingAudio, setIsUpdatingAudio] = useState(false);
   const [isUpdatingStartup, setIsUpdatingStartup] = useState(false);
-  const [isUpdatingDiscord, setIsUpdatingDiscord] = useState(false);
   const [isCreatingTheme, setIsCreatingTheme] = useState(false);
   const themeImageInputRef = useRef<HTMLInputElement>(null);
 
@@ -437,32 +435,12 @@ export const SettingsView: React.FC = () => {
     }
   };
 
-  const handleDiscordPresenceChange = async (enabled: boolean) => {
-    setIsUpdatingDiscord(true);
-    try {
-      const track = status.current_track;
-      await IpcService.invoke('set_discord_presence', {
-        enabled,
-        activity: track && status.state === 'playing'
-          ? {
-              title: track.title,
-              artist: track.artist,
-              position_secs: playbackProgress.position,
-              duration_secs: playbackProgress.duration || status.duration || track.duration,
-            }
-          : null,
-      });
-      updateSettings({ discord_presence_enabled: enabled });
-      showToast(
-        t(enabled ? 'toast_discord_enabled' : 'toast_discord_disabled', settings.language),
-        'success'
-      );
-    } catch (error) {
-      console.error('Failed to update Discord activity', error);
-      showToast(t('toast_discord_update_failed', settings.language), 'error');
-    } finally {
-      setIsUpdatingDiscord(false);
-    }
+  const handleDiscordPresenceChange = (enabled: boolean) => {
+    updateSettings({ discord_presence_enabled: enabled });
+    showToast(
+      t(enabled ? 'toast_discord_enabled' : 'toast_discord_disabled', settings.language),
+      'success'
+    );
   };
 
   const handleExportBackup = () => {
@@ -497,7 +475,7 @@ export const SettingsView: React.FC = () => {
   };
 
   return (
-    <div className="p-6 md:p-8 space-y-8 max-w-4xl mx-auto w-full select-none pb-20">
+    <div className="view-page mx-auto w-full max-w-4xl space-y-8 p-6 select-none md:p-8">
       {/* Title */}
       <div>
         <h1 className="text-2xl sm:text-3xl font-bold font-display text-brand-foreground">
@@ -802,8 +780,6 @@ export const SettingsView: React.FC = () => {
           />
           <SettingsSwitch
             checked={settings.discord_presence_enabled}
-            disabled={isUpdatingDiscord}
-            loading={isUpdatingDiscord}
             label={t('settings_discord_presence', settings.language)}
             description={t('settings_discord_presence_desc', settings.language)}
             onChange={handleDiscordPresenceChange}

@@ -31,7 +31,7 @@ export const GenreDetailView: React.FC<GenreDetailViewProps> = ({
   }, [tracks, genre.name]);
 
   return (
-    <div className="p-6 md:p-8 space-y-8 max-w-7xl mx-auto w-full select-none">
+    <div className="view-page mx-auto w-full max-w-7xl space-y-8 p-6 select-none md:p-8">
       <button
         onClick={() => onNavigate('genres')}
         className="inline-flex items-center gap-2 text-xs font-semibold text-brand-muted hover:text-brand-foreground transition-colors focus-visible:outline-none"

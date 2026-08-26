@@ -3,6 +3,8 @@ import {
   containsNonLatinLetters,
   createRomanizedLrc,
   createRomanizedLrcAsync,
+  japaneseDictionaryPath,
+  japaneseDictionaryPathFromBaseUri,
   romanizeText,
   romanizeTextAsync,
 } from '../services/romanize';
@@ -35,6 +37,16 @@ describe('local romanization', () => {
         is_synced: true,
       })
     ).toBeNull();
+  });
+
+  it('keeps the browser dictionary path origin-relative', () => {
+    expect(japaneseDictionaryPath('/')).toBe('/kuromoji-dict/');
+    expect(japaneseDictionaryPath('/music-player/')).toBe('/music-player/kuromoji-dict/');
+    expect(japaneseDictionaryPath('music-player')).toBe('/music-player/kuromoji-dict/');
+    expect(japaneseDictionaryPathFromBaseUri('http://localhost:1420/index.html'))
+      .toBe('/kuromoji-dict/');
+    expect(japaneseDictionaryPathFromBaseUri('tauri://localhost/music-player/index.html'))
+      .toBe('/music-player/kuromoji-dict/');
   });
 
   it('romanizes Japanese kana and kanji without leaving mixed scripts', async () => {

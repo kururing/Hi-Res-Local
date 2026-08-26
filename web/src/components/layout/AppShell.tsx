@@ -202,14 +202,9 @@ export const AppShell: React.FC = () => {
           ref={mainRef}
           id="main-content"
           tabIndex={-1}
-          className={`app-main min-h-0 flex-1 focus:outline-none ${
-            currentView === 'lyrics' ? 'overflow-hidden' : 'overflow-y-auto'
-          }`}
+          className="app-main min-h-0 flex-1 overflow-hidden focus:outline-none"
         >
-          <div
-            key={currentView}
-            className={`view-stage ${currentView === 'lyrics' ? 'h-full min-h-0' : 'min-h-full'}`}
-          >
+          <div key={currentView} className="view-stage">
             <Suspense
               fallback={(
                 <div className="flex min-h-[240px] items-center justify-center text-sm text-brand-muted" role="status">

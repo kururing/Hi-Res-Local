@@ -47,7 +47,7 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
   const isFav = favoriteArtistNames.has(artist.name);
 
   return (
-    <div className="p-6 md:p-8 space-y-8 max-w-7xl mx-auto w-full select-none">
+    <div className="view-page mx-auto w-full max-w-7xl space-y-8 p-6 select-none md:p-8">
       {/* Back Button */}
       <button
         onClick={() => onNavigate('artists')}

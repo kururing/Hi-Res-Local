@@ -262,7 +262,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
   };
 
   return (
-    <div className="p-6 md:p-8 space-y-6 max-w-7xl mx-auto w-full select-none">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-6 p-6 select-none md:p-8">
       {/* Header Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -323,7 +323,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
           </Button>
         </div>
       ) : (
-        <div className="rounded-2xl border border-brand-border bg-oled-card/95 backdrop-blur-xl overflow-hidden shadow-card-elevated">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-brand-border bg-oled-card/95 shadow-card-elevated backdrop-blur-xl">
           {/* Table Header */}
           <div className="tracks-table-grid grid gap-3 px-4 py-3.5 bg-oled-card border-b border-brand-border text-xs font-bold text-brand-muted uppercase tracking-wider items-center whitespace-nowrap">
             <div className="text-center">#</div>
@@ -369,8 +369,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
           <VirtualList
             items={sortedTracks}
             rowHeight={TRACK_ROW_HEIGHT}
-            className="divide-y divide-brand-border/45 max-h-[650px] bg-oled-card"
-            style={{ maxHeight: 650 }}
+            className="min-h-0 flex-1 divide-y divide-brand-border/45 bg-oled-card"
             getKey={item => item.id}
             renderRow={(tr, index) => (
               <TrackRow

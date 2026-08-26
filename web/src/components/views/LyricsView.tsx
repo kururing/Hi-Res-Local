@@ -161,9 +161,9 @@ export const LyricsView: React.FC = () => {
   useEffect(() => setIsFollowingLyrics(true), [track?.id]);
 
   return (
-    <div className="min-h-0 min-w-0 h-full overflow-x-hidden px-5 md:px-7 pt-4 max-w-7xl mx-auto w-full flex gap-6 xl:gap-10 select-none">
+    <div className="mx-auto flex h-full min-h-0 min-w-0 w-full max-w-7xl gap-6 overflow-x-hidden px-5 pt-4 select-none md:px-7 xl:gap-10">
       {track && (
-        <aside className="hidden lg:flex w-52 xl:w-60 shrink-0 flex-col items-center justify-center pb-20 text-center">
+        <aside className="hidden w-64 shrink-0 flex-col items-center justify-center text-center lg:flex xl:w-72">
           <div className="relative aspect-square w-full overflow-hidden rounded-2xl border border-brand-border/60 bg-oled-card/45 shadow-card-elevated">
             <TrackArtwork
               track={track}
@@ -194,14 +194,14 @@ export const LyricsView: React.FC = () => {
           </div>
         </aside>
       )}
-      <div className="min-w-0 flex-1 relative overflow-hidden flex flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex items-center justify-center pb-2 shrink-0 gap-3 flex-wrap">
             {/* Accessible Segmented Selector for Lyrics Mode with role=group and aria-pressed */}
             {hasRomanized && hasOriginal && (
               <div
                 role="group"
                 aria-label={t('lyrics_mode_aria', settings.language)}
-                className="flex items-center p-1 bg-oled-hover border border-brand-border rounded-xl"
+                className="flex items-center rounded-xl border border-brand-border/50 bg-oled-card/35 p-1 shadow-sm backdrop-blur-xl"
               >
                 <button
                   type="button"
@@ -209,8 +209,8 @@ export const LyricsView: React.FC = () => {
                   onClick={() => selectLyricsMode('original')}
                   className={`min-h-[44px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:outline-none ${
                     lyricsMode === 'original'
-                      ? 'bg-brand-accent text-oled-base shadow-sm'
-                      : 'text-brand-foreground/75 hover:text-brand-foreground hover:bg-oled-card/60'
+                      ? 'bg-brand-accent/30 text-brand-foreground shadow-sm ring-1 ring-inset ring-brand-accent/45'
+                      : 'text-brand-foreground/70 hover:bg-oled-card/35 hover:text-brand-foreground'
                   }`}
                 >
                   {t('lyrics_mode_original', settings.language)}
@@ -221,8 +221,8 @@ export const LyricsView: React.FC = () => {
                   onClick={() => selectLyricsMode('romanized')}
                   className={`min-h-[44px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:outline-none ${
                     lyricsMode === 'romanized'
-                      ? 'bg-brand-accent text-oled-base shadow-sm'
-                      : 'text-brand-foreground/75 hover:text-brand-foreground hover:bg-oled-card/60'
+                      ? 'bg-brand-accent/30 text-brand-foreground shadow-sm ring-1 ring-inset ring-brand-accent/45'
+                      : 'text-brand-foreground/70 hover:bg-oled-card/35 hover:text-brand-foreground'
                   }`}
                 >
                   {t('lyrics_mode_romanized', settings.language)}
@@ -233,8 +233,8 @@ export const LyricsView: React.FC = () => {
                   onClick={() => selectLyricsMode('both')}
                   className={`min-h-[44px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:outline-none ${
                     lyricsMode === 'both'
-                      ? 'bg-brand-accent text-oled-base shadow-sm'
-                      : 'text-brand-foreground/75 hover:text-brand-foreground hover:bg-oled-card/60'
+                      ? 'bg-brand-accent/30 text-brand-foreground shadow-sm ring-1 ring-inset ring-brand-accent/45'
+                      : 'text-brand-foreground/70 hover:bg-oled-card/35 hover:text-brand-foreground'
                   }`}
                 >
                   {t('lyrics_mode_both', settings.language)}
@@ -250,7 +250,7 @@ export const LyricsView: React.FC = () => {
           onWheel={() => setIsFollowingLyrics(false)}
           onTouchStart={() => setIsFollowingLyrics(false)}
           onPointerDown={() => setIsFollowingLyrics(false)}
-          className="relative min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-2 space-y-4 py-8 text-center scroll-smooth"
+          className="relative min-h-0 min-w-0 flex-1 space-y-2 overflow-x-hidden overflow-y-auto overscroll-contain py-8 pr-2 text-left scroll-smooth"
         >
           {loading ? (
             <div className="h-full flex items-center justify-center text-brand-muted text-sm animate-pulse">
@@ -273,10 +273,10 @@ export const LyricsView: React.FC = () => {
                   key={idx}
                   type="button"
                   onClick={() => seek(line.timestamp)}
-                  className="group flex min-h-[52px] w-full cursor-pointer items-center justify-center px-3 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                  className="group mx-auto flex min-h-[52px] w-full max-w-3xl cursor-pointer items-center justify-start px-3 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                 >
                   <span
-                    className={`inline-flex max-w-full flex-col items-center gap-1 rounded-[1.6rem] px-5 py-3 transition-[color,background-color,box-shadow,transform] duration-300 sm:px-8 ${
+                    className={`inline-flex max-w-full flex-col items-start gap-1 rounded-[1.6rem] px-5 py-3 text-left transition-[color,background-color,box-shadow,transform] duration-300 sm:px-8 ${
                       isActive
                         ? 'scale-[1.015] bg-gradient-to-r from-transparent via-brand-accent/15 to-transparent shadow-[0_10px_30px_rgba(0,0,0,0.12)]'
                         : 'group-hover:bg-oled-hover/35'
@@ -285,8 +285,8 @@ export const LyricsView: React.FC = () => {
                     <span
                       className={`transition-colors duration-200 ${
                         isActive
-                          ? 'text-brand-foreground font-bold text-2xl sm:text-3xl'
-                          : 'text-brand-foreground/72 group-hover:text-brand-foreground text-base sm:text-lg'
+                          ? 'text-3xl font-bold text-brand-foreground sm:text-4xl'
+                          : 'text-xl text-brand-foreground/72 group-hover:text-brand-foreground sm:text-2xl'
                       }`}
                     >
                       {capitalizeFirstLetter(line.text)}
@@ -295,8 +295,8 @@ export const LyricsView: React.FC = () => {
                       <span
                         className={`transition-colors duration-200 ${
                           isActive
-                            ? 'text-brand-foreground/85 font-semibold text-base sm:text-lg'
-                            : 'text-brand-foreground/60 text-xs sm:text-sm'
+                            ? 'text-lg font-semibold text-brand-foreground/85 sm:text-xl'
+                            : 'text-base text-brand-foreground/60 sm:text-lg'
                         }`}
                       >
                         {capitalizeFirstLetter(line.romanized ?? '')}
@@ -309,14 +309,14 @@ export const LyricsView: React.FC = () => {
           ) : (lyricsData?.plain_text && lyricsData.plain_text.trim().length > 0) ||
             (lyricsData?.romanized?.plain_text && lyricsData.romanized.plain_text.trim().length > 0) ? (
             /* Plain Text Fallback */
-            <div className="space-y-4 max-w-2xl mx-auto text-left py-6 px-4">
+            <div className="mx-auto max-w-3xl space-y-4 px-4 py-6 text-left">
               {lyricsMode !== 'romanized' && lyricsData?.plain_text && (
-                <div className="whitespace-pre-line text-brand-foreground text-sm sm:text-base leading-relaxed p-4">
+                <div className="whitespace-pre-line p-4 text-lg leading-relaxed text-brand-foreground sm:text-xl">
                   {capitalizeLyricsText(lyricsData.plain_text)}
                 </div>
               )}
               {lyricsMode !== 'original' && lyricsData?.romanized?.plain_text && (
-                <div className="whitespace-pre-line text-brand-foreground text-sm sm:text-base leading-relaxed p-4">
+                <div className="whitespace-pre-line p-4 text-lg leading-relaxed text-brand-foreground sm:text-xl">
                   {capitalizeLyricsText(lyricsData.romanized.plain_text)}
                 </div>
               )}

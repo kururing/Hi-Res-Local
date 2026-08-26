@@ -54,7 +54,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
 
 
   return (
-    <div className="p-6 md:p-8 space-y-8 max-w-7xl mx-auto w-full select-none">
+    <div className="view-page mx-auto w-full max-w-7xl space-y-8 p-6 select-none md:p-8">
       {/* Header Greeting Banner */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-2xl bg-gradient-to-r from-brand-accent/16 via-oled-card to-brand-secondary/12 border border-brand-border shadow-card-elevated backdrop-blur-xl">
         <div className="flex flex-col gap-1">

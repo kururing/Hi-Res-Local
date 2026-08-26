@@ -16,7 +16,7 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({ onNavigate }) => {
   const { settings } = useSettings();
 
   return (
-    <div className="p-6 md:p-8 space-y-6 max-w-7xl mx-auto w-full select-none">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-6 p-6 select-none md:p-8">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold font-display text-brand-foreground">
@@ -36,7 +36,7 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({ onNavigate }) => {
           minColumnWidth={170}
           gap={20}
           getRowHeight={colWidth => colWidth + 66}
-          className="max-h-[75vh]"
+          className="min-h-0 flex-1"
           getKey={album => album.id}
           renderItem={album => (
             <div

@@ -55,8 +55,8 @@ export function VirtualList<T>({
   return (
     <div
       ref={parentRef}
-      className={className}
-      style={{ overflowY: 'auto', ...style }}
+      className={['overflow-y-auto overscroll-contain', className].filter(Boolean).join(' ')}
+      style={style}
       onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
     >
       <div style={{ height: totalHeight, position: 'relative' }}>
