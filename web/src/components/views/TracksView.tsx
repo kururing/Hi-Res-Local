@@ -15,6 +15,7 @@ import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { ContextMenu, ContextMenuState } from '../common/ContextMenu';
 import { VirtualList } from '../common/VirtualList';
+import { TrackPlayArtwork } from '../common/TrackPlayArtwork';
 import { Track } from '../../types/library';
 import { t } from '../../i18n';
 
@@ -29,7 +30,6 @@ const TRACK_ROW_HEIGHT = 68;
 
 const TrackRow = React.memo(function TrackRow({
   tr,
-  index,
   isPlaying,
   isFav,
   onPlay,
@@ -37,9 +37,9 @@ const TrackRow = React.memo(function TrackRow({
   onContextMenu,
   onOpenArtist,
   onOpenAlbum,
+  language,
 }: {
   tr: Track;
-  index: number;
   isPlaying: boolean;
   isFav: boolean;
   onPlay: (track: Track) => void;
@@ -47,6 +47,7 @@ const TrackRow = React.memo(function TrackRow({
   onContextMenu: (e: React.MouseEvent, track: Track) => void;
   onOpenArtist: (track: Track) => void;
   onOpenAlbum: (track: Track) => void;
+  language: 'vi' | 'en';
 }) {
   return (
     <div
@@ -58,24 +59,8 @@ const TrackRow = React.memo(function TrackRow({
           : 'bg-oled-card hover:bg-oled-hover text-brand-foreground'
       }`}
     >
-      <div className="text-center font-mono flex items-center justify-center">
-        <button
-          onClick={e => {
-            e.stopPropagation();
-            onPlay(tr);
-          }}
-          className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base focus-visible:outline-none"
-          aria-label={`Play ${tr.title}`}
-        >
-          {isPlaying ? (
-            <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
-          ) : (
-            <>
-              <span className="group-hover:hidden text-brand-muted">{index + 1}</span>
-              <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" aria-hidden="true" />
-            </>
-          )}
-        </button>
+      <div className="flex items-center justify-center">
+        <TrackPlayArtwork track={tr} isPlaying={isPlaying} onPlay={() => onPlay(tr)} />
       </div>
 
       <div className="flex flex-col min-w-0 pr-2">
@@ -141,7 +126,7 @@ const TrackRow = React.memo(function TrackRow({
             onContextMenu(e, tr);
           }}
           className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-brand-foreground hover:bg-brand-accent/10 opacity-0 group-hover:opacity-100 focus-visible:outline-none"
-          aria-label="More actions"
+          aria-label={t('aria_more_actions', language)}
         >
           <MoreVertical className="w-4 h-4" aria-hidden="true" />
         </button>
@@ -159,7 +144,7 @@ interface TracksViewProps {
 
 export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetails }) => {
   const { tracks, albums, artists, toggleFavoriteTrack, favoriteTrackIds, scanDirectory } = useLibrary();
-  const { playTrack, playQueue, status } = usePlayer();
+  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
   const { settings } = useSettings();
 
   const [sortKey, setSortKey] = useState<SortKey>('date_added');
@@ -270,7 +255,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
             {t('tracks_title', settings.language)}
           </h1>
           <span className="text-xs text-brand-muted">
-            {tracks.length} tracks in library
+            {t('tracks_library_count', settings.language, { count: tracks.length })}
           </span>
         </div>
 
@@ -289,8 +274,8 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
               size="md"
               icon={<Shuffle className="w-4 h-4" />}
               onClick={() => {
-                const shuffled = [...sortedTracks].sort(() => Math.random() - 0.5);
-                playQueue(shuffled, 0);
+                if (!status.shuffle) void toggleShuffle();
+                playQueue(sortedTracks, 0);
               }}
             >
               {t('tracks_shuffle_all', settings.language)}
@@ -326,12 +311,14 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-brand-border bg-oled-card/95 shadow-card-elevated backdrop-blur-xl">
           {/* Table Header */}
           <div className="tracks-table-grid grid gap-3 px-4 py-3.5 bg-oled-card border-b border-brand-border text-xs font-bold text-brand-muted uppercase tracking-wider items-center whitespace-nowrap">
-            <div className="text-center">#</div>
+            <div className="flex items-center justify-center" aria-label="Artwork">
+              <Music2 className="h-4 w-4" aria-hidden="true" />
+            </div>
             <button
               type="button"
               className="flex items-center gap-1.5 cursor-pointer text-left hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               onClick={() => handleSort('title')}
-              aria-label="Sort tracks by title"
+              aria-label={t('aria_sort_tracks_title', settings.language)}
             >
               <span>{t('col_title', settings.language)}</span>
               <ArrowUpDown className="w-3 h-3" />
@@ -340,7 +327,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
               type="button"
               className="hidden sm:block cursor-pointer text-left hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               onClick={() => handleSort('artist')}
-              aria-label="Sort tracks by artist"
+              aria-label={t('aria_sort_tracks_artist', settings.language)}
             >
               <span>{t('col_artist', settings.language)}</span>
             </button>
@@ -348,7 +335,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
               type="button"
               className="hidden md:block cursor-pointer text-left hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               onClick={() => handleSort('album')}
-              aria-label="Sort tracks by album"
+              aria-label={t('aria_sort_tracks_album', settings.language)}
             >
               <span>{t('col_album', settings.language)}</span>
             </button>
@@ -359,7 +346,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
               type="button"
               className="grid grid-cols-[44px_minmax(44px,auto)_44px] items-center cursor-pointer hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               onClick={() => handleSort('duration')}
-              aria-label="Sort tracks by duration"
+              aria-label={t('aria_sort_tracks_duration', settings.language)}
             >
               <span className="col-start-2 text-center">{t('col_duration', settings.language)}</span>
             </button>
@@ -371,10 +358,9 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
             rowHeight={TRACK_ROW_HEIGHT}
             className="min-h-0 flex-1 divide-y divide-brand-border/45 bg-oled-card"
             getKey={item => item.id}
-            renderRow={(tr, index) => (
+            renderRow={tr => (
               <TrackRow
                 tr={tr}
-                index={index}
                 isPlaying={status.current_track?.id === tr.id}
                 isFav={favoriteTrackIds.has(tr.id)}
                 onPlay={track => playTrack(track, sortedTracks)}
@@ -382,6 +368,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
                 onContextMenu={handleContextMenu}
                 onOpenArtist={openArtistDetails}
                 onOpenAlbum={openAlbumDetails}
+                language={settings.language}
               />
             )}
           />

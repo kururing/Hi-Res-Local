@@ -259,6 +259,10 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       targetPath = picked;
     }
 
+    await IpcService.invoke('add_library_root', {
+      path: targetPath,
+      name: targetPath.split(/[\\/]/).filter(Boolean).pop() || targetPath,
+    });
     addMusicFolder(targetPath);
     setScanProgress({
       total_files: 0,

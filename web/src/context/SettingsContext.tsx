@@ -1,9 +1,10 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { AppSettings, DEFAULT_SETTINGS, AppLanguage, AppTheme, isWasapiExclusiveMode, withWasapiExclusiveMode } from '../types/settings';
 import { Storage } from '../services/storage';
 import { IpcService, isTauri } from '../services/ipc';
 import { EqualizerPreset } from '../types/audio';
 import { getAppFontOption } from '../services/fonts';
+import { getImageThemeBorderColor } from '../services/imageTheme';
 
 export const DEFAULT_EQ_PRESETS: EqualizerPreset[] = [
   { id: 'flat', name: 'Flat / Neutral', gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
@@ -35,6 +36,19 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [settings, setSettings] = useState<AppSettings>(() => Storage.getSettings());
   const [customEqPresets, setCustomEqPresets] = useState<EqualizerPreset[]>(() => Storage.getCustomEqPresets());
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    void IpcService.invoke('get_library_roots').then(roots => {
+      const folders = roots.filter(root => root.is_active).map(root => root.path);
+      setSettings(previous => {
+        if (JSON.stringify(previous.music_folders) === JSON.stringify(folders)) return previous;
+        const next = { ...previous, music_folders: folders };
+        Storage.saveSettings(next);
+        return next;
+      });
+    }).catch(error => console.warn('Failed to load library folders', error));
+  }, []);
+
   // Apply Theme to DOM
   useEffect(() => {
     const root = document.documentElement;
@@ -43,7 +57,6 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       '--color-oled-base', '--color-oled-card', '--color-oled-hover', '--color-oled-active',
       '--color-primary', '--color-secondary', '--color-accent', '--color-accent-hover',
       '--color-foreground', '--color-muted', '--color-border', '--custom-theme-image',
-      '--custom-theme-blur',
     ];
     customProperties.forEach(property => root.style.removeProperty(property));
 
@@ -61,9 +74,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         '--color-accent-hover': theme.colors.accent_hover,
         '--color-foreground': theme.colors.foreground,
         '--color-muted': theme.colors.muted,
-        '--color-border': theme.colors.border,
+        '--color-border': getImageThemeBorderColor(theme),
         '--custom-theme-image': `url("${theme.image_data_url}")`,
-        '--custom-theme-blur': settings.custom_theme_blur ? `${settings.custom_theme_blur_percent * 0.6}px` : '0px',
       };
       Object.entries(colorProperties).forEach(([property, value]) => root.style.setProperty(property, value));
     } else if (settings.theme === 'light') {
@@ -75,7 +87,16 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } else {
       root.classList.add('dark'); // OLED
     }
-  }, [settings.theme, settings.custom_image_theme, settings.custom_theme_blur, settings.custom_theme_blur_percent]);
+  }, [settings.theme, settings.custom_image_theme]);
+
+  // Blur is shared by custom-image and now-playing artwork themes. Keep this
+  // isolated so moving the slider never reapplies or swaps the background image.
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--custom-theme-blur',
+      settings.custom_theme_blur ? `${settings.custom_theme_blur_percent * 0.6}px` : '0px'
+    );
+  }, [settings.custom_theme_blur, settings.custom_theme_blur_percent]);
 
   // Apply the persisted typography choice without requiring an app restart.
   useEffect(() => {
@@ -128,7 +149,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     void (async () => {
       try {
         await IpcService.invoke('set_audio_output_device', {
-          device_id: settings.output_device || 'default',
+          deviceId: settings.output_device || 'default',
         });
 
         const wantExclusive = isWasapiExclusiveMode(settings);
@@ -196,13 +217,13 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const allPresets = [...DEFAULT_EQ_PRESETS, ...customEqPresets];
 
-  const updateSettings = (partial: Partial<AppSettings>) => {
+  const updateSettings = useCallback((partial: Partial<AppSettings>) => {
     setSettings(prev => {
       const next = { ...prev, ...partial };
       Storage.saveSettings(next);
       return next;
     });
-  };
+  }, []);
 
   const setLanguage = (language: AppLanguage) => {
     updateSettings({ language });
@@ -251,6 +272,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const removeMusicFolder = (folder: string) => {
+    void IpcService.invoke('remove_library_root_by_path', { path: folder })
+      .catch(error => console.warn('Failed to remove library folder', error));
     updateSettings({
       music_folders: settings.music_folders.filter(f => f !== folder),
     });

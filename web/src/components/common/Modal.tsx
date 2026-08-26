@@ -1,5 +1,8 @@
 import React, { useEffect, useId, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useSettings } from '../../context/SettingsContext';
+import { t } from '../../i18n';
 
 interface ModalProps {
   isOpen: boolean;
@@ -16,6 +19,7 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   maxWidth = 'md',
 }) => {
+  const { settings } = useSettings();
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
@@ -78,7 +82,7 @@ export const Modal: React.FC<ModalProps> = ({
     '2xl': 'max-w-2xl',
   };
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn"
     >
@@ -94,17 +98,17 @@ export const Modal: React.FC<ModalProps> = ({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`soft-modal relative w-full ${maxWidthClasses[maxWidth]} bg-oled-card border border-white/70 rounded-[28px] shadow-card-elevated overflow-hidden z-10 flex flex-col max-h-[90vh]`}
+        className={`soft-modal relative w-full ${maxWidthClasses[maxWidth]} bg-oled-card border border-brand-border/80 rounded-[28px] shadow-card-elevated overflow-hidden z-10 flex flex-col max-h-[90vh]`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-brand-border/60">
-          <h3 id={titleId} className="text-lg font-semibold text-brand-foreground font-display">
+          <h3 id={titleId} className="min-w-0 text-lg font-semibold text-brand-foreground font-display whitespace-normal">
             {title}
           </h3>
           <button
             onClick={onClose}
             className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
-            aria-label="Close dialog"
+            aria-label={t('aria_close_dialog', settings.language)}
           >
             <X className="w-5 h-5" aria-hidden="true" />
           </button>
@@ -115,6 +119,7 @@ export const Modal: React.FC<ModalProps> = ({
           {children}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

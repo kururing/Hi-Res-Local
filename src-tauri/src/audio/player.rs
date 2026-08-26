@@ -258,6 +258,25 @@ impl AudioPlayer {
         self.start_playback_for_current()
     }
 
+    /// Replace queue order without restarting the currently playing track.
+    pub fn queue_replace(&self, tracks: Vec<AudioTrack>, current_index: usize) -> AudioResult<()> {
+        if tracks.is_empty() {
+            return Err(AudioError::QueueEmpty);
+        }
+        {
+            let mut inner = recover_rw_write(&self.inner);
+            inner.queue.clear();
+            inner.queue.add_tracks(tracks);
+            let last_index = inner.queue.len() - 1;
+            inner
+                .queue
+                .set_current_index(current_index.min(last_index))?;
+            self.emit_queue_updated(&inner);
+        }
+        self.check_and_preload_next();
+        Ok(())
+    }
+
     /// Called when the decode thread gaplessly moved to the preloaded track:
     /// advance the queue index to match and preload the following track.
     pub fn handle_track_transitioned(&self, track: &AudioTrack) {
@@ -451,7 +470,7 @@ impl AudioPlayer {
             let mut inner = recover_rw_write(&self.inner);
             inner.volume = volume;
             inner.is_muted = is_muted;
-            return Ok(SystemAudioState { volume, is_muted });
+            Ok(SystemAudioState { volume, is_muted })
         }
         #[cfg(not(windows))]
         {
@@ -810,10 +829,11 @@ impl AudioPlayer {
             self.pipeline.is_playing.store(false, Ordering::SeqCst);
             self.audio_control.set_paused(true);
         }
-        self.send_decode(DecodeCommand::OpenTrack { track, generation });
-        if position_ms > 0 {
-            self.pipeline.request_seek(position_ms, generation);
-        }
+        self.send_decode(DecodeCommand::OpenTrack {
+            track,
+            generation,
+            start_position_ms: position_ms,
+        });
         self.check_and_preload_next();
         Ok(())
     }
@@ -928,7 +948,11 @@ impl AudioPlayer {
         self.audio_control.set_paused(false);
         self.pipeline.position_ms.store(0, Ordering::SeqCst);
         self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
-        self.send_decode(DecodeCommand::OpenTrack { track, generation });
+        self.send_decode(DecodeCommand::OpenTrack {
+            track,
+            generation,
+            start_position_ms: 0,
+        });
         self.check_and_preload_next();
         #[cfg(not(windows))]
         self.audio_control.ensure_stream()?;

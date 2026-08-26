@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Music2 } from 'lucide-react';
 import { Track } from '../../types/library';
 import { isTauri } from '../../services/ipc';
+import { getCachedArtwork } from '../../services/remoteArtwork';
 
 interface TrackArtworkProps {
   track: Track | null;
@@ -27,7 +28,7 @@ export const TrackArtwork: React.FC<TrackArtworkProps> = ({
     setFailed(false);
 
     if (!path) {
-      setSource(null);
+      setSource(track ? getCachedArtwork('album', track.artist, track.album) : null);
     } else if (/^(data:|blob:|https?:\/\/)/i.test(path)) {
       setSource(path);
     } else if (isTauri()) {
@@ -41,7 +42,7 @@ export const TrackArtwork: React.FC<TrackArtworkProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [track?.cover_art_path]);
+  }, [track?.id, track?.cover_art_path, track?.artist, track?.album]);
 
   return (
     <div className={`overflow-hidden flex items-center justify-center ${className}`}>

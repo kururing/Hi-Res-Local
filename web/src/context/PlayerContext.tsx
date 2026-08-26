@@ -10,6 +10,7 @@ import React, {
 import { Track } from '../types/library';
 import { PlaybackStatus, PlaybackState, LoopMode, EngineStatus } from '../types/audio';
 import { IpcService, isTauri } from '../services/ipc';
+import { getArtworkUrlForDiscord } from '../services/remoteArtwork';
 import { Storage } from '../services/storage';
 import { useToast } from './ToastContext';
 import { t } from '../i18n';
@@ -101,33 +102,46 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // another track from the same (unchanged) queue we only jump the index
   // instead of re-sending the whole track list over IPC.
   const lastSyncedQueueRef = useRef<Track[] | null>(null);
+  // Keep the user's original playlist separate from the temporary shuffle order.
+  const baseQueueRef = useRef<Track[]>([]);
+  const shuffleQueueRef = useRef<Track[] | null>(null);
 
   useEffect(() => {
-    const syncDiscordActivity = () => {
+    let cancelled = false;
+    const syncDiscordActivity = async () => {
+      if (!settings.discord_presence_enabled) {
+        await IpcService.invoke('set_discord_presence', { enabled: false, activity: null });
+        return;
+      }
       const track = status.current_track;
+      const artworkUrl = track && status.state === 'playing'
+        ? await getArtworkUrlForDiscord(track.artist, track.album)
+        : null;
       const activity = track && status.state === 'playing'
         ? {
             title: track.title,
             artist: track.artist,
             position_secs: progressRef.current.position,
             duration_secs: progressRef.current.duration || status.duration || track.duration,
+            artwork_url: artworkUrl,
           }
         : null;
 
+      if (cancelled) return;
       void IpcService.invoke('set_discord_presence', {
-        enabled: settings.discord_presence_enabled,
+        enabled: true,
         activity,
       }).catch(error => console.warn('Failed to sync Discord activity', error));
     };
 
     syncDiscordActivity();
-    if (!settings.discord_presence_enabled) return;
+    if (!settings.discord_presence_enabled) return () => { cancelled = true; };
 
     const reconnectTimer = window.setInterval(
       syncDiscordActivity,
       DISCORD_RECONNECT_INTERVAL_MS
     );
-    return () => window.clearInterval(reconnectTimer);
+    return () => { cancelled = true; window.clearInterval(reconnectTimer); };
   }, [
     settings.discord_presence_enabled,
     status.current_track,
@@ -157,6 +171,24 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     Storage.saveLastPlayback(trackId, position);
   }, []);
 
+  // Persist immediately when the Tauri window is closed, so reopening the app
+  // can resume from the most recent position even if the periodic save has not
+  // fired yet.
+  useEffect(() => {
+    const saveBeforeClose = () => {
+      const track = statusRef.current.current_track;
+      if (track) {
+        Storage.saveLastPlayback(track.id, progressRef.current.position);
+      }
+    };
+    window.addEventListener('beforeunload', saveBeforeClose);
+    window.addEventListener('pagehide', saveBeforeClose);
+    return () => {
+      window.removeEventListener('beforeunload', saveBeforeClose);
+      window.removeEventListener('pagehide', saveBeforeClose);
+    };
+  }, []);
+
   useEffect(() => {
     if (hasRestoredPlaybackRef.current || isLibraryLoading) return;
     hasRestoredPlaybackRef.current = true;
@@ -164,6 +196,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const restored = restoreLastPlayback(tracks, Storage.getLastPlayback());
     if (!restored) return;
 
+    baseQueueRef.current = [...tracks];
     setQueue(tracks);
     setQueueIndex(restored.queueIndex);
     setStatus(prev => ({
@@ -376,6 +409,18 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const playTrackAtPosition = useCallback(async (track: Track, startPosition = 0, newQueue?: Track[]) => {
     const requestId = ++playRequestIdRef.current;
     let activeQueue = newQueue || queueRef.current;
+    if (newQueue) {
+      baseQueueRef.current = [...newQueue];
+      if (statusRef.current.shuffle) {
+        const rest = [...newQueue].filter(item => item.id !== track.id);
+        for (let i = rest.length - 1; i > 0; i -= 1) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [rest[i], rest[j]] = [rest[j], rest[i]];
+        }
+        activeQueue = [track, ...rest];
+        shuffleQueueRef.current = activeQueue;
+      }
+    }
     if (!newQueue && !activeQueue.some(t => t.id === track.id)) {
       activeQueue = [track, ...activeQueue];
     }
@@ -456,10 +501,14 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (isAuto && loop === 'track') return curr;
 
     if (shuffle && q.length > 1) {
-      let randIdx = curr;
-      while (randIdx === curr) {
-        randIdx = Math.floor(Math.random() * q.length);
+      // Shuffle uses a dedicated randomized queue, then advances through it
+      // normally so each song is heard once before any repeat.
+      if (shuffleQueueRef.current) {
+        if (curr + 1 < q.length) return curr + 1;
+        return loop === 'playlist' ? 0 : -1;
       }
+      let randIdx = curr;
+      while (randIdx === curr) randIdx = Math.floor(Math.random() * q.length);
       return randIdx;
     }
 
@@ -590,13 +639,51 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const toggleShuffle = useCallback(async () => {
     const newShuffle = !statusRef.current.shuffle;
+    statusRef.current = { ...statusRef.current, shuffle: newShuffle };
     setStatus(prev => ({ ...prev, shuffle: newShuffle }));
-    await IpcService.invoke('set_shuffle', { shuffle: newShuffle });
-  }, []);
+    const current = statusRef.current.current_track;
+    if (newShuffle && queueRef.current.length > 1) {
+      const source = baseQueueRef.current.length > 0 ? baseQueueRef.current : queueRef.current;
+      const rest = [...source];
+      if (current) {
+        const currentOccurrence = rest.findIndex(track => track.id === current.id);
+        if (currentOccurrence >= 0) rest.splice(currentOccurrence, 1);
+      }
+      for (let i = rest.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [rest[i], rest[j]] = [rest[j], rest[i]];
+      }
+      const shuffled = current ? [current, ...rest] : rest;
+      shuffleQueueRef.current = shuffled;
+      queueRef.current = shuffled;
+      setQueue(shuffled);
+      setQueueIndex(current ? 0 : -1);
+      if (useBackendQueue) {
+        await IpcService.invoke('queue_replace', { tracks: shuffled, currentIndex: 0 });
+        lastSyncedQueueRef.current = shuffled;
+      }
+    } else if (!newShuffle && baseQueueRef.current.length > 0) {
+      const restored = baseQueueRef.current;
+      const restoredIndex = current ? restored.findIndex(track => track.id === current.id) : -1;
+      queueRef.current = restored;
+      setQueue(restored);
+      setQueueIndex(restoredIndex);
+      shuffleQueueRef.current = null;
+      if (useBackendQueue) {
+        await IpcService.invoke('queue_replace', { tracks: restored, currentIndex: restoredIndex >= 0 ? restoredIndex : 0 });
+        lastSyncedQueueRef.current = restored;
+      }
+    }
+    // The randomized queue is already materialized above. Keep backend
+    // navigation sequential so it consumes that playlist once, instead of
+    // applying weighted random picks that can revisit songs.
+    await IpcService.invoke('set_shuffle', { shuffle: false });
+  }, [useBackendQueue]);
 
   /** Apply an optimistic local queue update and remember it as backend-synced. */
   const applyQueueUpdate = useCallback((nextQueue: Track[]) => {
     queueRef.current = nextQueue;
+    if (!statusRef.current.shuffle) baseQueueRef.current = [...nextQueue];
     lastSyncedQueueRef.current = nextQueue;
     setQueue(nextQueue);
   }, []);

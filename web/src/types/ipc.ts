@@ -24,6 +24,10 @@ export interface PlayHistoryEntry {
   completed_duration_ms: number;
   fully_played: boolean;
 }
+export interface LibraryRoot {
+  id: string; path: string; name: string; is_active: boolean;
+  last_scanned_at?: string | null; created_at: string;
+}
 
 /**
  * Tauri IPC Command definitions.
@@ -36,6 +40,7 @@ export interface IpcCommands {
       activity: {
         title: string;
         artist: string;
+        artwork_url?: string | null;
         position_secs: number;
         duration_secs: number;
       } | null;
@@ -49,6 +54,14 @@ export interface IpcCommands {
   'get_library_stats': { args: Record<string, never>; return: LibraryStats };
   'open_folder_dialog': { args: Record<string, never>; return: string | null };
   'open_files_dialog': { args: Record<string, never>; return: string[] | null };
+  'open_image_dialog': { args: Record<string, never>; return: string | null };
+  'cache_playlist_cover': { args: { sourcePath: string }; return: string };
+  'cache_image_data': { args: { cacheKey: string; category: 'remote-artwork' | 'themes'; dataUrl: string }; return: string };
+  'clear_image_cache': { args: { category: 'remote-artwork' | 'themes' }; return: void };
+  'add_library_root': { args: { path: string; name: string }; return: LibraryRoot };
+  'get_library_roots': { args: Record<string, never>; return: LibraryRoot[] };
+  'remove_library_root_by_path': { args: { path: string }; return: boolean };
+  'set_directory_watching': { args: { enabled: boolean }; return: void };
   
   // Playlist Commands (backend shapes: create/update take an `input` object,
   // membership commands operate on arrays of track ids)
@@ -77,6 +90,7 @@ export interface IpcCommands {
   // Audio Playback Commands
   'play_track': { args: { track: Track }; return: void };
   'play_queue': { args: { tracks: Track[]; startIndex: number }; return: void };
+  'queue_replace': { args: { tracks: Track[]; currentIndex: number }; return: void };
   'play_current': { args: Record<string, never>; return: void };
   'next_track': { args: Record<string, never>; return: void };
   'previous_track': { args: Record<string, never>; return: void };
@@ -120,7 +134,7 @@ export interface IpcCommands {
   // Audio Output & Hardware
   'get_audio_output_devices': { args: Record<string, never>; return: AudioOutputDevice[] };
   'get_audio_capabilities': { args: Record<string, never>; return: AudioCapabilities };
-  'set_audio_output_device': { args: { device_id: string }; return: void };
+  'set_audio_output_device': { args: { deviceId: string }; return: void };
   'set_exclusive_mode': { args: { enabled: boolean }; return: void };
   'set_bit_perfect': { args: { enabled: boolean }; return: void };
   'set_equalizer': { args: { enabled: boolean; gains: number[] }; return: void };

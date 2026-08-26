@@ -42,6 +42,7 @@ export interface AppSettings {
   custom_image_themes: CustomImageTheme[];
   custom_theme_blur: boolean;
   custom_theme_blur_percent: number;
+  artwork_adaptive_theme: boolean;
   launch_on_startup: boolean;
   close_to_tray: boolean;
   discord_presence_enabled: boolean;
@@ -66,6 +67,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   custom_image_themes: [],
   custom_theme_blur: true,
   custom_theme_blur_percent: 50,
+  artwork_adaptive_theme: true,
   launch_on_startup: false,
   close_to_tray: false,
   discord_presence_enabled: false,

@@ -4,7 +4,7 @@ High-performance, local-only desktop music player built with **Tauri 2**, **Rust
 
 ## Features
 
-- **100% Local-First & Private**: No cloud accounts, tracking, or remote server dependencies. All playback and library management stay strictly on your machine.
+- **Local-first & privacy-conscious**: Playback and library management stay on your machine. iTunes artwork lookup and Discord presence are optional and only run when you explicitly use or enable them.
 - **High-Fidelity Audio Engine**:
   - Symphonia & CPAL native playback pipeline.
   - Bit-perfect output support & output device selection.

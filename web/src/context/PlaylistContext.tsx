@@ -79,12 +79,13 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updatePlaylist = async (id: string, partial: Partial<Playlist>) => {
-    if (partial.name !== undefined || partial.description !== undefined) {
+    if (partial.name !== undefined || partial.description !== undefined || partial.cover_url !== undefined) {
       await IpcService.invoke('update_playlist', {
         input: {
           id,
           name: partial.name ?? null,
           description: partial.description ?? null,
+          cover_art_path: partial.cover_url ?? null,
         },
       });
     }

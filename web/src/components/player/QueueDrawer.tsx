@@ -1,10 +1,11 @@
 import React, { useEffect, useRef } from 'react';
-import { X, Trash2, ArrowUp, ArrowDown, Save, Music2 } from 'lucide-react';
+import { X, Trash2, ArrowUp, ArrowDown, Save, Music2, Shuffle } from 'lucide-react';
 import { usePlayer } from '../../context/PlayerContext';
 import { usePlaylists } from '../../context/PlaylistContext';
 import { useSettings } from '../../context/SettingsContext';
 import { t } from '../../i18n';
 import { VirtualList } from '../common/VirtualList';
+import { TrackArtwork } from '../common/TrackArtwork';
 
 export const QueueDrawer: React.FC = () => {
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -12,6 +13,7 @@ export const QueueDrawer: React.FC = () => {
     queue,
     queueIndex,
     status,
+    toggleShuffle,
     playQueue,
     removeFromQueue,
     reorderQueue,
@@ -61,7 +63,7 @@ export const QueueDrawer: React.FC = () => {
       }
     };
     window.addEventListener('keydown', handleKeyDown);
-    requestAnimationFrame(() => drawerRef.current?.querySelector<HTMLElement>('button')?.focus());
+    requestAnimationFrame(() => drawerRef.current?.querySelector<HTMLElement>('[data-queue-heading]')?.focus());
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       previous?.focus();
@@ -83,25 +85,40 @@ export const QueueDrawer: React.FC = () => {
       role="dialog"
       aria-modal="true"
       aria-label={t('queue_title', settings.language)}
-      className="absolute top-0 bottom-[7.5rem] right-0 z-50 w-full sm:w-96 overflow-hidden rounded-bl-2xl bg-oled-card/95 border-l border-b border-brand-border backdrop-blur-xl shadow-2xl flex flex-col animate-slideInRight select-none"
+      className="absolute top-0 bottom-[7.5rem] right-0 z-50 flex w-full flex-col overflow-hidden rounded-bl-3xl bg-oled-card/95 shadow-[-18px_18px_50px_-28px_rgba(0,0,0,0.55)] backdrop-blur-xl animate-slideInRight select-none focus:outline-none sm:w-96"
     >
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-brand-border/60">
-        <div>
-          <h3 className="font-semibold text-base font-display text-brand-foreground">
+      <div className="flex items-center justify-between px-4 pb-3 pt-4">
+        <div className="min-w-0 pl-1">
+          <h3
+            data-queue-heading
+            tabIndex={-1}
+            className="font-semibold text-base font-display text-brand-foreground focus-visible:!outline-none focus-visible:!shadow-none"
+          >
             {t('queue_title', settings.language)}
           </h3>
-          <span className="text-xs text-brand-muted">
+          <span className="mt-0.5 block text-xs text-brand-muted">
             {t('queue_track_count', settings.language, { count: visibleQueue.length })}
           </span>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => void toggleShuffle()}
+            className={`flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full transition-colors focus-visible:outline-none ${
+              status.shuffle ? 'bg-brand-accent/[0.14] text-brand-accent' : 'text-brand-muted hover:bg-oled-hover/80 hover:text-brand-foreground'
+            }`}
+            title={status.shuffle ? t('player_shuffle_off', settings.language) : t('player_shuffle_on', settings.language)}
+            aria-label={status.shuffle ? t('player_shuffle_off', settings.language) : t('player_shuffle_on', settings.language)}
+            aria-pressed={status.shuffle}
+          >
+            <Shuffle className="h-4 w-4" aria-hidden="true" />
+          </button>
           {queue.length > 0 && (
             <>
               <button
                 onClick={handleSaveQueueAsPlaylist}
-                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-accent hover:bg-oled-hover transition-colors focus-visible:outline-none"
+                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-brand-muted transition-colors hover:bg-oled-hover/80 hover:text-brand-accent active:bg-oled-active/70 focus-visible:outline-none"
                 title={t('queue_save_as_playlist', settings.language)}
                 aria-label={t('queue_save_as_playlist', settings.language)}
               >
@@ -109,7 +126,7 @@ export const QueueDrawer: React.FC = () => {
               </button>
               <button
                 onClick={clearQueue}
-                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-rose-400 hover:bg-oled-hover transition-colors focus-visible:outline-none"
+                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-brand-muted transition-colors hover:bg-rose-500/10 hover:text-rose-400 active:bg-rose-500/15 focus-visible:outline-none"
                 title={t('queue_clear', settings.language)}
                 aria-label={t('queue_clear', settings.language)}
               >
@@ -120,8 +137,8 @@ export const QueueDrawer: React.FC = () => {
 
           <button
             onClick={() => setIsQueueDrawerOpen(false)}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
-            aria-label="Close queue drawer"
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-brand-muted transition-colors hover:bg-oled-hover/80 hover:text-brand-foreground active:bg-oled-active/70 focus-visible:outline-none"
+            aria-label={t('aria_close_queue', settings.language)}
           >
             <X className="w-5 h-5" aria-hidden="true" />
           </button>
@@ -138,18 +155,18 @@ export const QueueDrawer: React.FC = () => {
         ) : (
           <VirtualList
             items={visibleQueue}
-            rowHeight={62}
-            className="h-full p-3"
+            rowHeight={64}
+            className="h-full px-3 pb-3 pt-1"
             getKey={({ track, originalIndex }) => `${track.id}-${track.path}-${originalIndex}`}
             renderRow={({ track, originalIndex }, idx) => {
               const isPlaying = idx === 0 && originalIndex === displayedQueueIndex;
               return (
                 <div
                   aria-current={isPlaying ? 'true' : undefined}
-                  className={`group flex h-full items-center justify-between p-2.5 rounded-xl border ${
+                  className={`group flex h-[calc(100%-6px)] items-center justify-between rounded-xl px-2.5 transition-[background-color,box-shadow] duration-150 ${
                     isPlaying
-                      ? 'bg-brand-accent/10 border-brand-accent/40 shadow-sm'
-                      : 'bg-oled-base/40 border-brand-border/40 hover:bg-oled-hover'
+                      ? 'bg-brand-accent/[0.14] shadow-md'
+                      : 'bg-oled-base/30 shadow-[0_8px_24px_-22px_rgba(0,0,0,0.65)] hover:bg-oled-hover/75'
                   }`}
                 >
                   <button
@@ -158,12 +175,20 @@ export const QueueDrawer: React.FC = () => {
                     className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer pr-2 text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                     aria-label={`Play ${track.title} by ${track.artist}`}
                   >
-                    <div className="w-8 h-8 rounded bg-brand-primary/80 border border-brand-border flex items-center justify-center shrink-0">
-                      {isPlaying ? (
-                        <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
-                      ) : (
-                        <span className="text-xs font-mono text-brand-muted">
-                          {displayedQueueIndex >= 0 ? idx : idx + 1}
+                    <div
+                      className={`relative h-8 w-8 shrink-0 overflow-hidden rounded-lg ${
+                        isPlaying ? 'ring-2 ring-brand-accent/70 ring-offset-1 ring-offset-oled-card' : ''
+                      }`}
+                    >
+                      <TrackArtwork
+                        track={track}
+                        className="h-full w-full bg-brand-primary/55"
+                        iconClassName="h-3.5 w-3.5 text-brand-muted"
+                        alt={`${track.title} cover`}
+                      />
+                      {isPlaying && (
+                        <span className="absolute inset-0 flex items-center justify-center bg-black/35 text-white">
+                          <Music2 className="h-3.5 w-3.5" aria-hidden="true" />
                         </span>
                       )}
                     </div>
@@ -178,11 +203,11 @@ export const QueueDrawer: React.FC = () => {
                       <span className="text-xs text-brand-muted truncate">{track.artist}</span>
                     </div>
                   </button>
-                  <div className="flex items-center gap-0.5 shrink-0">
+                  <div className="flex shrink-0 items-center">
                     <button
                       disabled={isPlaying || idx <= 1}
                       onClick={() => reorderQueue(originalIndex, originalIndex - 1)}
-                      className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-brand-accent/10 text-brand-muted disabled:opacity-20 focus-visible:outline-none"
+                      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-brand-muted transition-colors hover:bg-brand-accent/10 hover:text-brand-foreground active:bg-brand-accent/15 disabled:opacity-20 focus-visible:outline-none"
                       aria-label={`Move ${track.title} up in queue`}
                     >
                       <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
@@ -190,14 +215,14 @@ export const QueueDrawer: React.FC = () => {
                     <button
                       disabled={isPlaying || idx === visibleQueue.length - 1}
                       onClick={() => reorderQueue(originalIndex, originalIndex + 1)}
-                      className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-brand-accent/10 text-brand-muted disabled:opacity-20 focus-visible:outline-none"
+                      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-brand-muted transition-colors hover:bg-brand-accent/10 hover:text-brand-foreground active:bg-brand-accent/15 disabled:opacity-20 focus-visible:outline-none"
                       aria-label={`Move ${track.title} down in queue`}
                     >
                       <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
                     </button>
                     <button
                       onClick={() => removeFromQueue(originalIndex)}
-                      className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-rose-950/50 text-brand-muted hover:text-rose-400 focus-visible:outline-none"
+                      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-brand-muted transition-colors hover:bg-rose-500/10 hover:text-rose-400 active:bg-rose-500/15 focus-visible:outline-none"
                       aria-label={`Remove ${track.title} from queue`}
                     >
                       <X className="w-3.5 h-3.5" aria-hidden="true" />

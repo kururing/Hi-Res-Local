@@ -1,10 +1,11 @@
 import React from 'react';
-import { Disc, Play } from 'lucide-react';
+import { Play } from 'lucide-react';
 import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
 import { VirtualGrid } from '../common/VirtualGrid';
 import { t } from '../../i18n';
+import { AlbumArtwork } from '../common/AlbumArtwork';
 
 interface AlbumsViewProps {
   onNavigate: (view: string, payload?: unknown) => void;
@@ -23,13 +24,13 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({ onNavigate }) => {
             {t('albums_title', settings.language)}
           </h1>
           <span className="text-xs text-brand-muted">
-            {albums.length} albums in library
+            {t('library_albums_count', settings.language, { count: albums.length })}
           </span>
         </div>
       </div>
 
       {albums.length === 0 ? (
-        <div className="p-12 text-center text-brand-muted">No albums found in library.</div>
+        <div className="p-12 text-center text-brand-muted">{t('empty_albums', settings.language)}</div>
       ) : (
         <VirtualGrid
           items={albums}
@@ -45,12 +46,12 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({ onNavigate }) => {
               <button
                 type="button"
                 onClick={() => onNavigate('album_detail', album)}
-                aria-label={`Open album ${album.name} by ${album.artist}`}
+                aria-label={t('home_open_album', settings.language, { name: album.name, artist: album.artist })}
                 className="absolute inset-0 z-10 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               />
               {/* Artwork Box */}
               <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
-                <Disc className="w-16 h-16 text-brand-accent/40 group-hover:rotate-90 transition-transform duration-700" aria-hidden="true" />
+                <AlbumArtwork album={album} alt={`${album.name} cover`} />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <button
                     type="button"
@@ -59,7 +60,7 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({ onNavigate }) => {
                       if (album.tracks.length > 0) playQueue(album.tracks, 0);
                     }}
                     className="relative z-20 w-11 h-11 min-h-[44px] min-w-[44px] rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-105 active:scale-95 transition-all focus-visible:outline-none"
-                    aria-label={`Play ${album.name}`}
+                    aria-label={t('home_play_album', settings.language, { name: album.name })}
                   >
                     <Play className="w-5 h-5 fill-current ml-0.5" aria-hidden="true" />
                   </button>

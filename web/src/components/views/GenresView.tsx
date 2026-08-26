@@ -21,7 +21,7 @@ export const GenresView: React.FC<GenresViewProps> = ({ onNavigate }) => {
             {t('genres_title', settings.language)}
           </h1>
           <span className="text-xs text-brand-muted">
-            {genres.length} musical genres in library
+            {t('genres_count', settings.language, { count: genres.length })}
           </span>
         </div>
       </div>
@@ -35,11 +35,11 @@ export const GenresView: React.FC<GenresViewProps> = ({ onNavigate }) => {
             role="button"
             tabIndex={0}
             aria-label={`Open genre ${genre.name}`}
-            className={`group p-5 rounded-2xl bg-gradient-to-br ${genre.color_gradient} border border-white/10 hover:border-white/30 cursor-pointer transition-all duration-300 transform hover:-translate-y-1 hover:shadow-card-elevated flex flex-col justify-between h-36 relative overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent`}
+            className={`group p-5 rounded-2xl bg-gradient-to-br ${genre.color_gradient} border border-brand-border/70 hover:border-brand-accent cursor-pointer transition-all duration-300 transform hover:-translate-y-1 hover:shadow-card-elevated flex flex-col justify-between h-36 relative overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent`}
           >
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-white/80 uppercase tracking-wider">
-                Genre
+                {t('detail_genre_label', settings.language)}
               </span>
               <Radio className="w-5 h-5 text-white/60 group-hover:scale-110 transition-transform" />
             </div>
@@ -49,7 +49,7 @@ export const GenresView: React.FC<GenresViewProps> = ({ onNavigate }) => {
                 {genre.name}
               </h3>
               <span className="text-xs text-white/80 font-mono">
-                {genre.track_count} tracks
+                {t('genre_tracks_count', settings.language, { count: genre.track_count })}
               </span>
             </div>
 

@@ -13,6 +13,8 @@ import { useSettings } from '../../context/SettingsContext';
 import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
 import { ContextMenu, ContextMenuState } from '../common/ContextMenu';
+import { TrackPlayArtwork } from '../common/TrackPlayArtwork';
+import { AlbumArtwork } from '../common/AlbumArtwork';
 import { Album, Track } from '../../types/library';
 import { t } from '../../i18n';
 
@@ -35,7 +37,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
   onOpenDetails,
 }) => {
   const { toggleFavoriteTrack, favoriteTrackIds, toggleFavoriteAlbum, favoriteAlbumKeys } = useLibrary();
-  const { playTrack, playQueue, status } = usePlayer();
+  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
   const { settings } = useSettings();
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -81,13 +83,18 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
         className="inline-flex items-center gap-2 text-xs font-semibold text-brand-muted hover:text-brand-foreground transition-colors focus-visible:outline-none"
       >
         <ArrowLeft className="w-4 h-4" />
-        <span>Back to Albums</span>
+        <span>{t('nav_back_to_albums', settings.language)}</span>
       </button>
 
       {/* Album Header Banner */}
       <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-brand-primary/60 to-oled-card border border-brand-border shadow-card-elevated">
         <div className="w-44 h-44 sm:w-52 sm:h-52 rounded-2xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
-          <Disc className="w-24 h-24 text-brand-accent/40" />
+          <AlbumArtwork
+            album={album}
+            className="h-full w-full"
+            iconClassName="h-24 w-24 text-brand-accent/40"
+            alt={`${album.name} cover`}
+          />
         </div>
 
         <div className="flex flex-col gap-2 min-w-0 text-center sm:text-left flex-1">
@@ -120,30 +127,30 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
             )}
           </div>
 
-          <div className="flex items-center justify-center sm:justify-start gap-3 mt-4">
+          <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 mt-4">
             <Button
               variant="accent"
               size="md"
               icon={<Play className="w-4 h-4 fill-current" />}
               onClick={() => playQueue(album.tracks, 0)}
             >
-              Play Album
+              {t('detail_play_album', settings.language)}
             </Button>
             <Button
               variant="secondary"
               size="md"
               icon={<Shuffle className="w-4 h-4" />}
               onClick={() => {
-                const shuffled = [...album.tracks].sort(() => Math.random() - 0.5);
-                playQueue(shuffled, 0);
+                if (!status.shuffle) void toggleShuffle();
+                playQueue(album.tracks, 0);
               }}
             >
-              Shuffle
+              {t('detail_shuffle', settings.language)}
             </Button>
             <button
               onClick={() => toggleFavoriteAlbum(album.id)}
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-oled-card border border-brand-border text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
-              aria-label="Toggle album favorite"
+              aria-label={t('aria_toggle_album_favorite', settings.language)}
               aria-pressed={isAlbumFav}
             >
               <Heart
@@ -169,7 +176,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
             )}
 
             <div className="rounded-xl border border-brand-border bg-oled-card/60 overflow-hidden divide-y divide-brand-border/30">
-              {discTracks.map((tr, index) => {
+              {discTracks.map(tr => {
                 const isPlaying = status.current_track?.id === tr.id;
                 const isFav = favoriteTrackIds.has(tr.id);
 
@@ -184,38 +191,23 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                         : 'hover:bg-oled-hover text-brand-foreground'
                     }`}
                   >
-                    <div className="col-span-1 text-center font-mono flex items-center justify-center">
-                      <button
-                        onClick={e => {
-                          e.stopPropagation();
-                          playTrack(tr, album.tracks);
-                        }}
-                        className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base transition-all focus-visible:outline-none"
-                        aria-label={`Play ${tr.title}`}
-                      >
-                        {isPlaying ? (
-                          <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
-                        ) : (
-                          <>
-                            <span className="group-hover:hidden text-brand-muted">
-                              {tr.track_number || index + 1}
-                            </span>
-                            <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" aria-hidden="true" />
-                          </>
-                        )}
-                      </button>
+                    <div className="col-span-1 flex items-center justify-center">
+                      <TrackPlayArtwork
+                        track={tr}
+                        isPlaying={isPlaying}
+                        onPlay={() => playTrack(tr, album.tracks)}
+                      />
                     </div>
 
-                    <div className="col-span-6 flex flex-col min-w-0 pr-2">
-                      <span className="font-semibold truncate group-hover:text-brand-accent transition-colors">
+                    <div className="col-span-6 flex min-w-0 items-center gap-2 pr-2">
+                      <span className="min-w-0 flex-1 truncate font-semibold group-hover:text-brand-accent transition-colors">
                         {tr.title}
                       </span>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <Badge track={tr} />
-                      </div>
                     </div>
 
                     <div className="col-span-5 flex items-center justify-end gap-1">
+                      <Badge track={tr} />
+
                       <button
                         onClick={e => {
                           e.stopPropagation();
@@ -243,7 +235,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                           handleContextMenu(e, tr);
                         }}
                         className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-brand-muted hover:text-brand-foreground hover:bg-brand-accent/10 opacity-0 group-hover:opacity-100 transition-opacity focus-visible:outline-none"
-                        aria-label="More actions"
+                        aria-label={t('aria_more_actions', settings.language)}
                       >
                         <MoreVertical className="w-4 h-4" aria-hidden="true" />
                       </button>

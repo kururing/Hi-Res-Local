@@ -17,6 +17,7 @@ export function isTauri(): boolean {
 // In-memory mock state for dev preview
 let mockTracks: Track[] = [...MOCK_TRACKS];
 let mockPlaylists: Playlist[] = Storage.getPlaylists() || [...MOCK_PLAYLISTS];
+let mockLibraryRoots: import('../types/ipc').LibraryRoot[] = [];
 const mockRomanizedLyrics = new Map<string, string>();
 
 function toBackendPlaylist(pl: Playlist): BackendPlaylist {
@@ -114,6 +115,39 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
       return ['D:/Music/Rock/Queen/Bohemian_Rhapsody.flac'] as IpcCommands[K]['return'];
     }
 
+    case 'open_image_dialog': {
+      return null as IpcCommands[K]['return'];
+    }
+
+    case 'cache_playlist_cover': {
+      return (args as { sourcePath: string }).sourcePath as IpcCommands[K]['return'];
+    }
+    case 'cache_image_data': {
+      return (args as { dataUrl: string }).dataUrl as IpcCommands[K]['return'];
+    }
+    case 'clear_image_cache':
+    case 'set_directory_watching': {
+      return undefined as IpcCommands[K]['return'];
+    }
+    case 'get_library_roots': {
+      return mockLibraryRoots as IpcCommands[K]['return'];
+    }
+    case 'add_library_root': {
+      const payload = args as { path: string; name: string };
+      let root = mockLibraryRoots.find(item => item.path === payload.path);
+      if (!root) {
+        root = { id: `root-${Date.now()}`, path: payload.path, name: payload.name, is_active: true, created_at: new Date().toISOString() };
+        mockLibraryRoots.push(root);
+      }
+      return root as IpcCommands[K]['return'];
+    }
+    case 'remove_library_root_by_path': {
+      const path = (args as { path: string }).path;
+      const before = mockLibraryRoots.length;
+      mockLibraryRoots = mockLibraryRoots.filter(root => root.path !== path);
+      return (before !== mockLibraryRoots.length) as IpcCommands[K]['return'];
+    }
+
     case 'scan_directory': {
       const path = (args as { path: string })?.path || 'D:/Music';
       const total = 12;
@@ -168,6 +202,7 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
           ...mockPlaylists[idx],
           name: payload.input.name ?? mockPlaylists[idx].name,
           description: payload.input.description ?? mockPlaylists[idx].description,
+          cover_url: payload.input.cover_art_path ?? mockPlaylists[idx].cover_url,
           updated_at: new Date().toISOString(),
         };
         Storage.savePlaylists(mockPlaylists);

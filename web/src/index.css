@@ -16,7 +16,7 @@
   --color-accent-hover: 128 67 102;
   --color-foreground: 55 43 64;
   --color-muted: 105 89 114;
-  --color-border: 205 190 216;
+  --color-border: 190 174 204;
 }
 
 /* Light Theme Variables (when toggled) */
@@ -31,7 +31,7 @@
   --color-accent-hover: 190 24 93;
   --color-foreground: 30 17 34;
   --color-muted: 112 93 109;
-  --color-border: 244 114 182;
+  --color-border: 222 154 190;
 }
 
 /* Midnight Indigo Theme */
@@ -46,7 +46,7 @@
   --color-accent-hover: 165 180 252;
   --color-foreground: 248 250 252;
   --color-muted: 148 163 184;
-  --color-border: 40 39 90;
+  --color-border: 76 75 128;
 }
 
 /* Obsidian Slate Theme */
@@ -61,7 +61,7 @@
   --color-accent-hover: 125 211 252;
   --color-foreground: 248 250 252;
   --color-muted: 148 163 184;
-  --color-border: 51 65 85;
+  --color-border: 72 91 119;
 }
 
 /* Base resets & typography */
@@ -100,7 +100,8 @@ body {
   background: transparent;
 }
 
-.theme-custom .app-shell {
+.theme-custom .app-shell,
+.theme-artwork .app-shell {
   background: rgba(var(--color-oled-base) / 0.42);
 }
 
@@ -126,7 +127,8 @@ body {
   background: rgba(var(--color-oled-base) / 0.62);
 }
 
-.theme-custom .window-titlebar {
+.theme-custom .window-titlebar,
+.theme-artwork .window-titlebar {
   background: rgba(var(--color-oled-base) / 0.22);
 }
 
@@ -140,6 +142,16 @@ body {
 
 .tracks-table-grid {
   grid-template-columns: 52px minmax(0, 1fr) 140px;
+}
+
+.history-row-grid {
+  grid-template-columns: 52px minmax(140px, 1.3fr) minmax(110px, 0.8fr) 126px 64px;
+}
+
+@media (min-width: 1280px) {
+  .history-row-grid {
+    grid-template-columns: 52px minmax(180px, 1.2fr) minmax(130px, 0.75fr) minmax(180px, 1fr) 126px 64px;
+  }
 }
 
 @media (min-width: 640px) {
@@ -174,7 +186,8 @@ body {
   display: none;
 }
 
-.theme-custom .custom-theme-backdrop {
+.theme-custom .custom-theme-backdrop,
+.theme-artwork .custom-theme-backdrop {
   display: block;
   position: absolute;
   inset: -36px;
@@ -186,6 +199,21 @@ body {
   filter: blur(var(--custom-theme-blur));
   opacity: 0.32;
   transform: scale(1.04);
+}
+
+.theme-artwork .custom-theme-backdrop {
+  animation: artwork-theme-enter 360ms ease-out both;
+}
+
+@keyframes artwork-theme-enter {
+  from { opacity: 0; }
+  to { opacity: 0.32; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-artwork .custom-theme-backdrop {
+    animation: none;
+  }
 }
 
 .window-control {
@@ -342,7 +370,11 @@ body {
 .theme-custom .app-sidebar,
 .theme-custom .app-header,
 .theme-custom .app-player,
-.theme-custom .app-main {
+.theme-custom .app-main,
+.theme-artwork .app-sidebar,
+.theme-artwork .app-header,
+.theme-artwork .app-player,
+.theme-artwork .app-main {
   background: transparent;
 }
 
@@ -391,8 +423,8 @@ body {
 .brand-orb {
   color: rgb(var(--color-accent));
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(229, 211, 239, 0.84));
-  border: 1px solid rgba(255, 255, 255, 0.88);
-  box-shadow: 0 12px 24px -14px rgba(119, 74, 132, 0.65), inset 0 1px 0 white;
+  border: 1px solid rgba(var(--color-border) / 0.72);
+  box-shadow: 0 12px 24px -14px rgba(119, 74, 132, 0.65), inset 0 1px 0 rgba(var(--color-foreground) / 0.08);
 }
 
 .soft-nav-item {
@@ -428,7 +460,7 @@ body {
 
 .search-results-panel {
   background: rgba(var(--color-oled-card) / 0.88);
-  box-shadow: 0 20px 50px rgb(61 38 68 / 0.18), inset 0 1px 0 rgb(255 255 255 / 0.55);
+  box-shadow: 0 20px 50px rgb(61 38 68 / 0.18), inset 0 1px 0 rgba(var(--color-border) / 0.36);
 }
 
 @supports not (backdrop-filter: blur(1px)) {
@@ -437,6 +469,36 @@ body {
 
 .soft-button:hover:not(:disabled) {
   transform: translateY(-1px);
+}
+
+/* Player controls stay legible on light, dark, and image-based themes while
+   preserving each theme's existing backgrounds. */
+.app-player .player-secondary-transport,
+.app-player .player-action-equalizer,
+.app-player .player-action-queue,
+.app-player .player-action-now-playing,
+.app-player .player-volume-button {
+  color: rgb(var(--color-foreground));
+}
+
+.app-player .player-actions > button {
+  color: rgb(var(--color-foreground));
+}
+
+.app-player .player-actions > button:hover {
+  color: rgb(var(--color-accent));
+}
+
+.app-player .player-secondary-transport:hover,
+.app-player .player-action-equalizer:hover,
+.app-player .player-action-queue:hover,
+.app-player .player-action-now-playing:hover,
+.app-player .player-volume-button:hover {
+  color: rgb(var(--color-accent));
+}
+
+.app-player .player-secondary-transport[aria-pressed="true"] {
+  color: rgb(var(--color-accent));
 }
 
 .soft-modal {
@@ -462,13 +524,17 @@ body {
 
 .view-stage section[class*='bg-oled-card'],
 .view-stage > div > div[class*='bg-oled-card'] {
-  box-shadow: 0 18px 48px -36px rgba(67, 46, 80, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.66);
+  box-shadow: 0 18px 48px -36px rgba(67, 46, 80, 0.5), inset 0 1px 0 rgba(var(--color-border) / 0.28);
   transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 280ms ease, border-color 280ms ease;
 }
 
 .view-stage .group[class*='bg-oled-card']:hover {
   transform: translateY(-3px);
   box-shadow: 0 20px 42px -30px rgba(91, 57, 104, 0.6);
+}
+
+.view-stage .continue-listening-card {
+  box-shadow: 0 18px 48px -36px rgba(67, 46, 80, 0.5);
 }
 
 @keyframes view-enter {
@@ -486,8 +552,40 @@ body {
   to { transform: translate3d(2%, 2.5%, 0) rotate(3deg); }
 }
 
-/* Accessibility Focus Visible */
-*:focus-visible {
+@keyframes shuffle-toggle {
+  0% { transform: scale(0.9) rotate(-6deg); opacity: 0.6; }
+  65% { transform: scale(1.06) rotate(2deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+
+@keyframes repeat-toggle {
+  0% { transform: scale(0.9) rotate(-35deg); opacity: 0.6; }
+  70% { transform: scale(1.05) rotate(3deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+
+.player-shuffle-toggle {
+  animation: shuffle-toggle 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.player-repeat-toggle {
+  animation: repeat-toggle 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Keep focus feedback on actual keyboard controls, not large containers that
+   only receive programmatic focus (main content, dialogs, drawer headings). */
+:is(
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  summary,
+  [role="button"],
+  [role="menuitem"],
+  [role="slider"],
+  [tabindex]:not([tabindex="-1"])
+):focus-visible {
   outline: 2px solid rgb(var(--color-accent)) !important;
   outline-offset: 2px !important;
   box-shadow: 0 0 0 4px rgba(var(--color-accent) / 0.25) !important;

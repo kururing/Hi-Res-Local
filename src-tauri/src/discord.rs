@@ -11,6 +11,7 @@ const DEFAULT_CLIENT_ID: &str = "1541415350602702870";
 pub struct DiscordActivity {
     pub title: String,
     pub artist: String,
+    pub artwork_url: Option<String>,
     pub position_secs: Option<f64>,
     pub duration_secs: Option<f64>,
 }
@@ -63,6 +64,13 @@ impl DiscordPresence {
                     .activity_type(activity::ActivityType::Listening)
                     .details(&title)
                     .state(&artist);
+                if let Some(artwork_url) = track
+                    .artwork_url
+                    .as_deref()
+                    .filter(|url| url.starts_with("https://"))
+                {
+                    activity = activity.assets(activity::Assets::new().large_image(artwork_url));
+                }
                 if let Some((start, end)) = timestamps {
                     activity =
                         activity.timestamps(activity::Timestamps::new().start(start).end(end));
@@ -127,6 +135,7 @@ mod tests {
         let activity = DiscordActivity {
             title: "Song".into(),
             artist: "Artist".into(),
+            artwork_url: None,
             position_secs: Some(999.0),
             duration_secs: Some(180.0),
         };
@@ -146,6 +155,7 @@ mod tests {
         let activity = DiscordActivity {
             title: "Song".into(),
             artist: "Artist".into(),
+            artwork_url: None,
             position_secs: Some(10.0),
             duration_secs: Some(0.0),
         };

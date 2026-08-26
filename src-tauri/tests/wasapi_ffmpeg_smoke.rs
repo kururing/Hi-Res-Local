@@ -72,12 +72,12 @@ fn write_pcm24_wav(path: &PathBuf, sample_rate: u32, frames: u32) {
     f.write_all(b"data").unwrap();
     f.write_all(&data_size.to_le_bytes()).unwrap();
     for frame in 0..frames {
-        let sample = if frame % 2 == 0 {
+        let sample: i32 = if frame % 2 == 0 {
             0x12_3456
         } else {
             -0x12_3456
         };
-        let bytes = (sample as i32).to_le_bytes();
+        let bytes = sample.to_le_bytes();
         for _ in 0..channels {
             f.write_all(&bytes[..3]).unwrap();
         }
@@ -139,7 +139,7 @@ fn ffmpeg_pcm24_packs_high_valid_bits_without_static() {
     assert!(!bytes.is_empty());
     assert_eq!(bytes.len() % 6, 0, "stereo packed frames must be aligned");
 
-    for (frame_index, frame) in bytes.chunks_exact(6).enumerate() {
+    for (frame_index, frame) in bytes.as_chunks::<6>().0.iter().enumerate() {
         let value: i32 = if frame_index % 2 == 0 {
             0x12_3456
         } else {

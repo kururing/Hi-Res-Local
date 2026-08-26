@@ -20,6 +20,7 @@ import { useSettings } from '../../context/SettingsContext';
 import { Slider } from '../common/Slider';
 import { TrackArtwork } from '../common/TrackArtwork';
 import { t } from '../../i18n';
+import { Artist } from '../../types/library';
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -60,7 +61,17 @@ const PlayerSeekBar: React.FC<{ seek: (positionSecs: number) => Promise<void> }>
 );
 PlayerSeekBar.displayName = 'PlayerSeekBar';
 
-export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onNavigateNowPlaying }) => {
+interface PlayerBarProps {
+  isNowPlayingOpen?: boolean;
+  onNavigateNowPlaying?: () => void;
+  onNavigateArtist?: (artist: Artist) => void;
+}
+
+export const PlayerBar: React.FC<PlayerBarProps> = ({
+  isNowPlayingOpen = false,
+  onNavigateNowPlaying,
+  onNavigateArtist,
+}) => {
   const {
     status,
     engineStatus,
@@ -79,7 +90,7 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
     queue,
   } = usePlayer();
 
-  const { toggleFavoriteTrack, favoriteTrackIds } = useLibrary();
+  const { toggleFavoriteTrack, favoriteTrackIds, artists } = useLibrary();
   const { settings } = useSettings();
 
   const track = status.current_track;
@@ -100,11 +111,41 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
     else setLoopMode('off');
   };
 
+  const repeatLabel = status.loop_mode === 'track'
+    ? t('player_repeat_one', settings.language)
+    : status.loop_mode === 'playlist'
+      ? t('player_repeat_all', settings.language)
+      : t('player_repeat_off', settings.language);
+
+  const handlePlayerBarClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (!track || !onNavigateNowPlaying) return;
+
+    const target = event.target as HTMLElement;
+    if (target.closest('button, [role="slider"]')) return;
+    onNavigateNowPlaying();
+  };
+
+  const openCurrentArtist = () => {
+    if (!track || !onNavigateArtist) return;
+    const artist = artists.find(item => item.name.toLocaleLowerCase() === track.artist.toLocaleLowerCase()) ?? {
+      id: `artist:${track.artist}`,
+      name: track.artist,
+      track_count: 0,
+      album_count: 0,
+      albums: [],
+      genres: [],
+    };
+    onNavigateArtist(artist);
+  };
+
   return (
     <footer
       role="region"
-      aria-label="Audio player controls"
-      className="app-player player-bar h-24 rounded-[26px] border border-brand-border/70 px-4 md:px-6 grid items-center z-40 relative select-none"
+      aria-label={t('aria_audio_controls', settings.language)}
+      onClick={handlePlayerBarClick}
+      className={`app-player player-bar h-24 rounded-[26px] border border-brand-border/70 px-4 md:px-6 grid items-center z-40 relative select-none ${
+        track && onNavigateNowPlaying ? 'cursor-pointer' : ''
+      }`}
     >
       {/* Left: Track Details */}
       <div className="player-track flex min-w-0 items-center gap-3.5">
@@ -134,16 +175,24 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => onNavigateNowPlaying?.()}
+                  onClick={() => setIsQueueDrawerOpen(true)}
                   className="font-medium text-sm text-brand-foreground truncate cursor-pointer text-left hover:underline hover:text-brand-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                  aria-label={`Open current playlist for ${track.title}`}
                   title={track.title}
                 >
                   {track.title}
                 </button>
               </div>
-              <span className="text-xs text-brand-muted truncate" title={track.artist}>
+              <button
+                type="button"
+                onClick={openCurrentArtist}
+                disabled={!onNavigateArtist}
+                className="max-w-full truncate text-left text-xs text-brand-muted transition-colors hover:text-brand-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:cursor-default disabled:hover:text-brand-muted disabled:hover:no-underline"
+                title={track.artist}
+                aria-label={`Open artist ${track.artist}`}
+              >
                 {track.artist}
-              </span>
+              </button>
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 {qualityLabel && (
                   <span
@@ -188,15 +237,23 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
           {/* Shuffle */}
           <button
             onClick={toggleShuffle}
-            className={`player-secondary-transport min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full transition-colors focus-visible:outline-none ${
+            className={`player-secondary-transport relative flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full transition-[color,background-color,box-shadow,transform] duration-200 active:scale-95 focus-visible:outline-none ${
               status.shuffle
-                ? 'text-brand-accent'
-                : 'text-brand-muted hover:text-brand-foreground'
+                ? 'bg-brand-accent/[0.07] text-brand-accent'
+                : 'text-brand-muted hover:bg-oled-hover/70 hover:text-brand-foreground'
             }`}
             aria-label={status.shuffle ? t('player_shuffle_off', settings.language) : t('player_shuffle_on', settings.language)}
             aria-pressed={status.shuffle}
+            title={status.shuffle ? t('player_shuffle_off', settings.language) : t('player_shuffle_on', settings.language)}
           >
-            <Shuffle className="w-4 h-4" aria-hidden="true" />
+            <Shuffle
+              key={status.shuffle ? 'shuffle-on' : 'shuffle-off'}
+              className="player-shuffle-toggle h-4 w-4 motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+            {status.shuffle && (
+              <span className="absolute bottom-1.5 h-0.5 w-0.5 rounded-full bg-brand-accent" aria-hidden="true" />
+            )}
           </button>
 
           {/* Previous */}
@@ -233,18 +290,30 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
           {/* Repeat */}
           <button
             onClick={cycleLoopMode}
-            className={`player-secondary-transport min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full transition-colors focus-visible:outline-none ${
+            className={`player-secondary-transport relative flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full transition-[color,background-color,box-shadow,transform] duration-200 active:scale-95 focus-visible:outline-none ${
               status.loop_mode !== 'off'
-                ? 'text-brand-accent'
-                : 'text-brand-muted hover:text-brand-foreground'
+                ? 'bg-brand-accent/[0.07] text-brand-accent'
+                : 'text-brand-muted hover:bg-oled-hover/70 hover:text-brand-foreground'
             }`}
-            aria-label={`Repeat mode: ${status.loop_mode}`}
+            aria-label={repeatLabel}
             aria-pressed={status.loop_mode !== 'off'}
+            title={repeatLabel}
           >
             {status.loop_mode === 'track' ? (
-              <Repeat1 className="w-4 h-4" aria-hidden="true" />
+              <Repeat1
+                key="repeat-track"
+                className="player-repeat-toggle h-4 w-4 motion-reduce:animate-none"
+                aria-hidden="true"
+              />
             ) : (
-              <Repeat className="w-4 h-4" aria-hidden="true" />
+              <Repeat
+                key={`repeat-${status.loop_mode}`}
+                className="player-repeat-toggle h-4 w-4 motion-reduce:animate-none"
+                aria-hidden="true"
+              />
+            )}
+            {status.loop_mode !== 'off' && (
+              <span className="absolute bottom-1.5 h-0.5 w-0.5 rounded-full bg-brand-accent" aria-hidden="true" />
             )}
           </button>
         </div>
@@ -259,9 +328,14 @@ export const PlayerBar: React.FC<{ onNavigateNowPlaying?: () => void }> = ({ onN
         {onNavigateNowPlaying && (
           <button
             onClick={onNavigateNowPlaying}
-            className="player-action-now-playing min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-brand-foreground hover:bg-oled-hover transition-colors focus-visible:outline-none"
-            aria-label={t('player_now_playing', settings.language)}
-            title={t('player_now_playing', settings.language)}
+            className={`player-action-now-playing min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg transition-colors focus-visible:outline-none ${
+              isNowPlayingOpen
+                ? 'bg-oled-hover text-brand-accent'
+                : 'text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
+            }`}
+            aria-label={isNowPlayingOpen ? t('player_close_now_playing', settings.language) : t('player_now_playing', settings.language)}
+            title={isNowPlayingOpen ? t('player_close_now_playing', settings.language) : t('player_now_playing', settings.language)}
+            aria-expanded={isNowPlayingOpen}
           >
             <Disc3 className="w-4 h-4" aria-hidden="true" />
           </button>

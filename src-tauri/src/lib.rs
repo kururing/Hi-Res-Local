@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager,
+    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 use crate::audio::dto::AudioEvent;
@@ -36,6 +36,21 @@ pub fn run() {
             None,
         ))
         .setup(|app| {
+            // In some Windows/WebView2 sessions the window declared in
+            // tauri.conf.json is not materialized before setup runs. Create a
+            // safe fallback so dev mode never starts as tray-only.
+            if app.get_webview_window("main").is_none() {
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                    .title("Nghe Nhạc Pro Max")
+                    .inner_size(1280.0, 800.0)
+                    .min_inner_size(960.0, 640.0)
+                    .decorations(false)
+                    .resizable(true)
+                    .visible(true)
+                    .center()
+                    .focused(true)
+                    .build()?;
+            }
             let show_item = MenuItem::with_id(app, "show", "Open Nghe Nhac Pro Max", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
@@ -83,6 +98,18 @@ pub fn run() {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+
+            // Some Windows/WebView2 sessions finish creating the configured
+            // window just after setup. Restore it once more after that point.
+            let startup_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if let Some(window) = startup_app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            });
 
             let db = Arc::new(
                 Database::open_default().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?,
@@ -290,6 +317,7 @@ pub fn run() {
             // Audio Playback & Transport
             play_track,
             play_queue,
+            queue_replace,
             play_current,
             pause_playback,
             resume_playback,
@@ -331,6 +359,10 @@ pub fn run() {
             // Dialogs
             open_folder_dialog,
             open_files_dialog,
+            open_image_dialog,
+            cache_playlist_cover,
+            cache_image_data,
+            clear_image_cache,
             // Library & Scanning
             get_all_tracks,
             get_library_stats,
@@ -338,6 +370,8 @@ pub fn run() {
             add_library_root,
             get_library_roots,
             remove_library_root,
+            remove_library_root_by_path,
+            set_directory_watching,
             set_library_root_active,
             scan_library,
             get_duplicate_groups,

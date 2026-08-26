@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::audio::adapters::ExclusiveAudioAdapter;
 use crate::audio::dto::{
@@ -157,6 +157,20 @@ pub async fn play_queue(
     state
         .player
         .play_queue(audio_tracks, start_index.unwrap_or(0))
+        .map_err(|e| e.to_string())
+}
+
+/// Replace queue ordering while playback continues from the current track.
+#[tauri::command]
+pub async fn queue_replace(
+    tracks: Vec<AudioTrackInput>,
+    current_index: usize,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let audio_tracks: Vec<AudioTrack> = tracks.into_iter().map(|t| t.into_audio_track()).collect();
+    state
+        .player
+        .queue_replace(audio_tracks, current_index)
         .map_err(|e| e.to_string())
 }
 
@@ -529,6 +543,100 @@ pub async fn open_files_dialog() -> Result<Option<Vec<String>>, String> {
             .map(|p| p.to_string_lossy().to_string())
             .collect()
     }))
+}
+
+#[tauri::command]
+pub async fn open_image_dialog() -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .add_filter("Image Files", &["png", "jpg", "jpeg", "webp"])
+        .pick_file();
+    Ok(file.map(|path| path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub async fn cache_playlist_cover(source_path: String, app: AppHandle) -> Result<String, String> {
+    let source = std::path::Path::new(&source_path);
+    if !source.is_file() {
+        return Err("Selected cover image was not found".to_string());
+    }
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("jpg");
+    let target_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?
+        .join("playlist-covers");
+    std::fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
+    let target = target_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), extension));
+    std::fs::copy(source, &target).map_err(|error| error.to_string())?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn cache_image_data(
+    cache_key: String,
+    category: String,
+    data_url: String,
+    app: AppHandle,
+) -> Result<String, String> {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    if !matches!(category.as_str(), "remote-artwork" | "themes") {
+        return Err("Unsupported image cache category".to_string());
+    }
+    let (header, encoded) = data_url.split_once(',').ok_or("Invalid image data")?;
+    if !header.starts_with("data:image/") || !header.ends_with(";base64") {
+        return Err("Only base64 image data is supported".to_string());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| "Invalid base64 image data".to_string())?;
+    if bytes.len() > 12 * 1024 * 1024 {
+        return Err("Image exceeds the 12 MB cache limit".to_string());
+    }
+    let format = image::guess_format(&bytes).map_err(|_| "Unsupported image format".to_string())?;
+    if !matches!(
+        format,
+        image::ImageFormat::Jpeg | image::ImageFormat::Png | image::ImageFormat::WebP
+    ) {
+        return Err("Unsupported image format".to_string());
+    }
+    image::load_from_memory_with_format(&bytes, format)
+        .map_err(|_| "Invalid image content".to_string())?;
+    let extension = match format {
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::WebP => "webp",
+        _ => "jpg",
+    };
+    let digest = format!("{:x}", Sha256::digest(cache_key.as_bytes()));
+    let directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?
+        .join(category);
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let target = directory.join(format!("{digest}.{extension}"));
+    std::fs::write(&target, bytes).map_err(|error| error.to_string())?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn clear_image_cache(category: String, app: AppHandle) -> Result<(), String> {
+    if !matches!(category.as_str(), "remote-artwork" | "themes") {
+        return Err("Unsupported image cache category".to_string());
+    }
+    let directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?
+        .join(category);
+    if directory.exists() {
+        std::fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 // ---------------- Extended Library Helper Commands ----------------

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 
 interface VirtualGridProps<T> {
   items: T[];
@@ -37,7 +37,7 @@ export function VirtualGrid<T>({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = parentRef.current;
     if (!el) return;
 
@@ -61,7 +61,32 @@ export function VirtualGrid<T>({
       observer.disconnect();
       if (frameId !== undefined) window.cancelAnimationFrame(frameId);
     };
-  }, []);
+  }, [items.length > 200]);
+
+  // Typical music libraries contain a few dozen or a few hundred cards. A
+  // native CSS grid gives those lists their final column count immediately,
+  // avoiding the first-frame two-column fallback while remaining inexpensive.
+  if (items.length <= 200) {
+    return (
+      <div
+        ref={parentRef}
+        className={['overflow-y-auto overscroll-contain', className].filter(Boolean).join(' ')}
+        style={style}
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(auto-fill, minmax(${minColumnWidth}px, 1fr))`,
+            gap,
+          }}
+        >
+          {items.map((item, index) => (
+            <div key={getKey(item, index)}>{renderItem(item, index)}</div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   const width = viewport.width || minColumnWidth * 2 + gap;
   const columns = Math.max(2, Math.floor((width + gap) / (minColumnWidth + gap)));

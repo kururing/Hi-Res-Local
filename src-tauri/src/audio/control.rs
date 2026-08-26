@@ -17,7 +17,7 @@ mod imp;
 #[cfg(windows)]
 mod imp {
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use tokio::sync::broadcast;
 
@@ -27,6 +27,7 @@ mod imp {
     use crate::audio::pcm::AudioFormat;
     use crate::audio::pipeline::{AudioPipeline, DecodeCommand};
     use crate::audio::wasapi::WasapiDeviceManager;
+    use crate::sync_util::recover_mutex;
 
     pub use exclusive::{source_label_from_format, ConfigureResult};
 
@@ -35,6 +36,7 @@ mod imp {
         shared: shared::AudioControlHandle,
         exclusive: exclusive::AudioControlHandle,
         exclusive_enabled: Arc<AtomicBool>,
+        selected_device: Arc<Mutex<Option<String>>>,
     }
 
     impl AudioControlHandle {
@@ -53,6 +55,7 @@ mod imp {
                 shared,
                 exclusive,
                 exclusive_enabled: Arc::new(AtomicBool::new(false)),
+                selected_device: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -166,6 +169,11 @@ mod imp {
                 Some(id) => Some(id.to_string()),
             };
 
+            let previous = recover_mutex(&self.selected_device).clone();
+            if normalized == previous {
+                return Ok(());
+            }
+
             tracing::info!(
                 target: "audio",
                 requested = ?device,
@@ -176,24 +184,54 @@ mod imp {
             // Validate / map before committing either plane so a bad id does not
             // leave Exclusive pointing at a missing endpoint.
             let cpal_name = WasapiDeviceManager::cpal_name_for_selection(normalized.as_deref())?;
+            let (rollback_device, rollback_cpal) =
+                match WasapiDeviceManager::cpal_name_for_selection(previous.as_deref()) {
+                    Ok(name) => (previous.clone(), name),
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "audio",
+                            previous = ?previous,
+                            error = %error,
+                            "previous audio device is unavailable; rollback will use system default"
+                        );
+                        (None, None)
+                    }
+                };
 
             self.exclusive.select_device(normalized.clone())?;
-            self.shared.select_device(cpal_name)?;
+            if let Err(error) = self.shared.select_device(cpal_name) {
+                let _ = self.exclusive.select_device(rollback_device.clone());
+                if let Err(rollback_error) = self.shared.select_device(rollback_cpal.clone()) {
+                    tracing::error!(
+                        target: "audio",
+                        error = %rollback_error,
+                        "failed to restore previous Shared device after selection error"
+                    );
+                }
+                return Err(error);
+            }
 
             // If Exclusive mode is on, reopen the exclusive hold stream on the new
             // endpoint immediately so the device is actually switched (not only stored).
             if self.exclusive_enabled.load(Ordering::SeqCst) {
-                self.exclusive
+                if let Err(error) = self
+                    .exclusive
                     .configure_exclusive(AudioFormat::s16(48_000, 2), false)
-                    .map_err(|err| {
-                        tracing::warn!(
-                            target: "wasapi",
-                            error = %err,
-                            "failed to reopen Exclusive after device change"
-                        );
-                        err
-                    })?;
+                {
+                    let _ = self.exclusive.select_device(rollback_device);
+                    let _ = self.shared.select_device(rollback_cpal);
+                    let _ = self
+                        .exclusive
+                        .configure_exclusive(AudioFormat::s16(48_000, 2), false);
+                    tracing::warn!(
+                        target: "wasapi",
+                        error = %error,
+                        "failed to reopen Exclusive after device change; previous device restored"
+                    );
+                    return Err(error);
+                }
             }
+            *recover_mutex(&self.selected_device) = normalized;
             Ok(())
         }
 

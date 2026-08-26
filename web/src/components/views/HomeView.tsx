@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Play,
+  Shuffle,
   Clock,
   Music2,
   Disc,
@@ -8,6 +9,7 @@ import {
   Sparkles,
   ArrowRight,
   Plus,
+  FileText,
 } from 'lucide-react';
 import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
@@ -17,6 +19,8 @@ import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { t } from '../../i18n';
 import { activateOnKeyboard } from '../../services/keyboard';
+import { AlbumArtwork } from '../common/AlbumArtwork';
+import { TrackArtwork } from '../common/TrackArtwork';
 
 function formatDurationSecs(totalSecs: number): string {
   const hours = Math.floor(totalSecs / 3600);
@@ -30,8 +34,8 @@ interface HomeViewProps {
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
-  const { tracks, albums, stats, scanDirectory } = useLibrary();
-  const { playTrack, playQueue, status } = usePlayer();
+  const { tracks, albums, artists, stats, scanDirectory } = useLibrary();
+  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
   const { playlists } = usePlaylists();
   const { settings } = useSettings();
 
@@ -69,7 +73,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Button
             variant="accent"
             size="md"
@@ -77,6 +81,19 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
             onClick={() => tracks.length > 0 && playQueue(tracks, 0)}
           >
             {t('tracks_play_all', settings.language)}
+          </Button>
+          <Button
+            variant="secondary"
+            size="md"
+            icon={<Shuffle className="w-4 h-4" />}
+            onClick={() => {
+              if (tracks.length === 0) return;
+              if (!status.shuffle) void toggleShuffle();
+              playQueue(tracks, 0);
+            }}
+            disabled={tracks.length === 0}
+          >
+            {t('tracks_shuffle_all', settings.language)}
           </Button>
           <Button
             variant="primary"
@@ -150,11 +167,13 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
 
       {/* Continue Listening (if a track is loaded or active) */}
       {status.current_track && (
-        <div className="p-5 rounded-2xl bg-oled-card/90 border border-brand-accent/30 flex items-center justify-between gap-4 shadow-sm">
+        <div className="continue-listening-card p-5 rounded-2xl bg-oled-card/90 border border-brand-border/60 flex items-center justify-between gap-4 shadow-sm">
           <div className="flex items-center gap-4 min-w-0">
-            <div className="w-14 h-14 rounded-xl bg-brand-primary/80 border border-brand-border flex items-center justify-center shrink-0">
-              <Music2 className="w-6 h-6 text-brand-accent" />
-            </div>
+            <TrackArtwork
+              track={status.current_track}
+              className="w-14 h-14 rounded-xl bg-brand-primary/80 border border-brand-border shrink-0"
+              iconClassName="w-6 h-6 text-brand-accent"
+            />
             <div className="flex flex-col min-w-0">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-accent">
                 {t('home_continue_listening', settings.language)}
@@ -171,10 +190,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           <Button
             variant="accent"
             size="md"
-            icon={<Play className="w-4 h-4 fill-current" />}
-            onClick={() => playTrack(status.current_track!)}
+            icon={<FileText className="w-4 h-4" />}
+            onClick={() => onNavigate('lyrics')}
           >
-            {status.state === 'playing' ? 'Playing' : 'Resume'}
+            {t('home_lyrics', settings.language)}
           </Button>
         </div>
       )}
@@ -189,7 +208,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
             onClick={() => onNavigate('tracks')}
             className="text-xs font-semibold text-brand-accent hover:underline flex items-center gap-1 focus-visible:outline-none"
           >
-            <span>View All</span>
+            <span>{t('home_view_all', settings.language)}</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -202,18 +221,24 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
               onKeyDown={event => activateOnKeyboard(event, () => void playTrack(tr, recentlyAdded))}
               role="button"
               tabIndex={0}
-              aria-label={`Play ${tr.title} by ${tr.artist}`}
+              aria-label={t('home_play_track', settings.language, { title: tr.title, artist: tr.artist })}
               className="group p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex items-center justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-11 h-11 rounded-lg bg-brand-primary/90 border border-brand-border flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <Music2 className="w-5 h-5 text-brand-muted group-hover:text-brand-accent transition-colors" />
-                </div>
+                <TrackArtwork
+                  track={tr}
+                  className="w-11 h-11 rounded-lg bg-brand-primary/90 border border-brand-border shrink-0 group-hover:scale-105 transition-transform"
+                  iconClassName="w-5 h-5 text-brand-muted group-hover:text-brand-accent transition-colors"
+                />
                 <div className="flex flex-col min-w-0">
                   <span className="text-xs font-semibold text-brand-foreground truncate group-hover:text-brand-accent transition-colors">
                     {tr.title}
                   </span>
-                  <span className="text-[11px] text-brand-muted truncate">{tr.artist}</span>
+                  <div className="flex min-w-0 items-center gap-1 text-[11px] text-brand-muted truncate">
+                    <button type="button" className="truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}>{tr.artist}</button>
+                    <span>•</span>
+                    <button type="button" className="truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = albums.find(item => item.name === tr.album && item.artist === tr.artist); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
+                  </div>
                 </div>
               </div>
               <Badge track={tr} />
@@ -232,7 +257,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
             onClick={() => onNavigate('albums')}
             className="text-xs font-semibold text-brand-accent hover:underline flex items-center gap-1 focus-visible:outline-none"
           >
-            <span>View All</span>
+            <span>{t('home_view_all', settings.language)}</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -246,11 +271,11 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
               <button
                 type="button"
                 onClick={() => onNavigate('album_detail', al)}
-                aria-label={`Open album ${al.name} by ${al.artist}`}
+                aria-label={t('home_open_album', settings.language, { name: al.name, artist: al.artist })}
                 className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               />
               <div className="relative aspect-square rounded-lg bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-2.5 flex items-center justify-center overflow-hidden">
-                <Disc className="w-12 h-12 text-brand-accent/40 group-hover:rotate-45 transition-transform duration-500" />
+            <AlbumArtwork album={al} alt={`${al.name} cover`} />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <button
                     type="button"
@@ -259,7 +284,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                       if (al.tracks.length > 0) playQueue(al.tracks, 0);
                     }}
                     className="relative z-20 w-10 h-10 rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-110 active:scale-95 transition-all"
-                    aria-label={`Play album ${al.name}`}
+                    aria-label={t('home_play_album', settings.language, { name: al.name })}
                   >
                     <Play className="w-4 h-4 fill-current ml-0.5" />
                   </button>
@@ -285,7 +310,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
               onClick={() => onNavigate('playlists')}
               className="text-xs font-semibold text-brand-accent hover:underline flex items-center gap-1 focus-visible:outline-none"
             >
-              <span>View All</span>
+              <span>{t('home_view_all', settings.language)}</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -298,7 +323,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                 onKeyDown={event => activateOnKeyboard(event, () => onNavigate('playlist_detail', pl))}
                 role="button"
                 tabIndex={0}
-                aria-label={`Open playlist ${pl.name}`}
+                aria-label={t('home_open_playlist', settings.language, { name: pl.name })}
                 className="p-4 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col justify-between h-32 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               >
                 <div>
@@ -311,7 +336,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                   <p className="text-[11px] text-brand-muted line-clamp-2">{pl.description}</p>
                 </div>
                 <span className="text-[10px] text-brand-muted font-mono">
-                  {pl.track_ids.length} tracks
+                  {t('home_playlist_track_count', settings.language, { count: pl.track_ids.length })}
                 </span>
               </div>
             ))}

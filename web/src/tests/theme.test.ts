@@ -8,6 +8,12 @@ describe('Milk Pink Theme & Settings Compatibility', () => {
     expect(DEFAULT_SETTINGS.theme).toBe('oled');
   });
 
+  it('enables artwork-adaptive theming by default', () => {
+    expect(DEFAULT_SETTINGS.artwork_adaptive_theme).toBe(true);
+    expect(vi.settings_artwork_theme).toBeTruthy();
+    expect(en.settings_artwork_theme).toBeTruthy();
+  });
+
   it('provides Milk Pink theme labels in English i18n', () => {
     expect(en.settings_theme_oled).toBe('Milk Pink (Default)');
     expect(en.settings_theme_midnight).toBe('Midnight Indigo');

@@ -112,7 +112,7 @@ export const Header: React.FC<HeaderProps> = ({
           disabled={!canGoBack}
           onClick={onGoBack}
           className="min-w-[44px] min-h-[44px] rounded-lg bg-oled-card border border-brand-border text-brand-muted hover:text-brand-foreground disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center transition-colors focus-visible:outline-none"
-          aria-label="Go back"
+          aria-label={t('aria_go_back', settings.language)}
         >
           <ChevronLeft className="w-4 h-4" aria-hidden="true" />
         </button>
@@ -120,7 +120,7 @@ export const Header: React.FC<HeaderProps> = ({
           disabled={!canGoForward}
           onClick={onGoForward}
           className="min-w-[44px] min-h-[44px] rounded-lg bg-oled-card border border-brand-border text-brand-muted hover:text-brand-foreground disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center transition-colors focus-visible:outline-none"
-          aria-label="Go forward"
+          aria-label={t('aria_go_forward', settings.language)}
         >
           <ChevronRight className="w-4 h-4" aria-hidden="true" />
         </button>

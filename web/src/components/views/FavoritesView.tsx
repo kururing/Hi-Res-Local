@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Heart, Play, Disc, User } from 'lucide-react';
+import { Heart, Play, Shuffle, Disc, User } from 'lucide-react';
 import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
 import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
 import { VirtualList } from '../common/VirtualList';
+import { TrackPlayArtwork } from '../common/TrackPlayArtwork';
 import { Track } from '../../types/library';
 import { t } from '../../i18n';
 import { activateOnKeyboard } from '../../services/keyboard';
@@ -30,7 +31,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
     toggleFavoriteTrack,
   } = useLibrary();
 
-  const { playTrack, playQueue, status } = usePlayer();
+  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
   const { settings } = useSettings();
   const [activeTab, setActiveTab] = useState<FavTab>('tracks');
 
@@ -56,19 +57,32 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
             <span>{t('favorites_title', settings.language)}</span>
           </h1>
           <span className="text-xs text-brand-muted">
-            {favTracks.length} tracks • {favAlbums.length} albums • {favArtists.length} artists
+            {t('favorites_summary', settings.language, { tracks: favTracks.length, albums: favAlbums.length, artists: favArtists.length })}
           </span>
         </div>
 
         {activeTab === 'tracks' && favTracks.length > 0 && (
-          <Button
-            variant="accent"
-            size="md"
-            icon={<Play className="w-4 h-4 fill-current" />}
-            onClick={() => playQueue(favTracks, 0)}
-          >
-            {t('tracks_play_all', settings.language)}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="accent"
+              size="md"
+              icon={<Play className="w-4 h-4 fill-current" />}
+              onClick={() => playQueue(favTracks, 0)}
+            >
+              {t('tracks_play_all', settings.language)}
+            </Button>
+            <Button
+              variant="secondary"
+              size="md"
+              icon={<Shuffle className="w-4 h-4" />}
+              onClick={() => {
+                if (!status.shuffle) void toggleShuffle();
+                playQueue(favTracks, 0);
+              }}
+            >
+              {t('tracks_shuffle_all', settings.language)}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -124,7 +138,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
               rowHeight={64}
               className="h-full min-h-0 rounded-xl border border-brand-border bg-oled-card/60"
               getKey={item => item.id}
-              renderRow={(tr, idx) => {
+              renderRow={tr => {
                 const isPlaying = status.current_track?.id === tr.id;
                 return (
                   <div
@@ -134,22 +148,18 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                     }`}
                   >
                     <div className="flex items-center gap-3 min-w-0 pr-2">
-                      <button
-                        onClick={() => playTrack(tr, favTracks)}
-                        className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base focus-visible:outline-none"
-                        aria-label={`Play ${tr.title}`}
-                      >
-                        {isPlaying ? (
-                          <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
-                        ) : (
-                          <span className="font-mono text-brand-muted">{idx + 1}</span>
-                        )}
-                      </button>
+                      <TrackPlayArtwork
+                        track={tr}
+                        isPlaying={isPlaying}
+                        onPlay={() => playTrack(tr, favTracks)}
+                      />
                       <div className="flex flex-col min-w-0">
                         <span className="font-semibold truncate">{tr.title}</span>
-                        <span className="text-[11px] text-brand-muted truncate">
-                          {tr.artist} • {tr.album}
-                        </span>
+                        <div className="flex min-w-0 items-center gap-1 text-[11px] text-brand-muted truncate">
+                          <button type="button" className="truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}>{tr.artist}</button>
+                          <span>•</span>
+                          <button type="button" className="truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = albums.find(item => item.name === tr.album && item.artist === tr.artist); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -157,7 +167,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                       <button
                         onClick={() => toggleFavoriteTrack(tr.id)}
                         className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-rose-500 hover:text-rose-400 focus-visible:outline-none"
-                        aria-label="Remove from favorites"
+                        aria-label={t('favorite_track_remove', settings.language)}
                         aria-pressed={true}
                       >
                         <Heart className="w-4 h-4 fill-current" aria-hidden="true" />
@@ -185,7 +195,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                 onKeyDown={event => activateOnKeyboard(event, () => onNavigate('album_detail', al))}
                 role="button"
                 tabIndex={0}
-                aria-label={`Open album ${al.name} by ${al.artist}`}
+                aria-label={t('home_open_album', settings.language, { name: al.name, artist: al.artist })}
                 className="group p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               >
                 <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
@@ -215,7 +225,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                 onKeyDown={event => activateOnKeyboard(event, () => onNavigate('artist_detail', ar))}
                 role="button"
                 tabIndex={0}
-                aria-label={`Open artist ${ar.name}`}
+                aria-label={t('favorite_artist_open', settings.language, { name: ar.name })}
                 className="group p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               >
                 <div className="relative w-24 h-24 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border mb-3 flex items-center justify-center">
@@ -225,7 +235,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                   {ar.name}
                 </span>
                 <span className="text-[11px] text-brand-muted mt-0.5">
-                  {ar.track_count} tracks
+                  {t('favorite_artist_track_count', settings.language, { count: ar.track_count })}
                 </span>
               </div>
             ))

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { FileText, Heart, RefreshCw } from 'lucide-react';
+import { FileText, Heart, Music2, RefreshCw } from 'lucide-react';
 import { usePlayer, usePlaybackProgress } from '../../context/PlayerContext';
 import { useLibrary } from '../../context/LibraryContext';
 import { useSettings } from '../../context/SettingsContext';
@@ -250,7 +250,9 @@ export const LyricsView: React.FC = () => {
           onWheel={() => setIsFollowingLyrics(false)}
           onTouchStart={() => setIsFollowingLyrics(false)}
           onPointerDown={() => setIsFollowingLyrics(false)}
-          className="relative min-h-0 min-w-0 flex-1 space-y-2 overflow-x-hidden overflow-y-auto overscroll-contain py-8 pr-2 text-left scroll-smooth"
+          className={`relative min-h-0 min-w-0 flex-1 space-y-2 overflow-x-hidden overflow-y-auto overscroll-contain py-8 pr-0.5 text-left scroll-smooth ${
+            isSynced && displayLines.length <= 8 ? 'flex min-h-full flex-col justify-center' : ''
+          }`}
         >
           {loading ? (
             <div className="h-full flex items-center justify-center text-brand-muted text-sm animate-pulse">
@@ -265,15 +267,17 @@ export const LyricsView: React.FC = () => {
                   line.romanized &&
                     line.romanized.trim() &&
                     line.romanized.trim().toLocaleLowerCase() !==
-                      line.text.trim().toLocaleLowerCase()
+                    line.text.trim().toLocaleLowerCase()
                 );
+              const isBlank = !line.text.trim() && !line.romanized?.trim();
 
               return (
                 <button
                   key={idx}
                   type="button"
                   onClick={() => seek(line.timestamp)}
-                  className="group mx-auto flex min-h-[52px] w-full max-w-3xl cursor-pointer items-center justify-start px-3 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                  aria-label={isBlank ? `Seek to ${line.timestamp.toFixed(1)} seconds` : capitalizeFirstLetter(line.text)}
+                  className="group mx-auto flex min-h-[52px] w-full max-w-5xl cursor-pointer items-center justify-start px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                 >
                   <span
                     className={`inline-flex max-w-full flex-col items-start gap-1 rounded-[1.6rem] px-5 py-3 text-left transition-[color,background-color,box-shadow,transform] duration-300 sm:px-8 ${
@@ -282,15 +286,26 @@ export const LyricsView: React.FC = () => {
                         : 'group-hover:bg-oled-hover/35'
                     }`}
                   >
-                    <span
-                      className={`transition-colors duration-200 ${
-                        isActive
-                          ? 'text-3xl font-bold text-brand-foreground sm:text-4xl'
-                          : 'text-xl text-brand-foreground/72 group-hover:text-brand-foreground sm:text-2xl'
-                      }`}
-                    >
-                      {capitalizeFirstLetter(line.text)}
-                    </span>
+                    {isBlank ? (
+                      <Music2
+                        aria-hidden="true"
+                        className={`font-bold transition-colors duration-200 ${
+                          isActive
+                            ? 'h-7 w-7 text-brand-accent sm:h-8 sm:w-8'
+                            : 'h-5 w-5 text-brand-foreground/45 group-hover:text-brand-foreground/70 sm:h-6 sm:w-6'
+                        }`}
+                      />
+                    ) : (
+                      <span
+                        className={`font-bold transition-colors duration-200 ${
+                          isActive
+                            ? 'text-3xl font-bold text-brand-foreground sm:text-4xl'
+                            : 'text-xl text-brand-foreground/72 group-hover:text-brand-foreground sm:text-2xl'
+                        }`}
+                      >
+                        {capitalizeFirstLetter(line.text)}
+                      </span>
+                    )}
                     {hasSub && (
                       <span
                         className={`transition-colors duration-200 ${
@@ -309,14 +324,14 @@ export const LyricsView: React.FC = () => {
           ) : (lyricsData?.plain_text && lyricsData.plain_text.trim().length > 0) ||
             (lyricsData?.romanized?.plain_text && lyricsData.romanized.plain_text.trim().length > 0) ? (
             /* Plain Text Fallback */
-            <div className="mx-auto max-w-3xl space-y-4 px-4 py-6 text-left">
+            <div className="mx-auto max-w-5xl space-y-4 px-2 py-6 text-left">
               {lyricsMode !== 'romanized' && lyricsData?.plain_text && (
-                <div className="whitespace-pre-line p-4 text-lg leading-relaxed text-brand-foreground sm:text-xl">
+                <div className="whitespace-pre-line p-4 text-lg font-bold leading-relaxed text-brand-foreground sm:text-xl">
                   {capitalizeLyricsText(lyricsData.plain_text)}
                 </div>
               )}
               {lyricsMode !== 'original' && lyricsData?.romanized?.plain_text && (
-                <div className="whitespace-pre-line p-4 text-lg leading-relaxed text-brand-foreground sm:text-xl">
+                <div className="whitespace-pre-line p-4 text-lg font-bold leading-relaxed text-brand-foreground sm:text-xl">
                   {capitalizeLyricsText(lyricsData.romanized.plain_text)}
                 </div>
               )}

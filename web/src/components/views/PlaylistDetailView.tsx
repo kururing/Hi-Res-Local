@@ -4,12 +4,9 @@ import {
   Shuffle,
   Download,
   Trash2,
-  ListMusic,
-  ArrowLeft,
   ArrowUp,
   ArrowDown,
   X,
-  Sparkles,
   Heart,
 } from 'lucide-react';
 import { usePlaylists } from '../../context/PlaylistContext';
@@ -21,6 +18,8 @@ import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
 import { ContextMenu, ContextMenuState } from '../common/ContextMenu';
 import { VirtualList } from '../common/VirtualList';
+import { TrackPlayArtwork } from '../common/TrackPlayArtwork';
+import { PlaylistArtwork } from '../common/PlaylistArtwork';
 import { Playlist } from '../../types/playlist';
 import { Track } from '../../types/library';
 import { t } from '../../i18n';
@@ -44,7 +43,8 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
   onOpenDetails,
 }) => {
   const { getPlaylistTracks, deletePlaylist, removeTrackFromPlaylist, reorderPlaylist, exportM3uFile } = usePlaylists();
-  const { playTrack, playQueue, status } = usePlayer();
+  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
+  const { albums, artists } = useLibrary();
   const { toggleFavoriteTrack, favoriteTrackIds } = useLibrary();
   const { settings } = useSettings();
   const { showToast } = useToast();
@@ -99,24 +99,11 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
   };
 
   return (
-    <div className="view-page mx-auto w-full max-w-7xl space-y-8 p-6 select-none md:p-8">
-      {/* Back Button */}
-      <button
-        onClick={() => onNavigate('playlists')}
-        className="inline-flex items-center gap-2 text-xs font-semibold text-brand-muted transition-colors hover:text-brand-foreground focus-visible:outline-none"
-      >
-        <ArrowLeft className="w-4 h-4" />
-        <span>Back to Playlists</span>
-      </button>
-
+    <div className="view-page mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-6 !overflow-hidden p-6 select-none md:p-8">
       {/* Playlist Header Banner */}
-      <div className="flex flex-col items-center gap-6 rounded-2xl border border-brand-border bg-gradient-to-r from-brand-primary via-brand-primary/60 to-oled-card p-6 shadow-card-elevated sm:flex-row sm:items-end">
-        <div className="w-40 h-40 sm:w-48 sm:h-48 rounded-2xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
-          {playlist.is_smart ? (
-            <Sparkles className="w-20 h-20 text-amber-400" />
-          ) : (
-            <ListMusic className="w-20 h-20 text-brand-accent" />
-          )}
+      <div className="flex shrink-0 flex-col items-center gap-6 rounded-2xl border border-brand-border bg-gradient-to-r from-brand-primary via-brand-primary/60 to-oled-card p-6 shadow-card-elevated sm:flex-row sm:items-end">
+        <div className="w-40 h-40 sm:w-48 sm:h-48 rounded-2xl border border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
+          <PlaylistArtwork playlist={playlist} tracks={playlistTracks} />
         </div>
 
         <div className="flex flex-col gap-2 min-w-0 text-center sm:text-left flex-1">
@@ -154,18 +141,18 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
               icon={<Play className="w-4 h-4 fill-current" />}
               onClick={() => playlistTracks.length > 0 && playQueue(playlistTracks, 0)}
             >
-              Play
+            {t('detail_play', settings.language)}
             </Button>
             <Button
               variant="secondary"
               size="md"
               icon={<Shuffle className="w-4 h-4" />}
               onClick={() => {
-                const shuffled = [...playlistTracks].sort(() => Math.random() - 0.5);
-                playQueue(shuffled, 0);
+                if (!status.shuffle) void toggleShuffle();
+                playQueue(playlistTracks, 0);
               }}
             >
-              Shuffle
+              {t('detail_shuffle', settings.language)}
             </Button>
             <Button
               variant="primary"
@@ -191,14 +178,14 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
 
       {/* Tracks Table */}
       {playlistTracks.length === 0 ? (
-        <div className="p-12 text-center text-brand-muted bg-oled-card/50 rounded-2xl border border-brand-border/60">
-          No tracks in this playlist. Right-click on any song in library and choose &quot;Add to Playlist&quot;.
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded-2xl border border-brand-border/60 bg-oled-card/50 p-12 text-center text-brand-muted">
+          {t('empty_playlist_tracks', settings.language)}
         </div>
       ) : (
         <VirtualList
           items={playlistTracks}
           rowHeight={68}
-          className="rounded-xl border border-brand-border bg-oled-card/60"
+          className="min-h-0 flex-1 rounded-xl border border-brand-border bg-oled-card/60"
           getKey={(tr, idx) => `${tr.id}-${idx}`}
           renderRow={(tr, idx) => {
             const isPlaying = status.current_track?.id === tr.id;
@@ -212,21 +199,12 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                   isPlaying ? 'bg-brand-accent/10 text-brand-accent font-medium' : 'hover:bg-oled-hover text-brand-foreground'
                 }`}
               >
-                <div className="col-span-1 text-center font-mono flex items-center justify-center">
-                  <button
-                    onClick={() => playTrack(tr, playlistTracks)}
-                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted group-hover:text-brand-accent group-hover:bg-oled-base focus-visible:outline-none"
-                    aria-label={`Play ${tr.title}`}
-                  >
-                    {isPlaying ? (
-                      <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
-                    ) : (
-                      <>
-                        <span className="group-hover:hidden text-brand-muted">{idx + 1}</span>
-                        <Play className="w-3.5 h-3.5 fill-current hidden group-hover:block ml-0.5" aria-hidden="true" />
-                      </>
-                    )}
-                  </button>
+                <div className="col-span-1 flex items-center justify-center">
+                  <TrackPlayArtwork
+                    track={tr}
+                    isPlaying={isPlaying}
+                    onPlay={() => playTrack(tr, playlistTracks)}
+                  />
                 </div>
 
                 <div className="col-span-5 flex flex-col min-w-0 pr-2">
@@ -235,12 +213,12 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                   </span>
                   <div className="flex items-center gap-2 mt-0.5">
                     <Badge track={tr} />
-                    <span className="text-[10px] text-brand-muted truncate">{tr.artist}</span>
+                    <button type="button" className="text-left text-[10px] text-brand-muted truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}>{tr.artist}</button>
                   </div>
                 </div>
 
                 <div className="hidden sm:block col-span-3 truncate text-brand-muted">
-                  {tr.album}
+                  <button type="button" className="max-w-full truncate text-left hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = albums.find(item => item.name === tr.album && item.artist === tr.artist); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
                 </div>
 
                 <div className="col-span-6 sm:col-span-3 flex items-center justify-end gap-1">

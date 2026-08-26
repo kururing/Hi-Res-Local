@@ -6,6 +6,7 @@ import { PlayerBar } from '../player/PlayerBar';
 import { QueueDrawer } from '../player/QueueDrawer';
 import { EqualizerModal } from '../player/EqualizerModal';
 import { TrackDetailsModal } from '../views/TrackDetailsModal';
+import { ArtworkAdaptiveTheme } from './ArtworkAdaptiveTheme';
 
 import { HomeView } from '../views/HomeView';
 
@@ -32,10 +33,29 @@ interface HistoryEntry {
   payload?: unknown;
 }
 
+interface NavigationState {
+  entries: HistoryEntry[];
+  index: number;
+}
+
+const isSameDestination = (current: HistoryEntry, view: string, payload?: unknown) => {
+  if (current.view !== view) return false;
+  if (current.payload === payload) return true;
+  if (!current.payload || !payload || typeof current.payload !== 'object' || typeof payload !== 'object') {
+    return false;
+  }
+
+  const currentId = (current.payload as { id?: unknown }).id;
+  const nextId = (payload as { id?: unknown }).id;
+  return currentId !== undefined && nextId !== undefined && currentId === nextId;
+};
+
 export const AppShell: React.FC = () => {
   const mainRef = useRef<HTMLElement>(null);
-  const [history, setHistory] = useState<HistoryEntry[]>([{ view: 'home' }]);
-  const [historyIndex, setHistoryIndex] = useState(0);
+  const [navigation, setNavigation] = useState<NavigationState>({
+    entries: [{ view: 'home' }],
+    index: 0,
+  });
 
   const [selectedTrackDetails, setSelectedTrackDetails] = useState<Track | null>(null);
   const [isTrackDetailsOpen, setIsTrackDetailsOpen] = useState(false);
@@ -76,7 +96,7 @@ export const AppShell: React.FC = () => {
     };
   }, []);
 
-  const currentEntry = history[historyIndex] || { view: 'home' };
+  const currentEntry = navigation.entries[navigation.index] || { view: 'home' };
   const currentView = currentEntry.view;
   const currentPayload = currentEntry.payload;
 
@@ -86,24 +106,38 @@ export const AppShell: React.FC = () => {
   }, [currentView]);
 
   const navigate = useCallback((view: string, payload?: unknown) => {
-    setHistory(prev => {
-      const sliced = prev.slice(0, historyIndex + 1);
-      return [...sliced, { view, payload }];
+    setNavigation(previous => {
+      const current = previous.entries[previous.index];
+      if (current && isSameDestination(current, view, payload)) return previous;
+
+      const entries = [
+        ...previous.entries.slice(0, previous.index + 1),
+        { view, payload },
+      ];
+      return { entries, index: entries.length - 1 };
     });
-    setHistoryIndex(prev => prev + 1);
-  }, [historyIndex]);
+  }, []);
 
   const goBack = useCallback(() => {
-    if (historyIndex > 0) {
-      setHistoryIndex(prev => prev - 1);
-    }
-  }, [historyIndex]);
+    setNavigation(previous => previous.index > 0
+      ? { ...previous, index: previous.index - 1 }
+      : previous);
+  }, []);
 
   const goForward = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      setHistoryIndex(prev => prev + 1);
+    setNavigation(previous => previous.index < previous.entries.length - 1
+      ? { ...previous, index: previous.index + 1 }
+      : previous);
+  }, []);
+
+  const toggleNowPlaying = useCallback(() => {
+    if (currentView === 'lyrics') {
+      goBack();
+      return;
     }
-  }, [historyIndex, history.length]);
+
+    navigate('lyrics');
+  }, [currentView, goBack, navigate]);
 
   const openTrackDetails = (track: Track) => {
     setSelectedTrackDetails(track);
@@ -171,6 +205,7 @@ export const AppShell: React.FC = () => {
 
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-oled-base text-brand-foreground font-sans selection:bg-brand-secondary selection:text-white">
+      <ArtworkAdaptiveTheme />
       <div className="custom-theme-backdrop" aria-hidden="true" />
       <WindowTitleBar />
       <div className="app-shell relative z-10 flex min-h-0 flex-1 overflow-hidden">
@@ -191,8 +226,8 @@ export const AppShell: React.FC = () => {
         <Header
           currentView={currentView}
           onNavigate={navigate}
-          canGoBack={historyIndex > 0}
-          canGoForward={historyIndex < history.length - 1}
+          canGoBack={navigation.index > 0}
+          canGoForward={navigation.index < navigation.entries.length - 1}
           onGoBack={goBack}
           onGoForward={goForward}
         />
@@ -206,11 +241,7 @@ export const AppShell: React.FC = () => {
         >
           <div key={currentView} className="view-stage">
             <Suspense
-              fallback={(
-                <div className="flex min-h-[240px] items-center justify-center text-sm text-brand-muted" role="status">
-                  Loading view…
-                </div>
-              )}
+              fallback={null}
             >
               {renderCurrentView()}
             </Suspense>
@@ -219,7 +250,11 @@ export const AppShell: React.FC = () => {
 
         {/* Player owns its space so scrollable content can never run underneath it. */}
         <div className="player-bar-shell relative z-30 shrink-0 px-3 pb-3 pt-2">
-          <PlayerBar onNavigateNowPlaying={() => navigate('lyrics')} />
+          <PlayerBar
+            isNowPlayingOpen={currentView === 'lyrics'}
+            onNavigateNowPlaying={toggleNowPlaying}
+            onNavigateArtist={artist => navigate('artist_detail', artist)}
+          />
         </div>
       </div>
 

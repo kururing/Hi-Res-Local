@@ -1,5 +1,5 @@
 import React from 'react';
-import { User, Disc, Play, Heart, ArrowLeft, ChevronDown, ChevronUp } from 'lucide-react';
+import { Play, Shuffle, Heart, ArrowLeft, ChevronDown, ChevronUp } from 'lucide-react';
 import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
@@ -7,6 +7,9 @@ import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
 import { Artist, Track } from '../../types/library';
 import { t } from '../../i18n';
+import { RemoteArtwork } from '../common/RemoteArtwork';
+import { AlbumArtwork } from '../common/AlbumArtwork';
+import { TrackPlayArtwork } from '../common/TrackPlayArtwork';
 
 interface ArtistDetailViewProps {
   artist: Artist;
@@ -28,7 +31,7 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
   onNavigate,
 }) => {
   const { tracks, toggleFavoriteArtist, favoriteArtistNames } = useLibrary();
-  const { playTrack, playQueue, status } = usePlayer();
+  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
   const { settings } = useSettings();
   const [showAllTracks, setShowAllTracks] = React.useState(false);
 
@@ -54,13 +57,13 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
         className="inline-flex items-center gap-2 text-xs font-semibold text-brand-muted hover:text-brand-foreground transition-colors focus-visible:outline-none"
       >
         <ArrowLeft className="w-4 h-4" />
-        <span>Back to Artists</span>
+        <span>{t('nav_back_to_artists', settings.language)}</span>
       </button>
 
       {/* Artist Header Banner */}
       <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-brand-primary/60 to-oled-card border border-brand-border shadow-card-elevated">
         <div className="w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border-2 border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
-          <User className="w-20 h-20 text-brand-accent/60" />
+          <RemoteArtwork kind="artist" artist={artist.name} alt={`${artist.name} portrait`} />
         </div>
 
         <div className="flex flex-col gap-2 min-w-0 text-center sm:text-left flex-1">
@@ -83,19 +86,31 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
             )}
           </div>
 
-          <div className="flex items-center justify-center sm:justify-start gap-3 mt-4">
+          <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 mt-4">
             <Button
               variant="accent"
               size="md"
               icon={<Play className="w-4 h-4 fill-current" />}
               onClick={() => artistTracks.length > 0 && playQueue(artistTracks, 0)}
             >
-              Play Artist
+              {t('artist_play', settings.language)}
+            </Button>
+            <Button
+              variant="secondary"
+              size="md"
+              icon={<Shuffle className="w-4 h-4" />}
+              onClick={() => {
+                if (!status.shuffle) void toggleShuffle();
+                playQueue(artistTracks, 0);
+              }}
+              disabled={artistTracks.length === 0}
+            >
+              {t('tracks_shuffle_all', settings.language)}
             </Button>
             <button
               onClick={() => toggleFavoriteArtist(artist.name)}
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-oled-card border border-brand-border text-brand-muted hover:text-rose-400 transition-colors focus-visible:outline-none"
-              aria-label="Toggle favorite artist"
+              aria-label={t('aria_toggle_artist_favorite', settings.language)}
               aria-pressed={isFav}
             >
               <Heart
@@ -142,7 +157,7 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
           id="artist-track-list"
           className="rounded-xl border border-brand-border bg-oled-card/60 overflow-hidden divide-y divide-brand-border/30"
         >
-          {visibleTracks.map((tr, idx) => {
+          {visibleTracks.map(tr => {
             const isPlaying = status.current_track?.id === tr.id;
             return (
               <div
@@ -153,20 +168,14 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
                 }`}
               >
                 <div className="flex items-center gap-3 min-w-0 pr-2">
-                  <button
-                    onClick={() => playTrack(tr, artistTracks)}
-                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all focus-visible:outline-none"
-                    aria-label={`Play ${tr.title}`}
-                  >
-                    {isPlaying ? (
-                      <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
-                    ) : (
-                      <span className="font-mono text-brand-muted">{idx + 1}</span>
-                    )}
-                  </button>
+                  <TrackPlayArtwork
+                    track={tr}
+                    isPlaying={isPlaying}
+                    onPlay={() => playTrack(tr, artistTracks)}
+                  />
                   <div className="flex flex-col min-w-0">
                     <span className="font-semibold truncate">{tr.title}</span>
-                    <span className="text-[11px] text-brand-muted truncate">{tr.album}</span>
+                    <button type="button" className="text-left text-[11px] text-brand-muted truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artist.albums.find(item => item.name === tr.album); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
                   </div>
                 </div>
 
@@ -199,7 +208,7 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
                 className="absolute inset-0 z-10 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               />
               <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
-                <Disc className="w-14 h-14 text-brand-accent/40 group-hover:rotate-90 transition-transform duration-700" aria-hidden="true" />
+                <AlbumArtwork album={album} alt={`${album.name} cover`} />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <button
                     type="button"

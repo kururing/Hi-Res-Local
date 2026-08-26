@@ -41,7 +41,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': sourceDirectory,
-      path: 'path-browserify',
+      path: fileURLToPath(new URL('./src/shims/path-browserify.ts', import.meta.url)),
     },
   },
   server: {

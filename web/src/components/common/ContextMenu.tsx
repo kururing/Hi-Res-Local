@@ -37,6 +37,7 @@ interface ContextMenuProps {
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
   const menuRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const { playTrack, playNext, addToQueue } = usePlayer();
   const { toggleFavoriteTrack, favoriteTrackIds } = useLibrary();
   const { playlists, addTrackToPlaylist, removeTrackFromPlaylist } = usePlaylists();
@@ -55,6 +56,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
     };
 
     if (state.isOpen) {
+      previousFocusRef.current = document.activeElement as HTMLElement | null;
+      window.requestAnimationFrame(() => menuRef.current?.querySelector<HTMLElement>('button')?.focus());
       window.addEventListener('mousedown', handleClickOutside);
       window.addEventListener('scroll', handleScroll, true);
       window.addEventListener('keydown', handleKeyDown);
@@ -63,6 +66,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
       window.removeEventListener('mousedown', handleClickOutside);
       window.removeEventListener('scroll', handleScroll, true);
       window.removeEventListener('keydown', handleKeyDown);
+      previousFocusRef.current?.focus();
     };
   }, [state.isOpen, onClose]);
 
@@ -83,11 +87,24 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
     onClose();
   };
 
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? []);
+    const current = items.indexOf(document.activeElement as HTMLElement);
+    let next = current;
+    if (event.key === 'ArrowDown') next = (current + 1) % items.length;
+    else if (event.key === 'ArrowUp') next = (current - 1 + items.length) % items.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = items.length - 1;
+    else return;
+    event.preventDefault();
+    items[next]?.focus();
+  };
+
   return (
     <div
       ref={menuRef}
-      role="menu"
-      aria-label="Track actions"
+      aria-label={t('aria_track_actions', settings.language)}
+      onKeyDown={handleMenuKeyDown}
       style={{ top: `${y}px`, left: `${x}px` }}
       className="fixed z-50 w-56 bg-oled-card/95 border border-brand-border rounded-xl shadow-card-elevated backdrop-blur-md py-1.5 text-xs text-brand-foreground flex flex-col gap-0.5 animate-fadeIn select-none"
     >
@@ -147,16 +164,16 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
 
       {/* Add to Playlist Submenu */}
       <div className="relative group">
-        <div className="flex items-center justify-between px-3 py-2 hover:bg-oled-hover cursor-pointer transition-colors">
+        <button aria-haspopup="menu" className="flex w-full items-center justify-between px-3 py-2 hover:bg-oled-hover cursor-pointer transition-colors text-left">
           <div className="flex items-center gap-2.5">
             <FolderPlus className="w-4 h-4 text-brand-muted" />
             <span>{t('menu_add_to_playlist', settings.language)}</span>
           </div>
           <span className="text-[10px] text-brand-muted">▶</span>
-        </div>
+        </button>
 
         {/* Submenu Flyout */}
-        <div className="hidden group-hover:flex flex-col absolute left-full top-0 ml-1 w-48 bg-oled-card border border-brand-border rounded-xl shadow-card-elevated py-1 z-50">
+        <div className="hidden group-hover:flex group-focus-within:flex flex-col absolute left-full top-0 ml-1 w-48 bg-oled-card border border-brand-border rounded-xl shadow-card-elevated py-1 z-50">
           {playlists.filter(p => !p.is_smart).length === 0 ? (
             <span className="px-3 py-2 text-[11px] text-brand-muted">No custom playlists</span>
           ) : (

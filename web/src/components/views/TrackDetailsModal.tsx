@@ -116,10 +116,10 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
             <button
               onClick={handleCopy}
               className="min-h-[44px] px-2 text-xs text-brand-accent hover:underline flex items-center gap-1 focus-visible:outline-none"
-              aria-label="Copy track file path"
+              aria-label={t('aria_copy_track_path', settings.language)}
             >
               <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Copy</span>
+              <span>{t('btn_copy', settings.language)}</span>
             </button>
           </div>
           <span className="font-mono text-xs text-brand-foreground break-all bg-oled-card p-2 rounded border border-brand-border/40 select-all">

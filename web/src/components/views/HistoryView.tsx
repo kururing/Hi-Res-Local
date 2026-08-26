@@ -1,21 +1,24 @@
 import React from 'react';
-import { History as HistoryIcon, Play, Trash2, Clock } from 'lucide-react';
+import { History as HistoryIcon, Trash2, Clock } from 'lucide-react';
 import { IpcService } from '../../services/ipc';
 import { PlayHistoryEntry } from '../../types/ipc';
 import { usePlayer } from '../../context/PlayerContext';
+import { useLibrary } from '../../context/LibraryContext';
 import { useSettings } from '../../context/SettingsContext';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
+import { TrackPlayArtwork } from '../common/TrackPlayArtwork';
 import { t } from '../../i18n';
 
 interface HistoryViewProps {
   onNavigate: (view: string, payload?: unknown) => void;
 }
 
-export const HistoryView: React.FC<HistoryViewProps> = () => {
+export const HistoryView: React.FC<HistoryViewProps> = ({ onNavigate }) => {
   const [historyItems, setHistoryItems] = React.useState<PlayHistoryEntry[]>([]);
   const { playTrack, status } = usePlayer();
   const { settings } = useSettings();
+  const { albums, artists } = useLibrary();
 
   const loadHistory = React.useCallback(async () => {
     const entries = await IpcService.invoke('get_play_history', { limit: 100, offset: 0 });
@@ -43,7 +46,7 @@ export const HistoryView: React.FC<HistoryViewProps> = () => {
             <span>{t('nav_history', settings.language)}</span>
           </h1>
           <span className="text-xs text-brand-muted">
-            {historyItems.length} songs played recently
+            {t('history_subtitle', settings.language, { count: historyItems.length })}
           </span>
         </div>
 
@@ -54,7 +57,7 @@ export const HistoryView: React.FC<HistoryViewProps> = () => {
             icon={<Trash2 className="w-4 h-4" />}
             onClick={clearHistory}
           >
-            Clear History
+            {t('history_clear', settings.language)}
           </Button>
         )}
       </div>
@@ -62,7 +65,7 @@ export const HistoryView: React.FC<HistoryViewProps> = () => {
       {historyItems.length === 0 ? (
         <div className="p-16 rounded-2xl bg-oled-card/50 border border-brand-border/60 text-center text-brand-muted flex flex-col items-center gap-3">
           <Clock className="w-10 h-10 stroke-1" />
-          <p className="text-sm">No listening history recorded yet.</p>
+          <p className="text-sm">{t('history_empty', settings.language)}</p>
         </div>
       ) : (
         <div className="rounded-xl border border-brand-border bg-oled-card/60 overflow-hidden divide-y divide-brand-border/30">
@@ -75,36 +78,37 @@ export const HistoryView: React.FC<HistoryViewProps> = () => {
               <div
                 key={`${item.track_id}-${item.played_at}-${idx}`}
                 onDoubleClick={() => playTrack(track)}
-                className={`flex items-center justify-between px-4 py-3 text-xs transition-colors cursor-pointer ${
+                className={`history-row-grid grid items-center gap-3 px-4 py-2.5 text-xs transition-colors cursor-pointer ${
                   isPlaying ? 'bg-brand-accent/10 text-brand-accent font-medium' : 'hover:bg-oled-hover text-brand-foreground'
                 }`}
               >
-                <div className="flex items-center gap-3 min-w-0 pr-2">
-                  <button
-                    onClick={() => playTrack(track)}
-                    className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-brand-muted hover:text-brand-accent hover:bg-oled-base transition-all focus-visible:outline-none"
-                    aria-label={`Play ${track.title}`}
-                  >
-                    {isPlaying ? (
-                      <span className="w-2.5 h-2.5 rounded-full bg-brand-accent animate-pulse" />
-                    ) : (
-                      <Play className="w-3.5 h-3.5 fill-current ml-0.5" aria-hidden="true" />
-                    )}
-                  </button>
-                  <div className="flex flex-col min-w-0">
-                    <span className="font-semibold truncate">{track.title}</span>
-                    <span className="text-[11px] text-brand-muted truncate">
-                      {track.artist} • {track.album}
-                    </span>
-                  </div>
+                <div className="flex items-center justify-center">
+                  <TrackPlayArtwork
+                    track={track}
+                    isPlaying={isPlaying}
+                    onPlay={() => playTrack(track)}
+                  />
                 </div>
 
-                <div className="flex items-center gap-3">
+                <span className="min-w-0 truncate font-semibold" title={track.title}>
+                  {track.title}
+                </span>
+
+                <button type="button" className="min-w-0 truncate text-left text-brand-muted hover:text-brand-accent" title={track.artist} onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === track.artist); if (target) onNavigate('artist_detail', target); }}>
+                  {track.artist}
+                </button>
+
+                <button type="button" className="hidden min-w-0 truncate text-left text-brand-muted hover:text-brand-accent xl:block" title={track.album} onClick={e => { e.stopPropagation(); const target = albums.find(item => item.name === track.album && item.artist === track.artist); if (target) onNavigate('album_detail', target); }}>
+                  {track.album}
+                </button>
+
+                <div className="flex min-w-0 items-center justify-end">
                   <Badge track={track} />
-                  <span className="font-mono text-brand-muted text-[11px]">
-                    {new Date(item.played_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
                 </div>
+
+                <span className="text-right font-mono text-[11px] tabular-nums text-brand-muted">
+                  {new Date(item.played_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
               </div>
             );
           })}

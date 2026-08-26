@@ -8,6 +8,18 @@ const mix = (a: RGB, b: RGB, amount: number): RGB => a.map(
 
 const cssRgb = (color: RGB): string => color.join(' ');
 
+const createThemeBorder = (card: RGB, accent: RGB, foreground: RGB, dark: boolean): string => {
+  const neutralBorder = mix(card, foreground, dark ? 0.22 : 0.16);
+  return cssRgb(mix(neutralBorder, accent, dark ? 0.18 : 0.12));
+};
+
+export const getImageThemeBorderColor = (theme: CustomImageTheme): string => createThemeBorder(
+  theme.colors.card.split(' ').map(Number) as RGB,
+  theme.colors.accent.split(' ').map(Number) as RGB,
+  theme.colors.foreground.split(' ').map(Number) as RGB,
+  theme.is_dark
+);
+
 const luminance = ([r, g, b]: RGB): number => {
   const linear = [r, g, b].map(channel => {
     const value = channel / 255;
@@ -18,15 +30,17 @@ const luminance = ([r, g, b]: RGB): number => {
 
 const saturation = ([r, g, b]: RGB): number => Math.max(r, g, b) - Math.min(r, g, b);
 
-const loadImage = (file: File): Promise<HTMLImageElement> => new Promise((resolve, reject) => {
-  const url = URL.createObjectURL(file);
+const loadImage = (input: File | string): Promise<HTMLImageElement> => new Promise((resolve, reject) => {
+  const isFile = input instanceof File;
+  const url = isFile ? URL.createObjectURL(input) : input;
   const image = new Image();
+  if (!isFile && /^https?:\/\//i.test(url)) image.crossOrigin = 'anonymous';
   image.onload = () => {
-    URL.revokeObjectURL(url);
+    if (isFile) URL.revokeObjectURL(url);
     resolve(image);
   };
   image.onerror = () => {
-    URL.revokeObjectURL(url);
+    if (isFile) URL.revokeObjectURL(url);
     reject(new Error('Unable to decode image'));
   };
   image.src = url;
@@ -98,6 +112,7 @@ export const applyImageThemeAccent = (theme: CustomImageTheme, index: number): C
   const chosen = palette[safeIndex].split(' ').map(Number) as RGB;
   const card = theme.colors.card.split(' ').map(Number) as RGB;
   const base = theme.colors.base.split(' ').map(Number) as RGB;
+  const foreground = theme.colors.foreground.split(' ').map(Number) as RGB;
   const accent = mix(chosen, theme.is_dark ? [220, 218, 255] : [70, 35, 82], theme.is_dark ? 0.16 : 0.1);
   return {
     ...theme,
@@ -110,23 +125,27 @@ export const applyImageThemeAccent = (theme: CustomImageTheme, index: number): C
       secondary: cssRgb(mix(accent, card, 0.22)),
       accent: cssRgb(accent),
       accent_hover: cssRgb(mix(accent, theme.is_dark ? [255, 255, 255] : [0, 0, 0], 0.16)),
-      border: cssRgb(mix(card, accent, theme.is_dark ? 0.3 : 0.2)),
+      border: createThemeBorder(card, accent, foreground, theme.is_dark),
     },
   };
 };
 
-export const createImageTheme = async (file: File): Promise<CustomImageTheme> => {
-  const image = await loadImage(file);
+const createThemeFromImage = (
+  image: HTMLImageElement,
+  name: string,
+  imageDataUrl = createStoredImage(image)
+): CustomImageTheme => {
   const { dominant, accent: sampledAccent, palette } = extractColors(image);
   const dark = luminance(dominant) < 0.32;
   const base = mix(dominant, dark ? [7, 8, 16] : [250, 247, 252], dark ? 0.78 : 0.86);
   const card = mix(dominant, dark ? [24, 25, 38] : [255, 255, 255], dark ? 0.7 : 0.91);
   const accent = mix(sampledAccent, dark ? [210, 205, 255] : [92, 45, 108], dark ? 0.22 : 0.12);
+  const foreground: RGB = dark ? [248, 248, 252] : [40, 31, 45];
 
   const theme: CustomImageTheme = {
     id: typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `image-theme-${Date.now()}`,
-    name: file.name.replace(/\.[^.]+$/u, '') || 'Theme từ ảnh',
-    image_data_url: createStoredImage(image),
+    name,
+    image_data_url: imageDataUrl,
     is_dark: dark,
     palette: palette.map(cssRgb),
     selected_palette_index: 0,
@@ -139,11 +158,22 @@ export const createImageTheme = async (file: File): Promise<CustomImageTheme> =>
       secondary: cssRgb(mix(accent, card, 0.22)),
       accent: cssRgb(accent),
       accent_hover: cssRgb(mix(accent, dark ? [255, 255, 255] : [0, 0, 0], 0.16)),
-      foreground: dark ? '248 248 252' : '40 31 45',
+      foreground: cssRgb(foreground),
       muted: dark ? '184 178 194' : '103 88 110',
-      border: cssRgb(mix(card, accent, dark ? 0.3 : 0.2)),
+      border: createThemeBorder(card, accent, foreground, dark),
     },
   };
   const initialIndex = Math.max(0, theme.palette?.findIndex(color => color === cssRgb(sampledAccent)) ?? 0);
   return applyImageThemeAccent(theme, initialIndex);
+};
+
+export const createImageTheme = async (file: File): Promise<CustomImageTheme> => {
+  const image = await loadImage(file);
+  return createThemeFromImage(image, file.name.replace(/\.[^.]+$/u, '') || 'Theme từ ảnh');
+};
+
+/** Creates an in-memory theme from the artwork of the currently playing track. */
+export const createArtworkTheme = async (source: string, name: string): Promise<CustomImageTheme> => {
+  const image = await loadImage(source);
+  return createThemeFromImage(image, name || 'Now playing', source);
 };

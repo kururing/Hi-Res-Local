@@ -13,6 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
+        "label": "main",
         "title": "Nghe Nhạc Pro Max",
         "width": 1280,
         "height": 800,
@@ -20,11 +21,14 @@
         "minHeight": 640,
         "resizable": true,
         "decorations": false,
-        "fullscreen": false
+        "fullscreen": false,
+        "visible": true,
+        "center": true,
+        "focus": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'",
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://itunes.apple.com https://*.mzstatic.com; img-src 'self' asset: http://asset.localhost data: blob: https://*.mzstatic.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'",
       "assetProtocol": {
         "enable": true,
         "scope": ["$CACHE/**"]

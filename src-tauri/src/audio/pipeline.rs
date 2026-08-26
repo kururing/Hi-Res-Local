@@ -50,14 +50,26 @@ const RING_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub enum DecodeCommand {
-    OpenTrack { track: AudioTrack, generation: u64 },
-    PreloadNext { track: AudioTrack, generation: u64 },
+    OpenTrack {
+        track: AudioTrack,
+        generation: u64,
+        start_position_ms: u64,
+    },
+    PreloadNext {
+        track: AudioTrack,
+        generation: u64,
+    },
     ClearPreload,
-    Stop { generation: u64 },
+    Stop {
+        generation: u64,
+    },
     SetEq(EqConfig),
     SetCrossfade(CrossfadeConfig),
     SetReplayGain(ReplayGainConfig),
-    SetOutputSpec { sample_rate: u32, channels: u16 },
+    SetOutputSpec {
+        sample_rate: u32,
+        channels: u16,
+    },
     SetExclusiveMode(bool),
     SetBitPerfect(bool),
     Shutdown,
@@ -382,7 +394,11 @@ fn decode_loop(
         if let Some(cmd) = cmd {
             match cmd {
                 DecodeCommand::Shutdown => return,
-                DecodeCommand::OpenTrack { track, generation } => {
+                DecodeCommand::OpenTrack {
+                    track,
+                    generation,
+                    start_position_ms,
+                } => {
                     #[cfg(windows)]
                     {
                         pcm_leftover.clear();
@@ -400,6 +416,22 @@ fn decode_loop(
                         #[cfg(windows)]
                         &control,
                     );
+                    // A reopen (device/engine change) must seek only after the
+                    // new decoder has been installed. Sending a separate seek
+                    // command races with OpenTrack and can seek the old decoder,
+                    // leaving the newly opened track at 0:00.
+                    if start_position_ms > 0 && pipeline.is_current(generation) {
+                        pipeline.request_reset();
+                        match gapless.seek(start_position_ms) {
+                            Ok(actual) => {
+                                apply_position(&pipeline, actual);
+                                emit_progress(&pipeline, &event_tx, actual);
+                            }
+                            Err(err) => {
+                                let _ = event_tx.send(AudioEvent::ErrorOccurred(err.to_string()));
+                            }
+                        }
+                    }
                 }
                 DecodeCommand::PreloadNext { track, generation } => {
                     if pipeline.is_current(generation)
