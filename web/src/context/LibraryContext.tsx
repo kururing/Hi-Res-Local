@@ -6,6 +6,7 @@ import { useToast } from './ToastContext';
 import { useSettings } from './SettingsContext';
 import { t } from '../i18n';
 import { normalizeLibraryTrack } from '../services/trackPresentation';
+import { artistIdentityKeys } from '../services/artistIdentity';
 
 interface LibraryContextType {
   tracks: Track[];
@@ -43,6 +44,9 @@ const GENRE_GRADIENTS = [
 // for the browser/mock preview.
 const useBackendFavorites = isTauri();
 const FAVORITES_MIGRATED_KEY = 'nghenhac_favorites_migrated_v1';
+
+const artistDisplayScore = (value: string) =>
+  (/[（(][^()（）]+[)）]/.test(value) ? 1000 : 0) + value.length;
 
 function splitAlbumKey(albumKey: string): { albumTitle: string; artistName: string } {
   const sep = albumKey.indexOf('|||');
@@ -208,7 +212,8 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const artistMap = new Map<string, Artist>();
 
     for (const album of albums) {
-      let artist = artistMap.get(album.artist);
+      const identityKeys = artistIdentityKeys(album.artist);
+      let artist = identityKeys.map(key => artistMap.get(key)).find(Boolean);
       if (!artist) {
         artist = {
           id: album.artist,
@@ -218,8 +223,11 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           albums: [],
           genres: [],
         };
-        artistMap.set(album.artist, artist);
+      } else if (artistDisplayScore(album.artist) > artistDisplayScore(artist.name)) {
+        artist.id = album.artist;
+        artist.name = album.artist;
       }
+      identityKeys.forEach(key => artistMap.set(key, artist!));
       artist.album_count++;
       artist.track_count += album.track_count;
       artist.albums.push(album);
@@ -228,7 +236,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     }
 
-    return Array.from(artistMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+    return [...new Set(artistMap.values())].sort((a, b) => a.name.localeCompare(b.name));
   }, [albums]);
 
   // Derived: Genres

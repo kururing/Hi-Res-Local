@@ -1,12 +1,17 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { IpcService, isTauri } from './ipc';
 
-const CACHE_KEY = 'nghenhac_remote_artwork_itunes_v1';
+const CACHE_KEY = 'nghenhac_remote_artwork_itunes_v3';
 const DISCORD_URL_CACHE_KEY = 'nghenhac_remote_artwork_itunes_urls_v1';
-const LEGACY_CACHE_KEYS = ['nghenhac_remote_artwork_v3'];
+const LEGACY_CACHE_KEYS = [
+  'nghenhac_remote_artwork_v3',
+  'nghenhac_remote_artwork_itunes_v1',
+  'nghenhac_remote_artwork_itunes_v2',
+];
 const ITUNES_SEARCH_URL = 'https://itunes.apple.com/search';
 const ITUNES_LOOKUP_URL = 'https://itunes.apple.com/lookup';
-const REQUEST_INTERVAL_MS = 3_100;
+const NETWORK_TIMEOUT_MS = 7_500;
+const ITUNES_REQUEST_CONCURRENCY = 4;
 
 type ArtworkKind = 'album' | 'artist';
 type ArtworkCache = Record<string, string>;
@@ -30,8 +35,19 @@ const discordUrlCache = new Map<string, string>();
 const missingArtwork = new Set<string>();
 const pending = new Map<string, Promise<string | null>>();
 let diskCache: ArtworkCache | null = null;
-let requestQueue: Promise<unknown> = Promise.resolve();
-let lastRequestAt = 0;
+let activeITunesRequests = 0;
+const queuedITunesRequests: Array<{
+  run: () => Promise<ITunesSearchResponse>;
+  resolve: (value: ITunesSearchResponse) => void;
+  reject: (reason?: unknown) => void;
+}> = [];
+const ARTIST_ARTWORK_CONCURRENCY = 4;
+let activeArtistArtworkRequests = 0;
+const queuedArtistArtworkRequests: Array<{
+  run: () => Promise<string | null>;
+  resolve: (value: string | null) => void;
+  reject: (reason?: unknown) => void;
+}> = [];
 let cacheGeneration = 0;
 
 const readCache = (): ArtworkCache => {
@@ -67,36 +83,62 @@ const matchScore = (found: string, expected: string) => {
   return actual.includes(target) || target.includes(actual) ? 3 : 0;
 };
 
-const fetchJson = async <T,>(url: string): Promise<T> => {
+const createLinkedTimeout = (externalSignal?: AbortSignal) => {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 7_500);
+  const abortFromExternal = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) abortFromExternal();
+  else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
+  const timeout = window.setTimeout(() => controller.abort(new DOMException('Artwork request timed out', 'TimeoutError')), NETWORK_TIMEOUT_MS);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      window.clearTimeout(timeout);
+      externalSignal?.removeEventListener('abort', abortFromExternal);
+    },
+  };
+};
+
+const fetchJson = async <T,>(url: string, externalSignal?: AbortSignal): Promise<T> => {
+  const request = createLinkedTimeout(externalSignal);
   try {
     const response = await fetch(url, {
-      signal: controller.signal,
+      signal: request.signal,
       headers: { Accept: 'application/json' },
     });
     if (!response.ok) throw new Error(`iTunes artwork lookup failed: ${response.status}`);
     return await response.json() as T;
   } finally {
-    window.clearTimeout(timeout);
+    request.dispose();
   }
 };
 
-const requestITunes = (url: string): Promise<ITunesSearchResponse> => {
-  const request = requestQueue.then(async () => {
-    const waitMs = Math.max(0, REQUEST_INTERVAL_MS - (Date.now() - lastRequestAt));
-    if (waitMs) await new Promise(resolve => window.setTimeout(resolve, waitMs));
-    lastRequestAt = Date.now();
-    return await fetchJson<ITunesSearchResponse>(url);
-  });
-  requestQueue = request.catch(() => undefined);
-  return request;
+const pumpITunesRequests = () => {
+  while (activeITunesRequests < ITUNES_REQUEST_CONCURRENCY && queuedITunesRequests.length > 0) {
+    const request = queuedITunesRequests.shift()!;
+    activeITunesRequests += 1;
+    request.run().then(request.resolve, request.reject).finally(() => {
+      activeITunesRequests -= 1;
+      pumpITunesRequests();
+    });
+  }
 };
 
-const searchITunes = (params: URLSearchParams) =>
-  requestITunes(`${ITUNES_SEARCH_URL}?${params}`);
+const requestITunes = (url: string, signal?: AbortSignal): Promise<ITunesSearchResponse> => new Promise((resolve, reject) => {
+  queuedITunesRequests.push({
+    run: () => {
+      signal?.throwIfAborted();
+      return fetchJson<ITunesSearchResponse>(url, signal);
+    },
+    resolve,
+    reject,
+  });
+  pumpITunesRequests();
+});
 
-const findArtist = async (artist: string): Promise<ITunesAlbumResult | null> => {
+const searchITunes = (params: URLSearchParams, signal?: AbortSignal) =>
+  requestITunes(`${ITUNES_SEARCH_URL}?${params}`, signal);
+
+const findArtist = async (artist: string, signal?: AbortSignal): Promise<ITunesAlbumResult | null> => {
   const search = await searchITunes(new URLSearchParams({
     term: artist,
     media: 'music',
@@ -104,43 +146,101 @@ const findArtist = async (artist: string): Promise<ITunesAlbumResult | null> => 
     attribute: 'artistTerm',
     country: 'vn',
     limit: '10',
-  }));
+  }), signal);
   return (search.results || [])
     .filter(item => item.artistId && item.artistName)
     .map(item => ({ item, score: matchScore(item.artistName || '', artist) }))
     .sort((a, b) => b.score - a.score)[0]?.item ?? null;
 };
 
-const findArtistArtworkUrl = async (artist: string): Promise<string | null> => {
-  const match = await findArtist(artist);
+const fetchArtistArtworkUrl = async (artist: string, signal?: AbortSignal): Promise<string | null> => {
+  const match = await findArtist(artist, signal);
   if (!match?.artistId || matchScore(match.artistName || '', artist) < 3) return null;
+
+  if (isTauri()) {
+    try {
+      signal?.throwIfAborted();
+      const portrait = await IpcService.invoke('get_apple_music_artist_artwork', {
+        country: 'vn',
+        artistId: match.artistId,
+      });
+      signal?.throwIfAborted();
+      if (portrait) return portrait.replace(/^http:/i, 'https:');
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      // Fall back to album artwork when Apple Music is unavailable.
+    }
+  }
 
   const lookup = await requestITunes(`${ITUNES_LOOKUP_URL}?${new URLSearchParams({
     id: String(match.artistId),
     entity: 'album',
     country: 'vn',
     limit: '25',
-  })}`);
+  })}`, signal);
   const album = (lookup.results || []).find(item =>
     item.artworkUrl100 && matchScore(item.artistName || '', artist) >= 3
   );
   return album?.artworkUrl100 ? toLargeArtworkUrl(album.artworkUrl100) : null;
 };
 
+const pumpArtistArtworkRequests = () => {
+  while (
+    activeArtistArtworkRequests < ARTIST_ARTWORK_CONCURRENCY
+    && queuedArtistArtworkRequests.length > 0
+  ) {
+    const request = queuedArtistArtworkRequests.shift()!;
+    activeArtistArtworkRequests += 1;
+    request.run().then(request.resolve, request.reject).finally(() => {
+      activeArtistArtworkRequests -= 1;
+      pumpArtistArtworkRequests();
+    });
+  }
+};
+
+const findArtistArtworkUrl = (artist: string, signal?: AbortSignal): Promise<string | null> => new Promise((resolve, reject) => {
+  queuedArtistArtworkRequests.push({
+    run: () => {
+      signal?.throwIfAborted();
+      return fetchArtistArtworkUrl(artist, signal);
+    },
+    resolve,
+    reject,
+  });
+  pumpArtistArtworkRequests();
+});
+
 const toLargeArtworkUrl = (url: string) => url
   .replace(/\/\d+x\d+(?:bb)?([.-])/i, '/600x600bb$1')
   .replace(/^http:/i, 'https:');
 
-const toDataUrl = async (url: string): Promise<string> => {
-  const response = await fetch(url, { mode: 'cors' });
-  if (!response.ok) throw new Error(`iTunes artwork request failed: ${response.status}`);
-  const blob = await response.blob();
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error('Artwork decode failed'));
-    reader.readAsDataURL(blob);
-  });
+const toDataUrl = async (url: string, externalSignal?: AbortSignal): Promise<string> => {
+  const request = createLinkedTimeout(externalSignal);
+  try {
+    const response = await fetch(url, { mode: 'cors', signal: request.signal });
+    if (!response.ok) throw new Error(`iTunes artwork request failed: ${response.status}`);
+    const blob = await response.blob();
+    request.signal.throwIfAborted();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      const abortReader = () => {
+        reader.abort();
+        reject(request.signal.reason ?? new DOMException('Artwork request aborted', 'AbortError'));
+      };
+      request.signal.addEventListener('abort', abortReader, { once: true });
+      reader.onload = () => {
+        request.signal.removeEventListener('abort', abortReader);
+        resolve(String(reader.result));
+      };
+      reader.onerror = () => {
+        request.signal.removeEventListener('abort', abortReader);
+        reject(reader.error ?? new Error('Artwork decode failed'));
+      };
+      reader.readAsDataURL(blob);
+    });
+  } finally {
+    request.dispose();
+  }
 };
 
 const persistArtwork = async (key: string, source: string): Promise<string> => {
@@ -153,8 +253,8 @@ const persistArtwork = async (key: string, source: string): Promise<string> => {
   return convertFileSrc(path);
 };
 
-const findITunesArtworkUrl = async (kind: ArtworkKind, artist: string, album?: string): Promise<string | null> => {
-  if (kind === 'artist') return findArtistArtworkUrl(artist);
+const findITunesArtworkUrl = async (kind: ArtworkKind, artist: string, album?: string, signal?: AbortSignal): Promise<string | null> => {
+  if (kind === 'artist') return findArtistArtworkUrl(artist, signal);
   const term = `${artist} ${album || ''}`.trim();
   const params = new URLSearchParams({
     term,
@@ -163,7 +263,7 @@ const findITunesArtworkUrl = async (kind: ArtworkKind, artist: string, album?: s
     country: 'vn',
     limit: '25',
   });
-  const search = await searchITunes(params);
+  const search = await searchITunes(params, signal);
   const candidates = (search.results || [])
     .filter(item => item.artworkUrl100 && item.artistName)
     .map(item => ({
@@ -223,7 +323,7 @@ export const getArtworkUrlForDiscord = async (artist: string, album?: string): P
   }
 };
 
-export const downloadArtwork = async (kind: ArtworkKind, artist: string, album?: string): Promise<string | null> => {
+export const downloadArtwork = async (kind: ArtworkKind, artist: string, album?: string, signal?: AbortSignal): Promise<string | null> => {
   const key = keyFor(kind, artist, album);
   if (!artist.trim() || !navigator.onLine || missingArtwork.has(key)) {
     return getCachedArtwork(kind, artist, album);
@@ -237,13 +337,16 @@ export const downloadArtwork = async (kind: ArtworkKind, artist: string, album?:
   const requestGeneration = cacheGeneration;
   const request = (async () => {
     try {
-      const rawUrl = await findITunesArtworkUrl(kind, artist, album);
+      signal?.throwIfAborted();
+      const rawUrl = await findITunesArtworkUrl(kind, artist, album, signal);
       if (!rawUrl) {
         if (requestGeneration === cacheGeneration) missingArtwork.add(key);
         return null;
       }
-      const downloaded = await toDataUrl(rawUrl);
+      const downloaded = await toDataUrl(rawUrl, signal);
+      signal?.throwIfAborted();
       const cachedSource = await persistArtwork(key, downloaded);
+      signal?.throwIfAborted();
       if (requestGeneration !== cacheGeneration) return cachedSource;
       memoryCache.set(key, cachedSource);
       writeCache({ ...readCache(), [key]: cachedSource });

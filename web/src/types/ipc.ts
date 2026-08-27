@@ -58,6 +58,7 @@ export interface IpcCommands {
   'cache_playlist_cover': { args: { sourcePath: string }; return: string };
   'cache_image_data': { args: { cacheKey: string; category: 'remote-artwork' | 'themes'; dataUrl: string }; return: string };
   'clear_image_cache': { args: { category: 'remote-artwork' | 'themes' }; return: void };
+  'get_apple_music_artist_artwork': { args: { country: string; artistId: number }; return: string | null };
   'add_library_root': { args: { path: string; name: string }; return: LibraryRoot };
   'get_library_roots': { args: Record<string, never>; return: LibraryRoot[] };
   'remove_library_root_by_path': { args: { path: string }; return: boolean };

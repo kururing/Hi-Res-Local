@@ -215,10 +215,11 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
       >
         <form onSubmit={handleCreateSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-brand-muted">
+            <label htmlFor="page-new-playlist-name" className="text-xs font-medium text-brand-muted">
               {t('input_playlist_name', settings.language)}
             </label>
             <input
+              id="page-new-playlist-name"
               type="text"
               required
               value={newPlaylistName}
@@ -230,10 +231,11 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-brand-muted">
+            <label htmlFor="page-new-playlist-description" className="text-xs font-medium text-brand-muted">
               {t('input_playlist_desc', settings.language)}
             </label>
             <textarea
+              id="page-new-playlist-description"
               value={newPlaylistDesc}
               onChange={e => setNewPlaylistDesc(e.target.value)}
               placeholder="Optional playlist notes"

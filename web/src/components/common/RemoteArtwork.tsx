@@ -19,7 +19,13 @@ export const RemoteArtwork: React.FC<RemoteArtworkProps> = ({ kind, artist, albu
   return (
     <div className={`flex h-full w-full items-center justify-center overflow-hidden ${className}`}>
       {source && !failed ? (
-        <img src={source} alt={alt} className="h-full w-full object-cover" onError={() => setFailed(true)} draggable={false} />
+        <img
+          src={source}
+          alt={alt}
+          className="h-full w-full object-cover"
+          onError={() => setFailed(true)}
+          draggable={false}
+        />
       ) : kind === 'artist' ? (
         <User className="h-12 w-12 text-brand-accent/60" aria-hidden="true" />
       ) : (

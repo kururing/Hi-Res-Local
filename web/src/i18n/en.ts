@@ -169,6 +169,7 @@ export const en: typeof vi = {
   menu_play_next: 'Play Next',
   menu_add_queue: 'Add to Queue',
   menu_add_to_playlist: 'Add to Playlist...',
+  menu_create_playlist: 'Create New Playlist',
   menu_favorite: 'Add to Favorites',
   menu_unfavorite: 'Remove from Favorites',
   menu_view_album: 'View Album',

@@ -9,6 +9,7 @@ import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { TrackPlayArtwork } from '../common/TrackPlayArtwork';
 import { t } from '../../i18n';
+import { TrackMoreButton } from '../common/TrackMoreButton';
 
 interface HistoryViewProps {
   onNavigate: (view: string, payload?: unknown) => void;
@@ -78,7 +79,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onNavigate }) => {
               <div
                 key={`${item.track_id}-${item.played_at}-${idx}`}
                 onDoubleClick={() => playTrack(track)}
-                className={`history-row-grid grid items-center gap-3 px-4 py-2.5 text-xs transition-colors cursor-pointer ${
+                className={`history-row-grid group grid items-center gap-3 px-4 py-2.5 text-xs transition-colors cursor-pointer ${
                   isPlaying ? 'bg-brand-accent/10 text-brand-accent font-medium' : 'hover:bg-oled-hover text-brand-foreground'
                 }`}
               >
@@ -109,6 +110,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onNavigate }) => {
                 <span className="text-right font-mono text-[11px] tabular-nums text-brand-muted">
                   {new Date(item.played_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
+
+                <TrackMoreButton
+                  track={track}
+                  onNavigateAlbum={() => { const target = albums.find(item => item.name === track.album && item.artist === track.artist); if (target) onNavigate('album_detail', target); }}
+                  onNavigateArtist={() => { const target = artists.find(item => item.name === track.artist); if (target) onNavigate('artist_detail', target); }}
+                />
               </div>
             );
           })}

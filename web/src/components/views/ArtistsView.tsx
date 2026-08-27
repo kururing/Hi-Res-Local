@@ -15,7 +15,7 @@ export const ArtistsView: React.FC<ArtistsViewProps> = ({ onNavigate }) => {
   const { settings } = useSettings();
 
   return (
-    <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-6 p-6 select-none md:p-8">
+    <div className="view-page mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-6 p-6 select-none md:p-8">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold font-display text-brand-foreground">

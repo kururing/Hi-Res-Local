@@ -8,6 +8,7 @@ import {
   ArrowDown,
   X,
   Heart,
+  MoreVertical,
 } from 'lucide-react';
 import { usePlaylists } from '../../context/PlaylistContext';
 import { usePlayer } from '../../context/PlayerContext';
@@ -195,11 +196,11 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
               <div
                 onContextMenu={e => handleContextMenu(e, tr)}
                 onDoubleClick={() => playTrack(tr, playlistTracks)}
-                className={`grid grid-cols-12 gap-4 px-4 h-full text-xs items-center group cursor-pointer select-none ${
+                className={`tracks-table-grid grid gap-3 px-4 h-full text-xs items-center group cursor-pointer select-none ${
                   isPlaying ? 'bg-brand-accent/10 text-brand-accent font-medium' : 'hover:bg-oled-hover text-brand-foreground'
                 }`}
               >
-                <div className="col-span-1 flex items-center justify-center">
+                <div className="flex items-center justify-center">
                   <TrackPlayArtwork
                     track={tr}
                     isPlaying={isPlaying}
@@ -207,21 +208,35 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                   />
                 </div>
 
-                <div className="col-span-5 flex flex-col min-w-0 pr-2">
-                  <span className="font-semibold truncate group-hover:text-brand-accent">
+                <div className="min-w-0 pr-2">
+                  <span className="min-w-0 truncate font-semibold group-hover:text-brand-accent">
                     {tr.title}
                   </span>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <Badge track={tr} />
-                    <button type="button" className="text-left text-[10px] text-brand-muted truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}>{tr.artist}</button>
-                  </div>
                 </div>
 
-                <div className="hidden sm:block col-span-3 truncate text-brand-muted">
+                <div className="hidden min-w-0 sm:block">
+                  <button
+                    type="button"
+                    className="block max-w-full truncate rounded-md px-1 py-1 text-left text-[10px] text-brand-muted hover:text-brand-accent"
+                    onClick={e => {
+                      e.stopPropagation();
+                      const target = artists.find(item => item.name === tr.artist);
+                      if (target) onNavigate('artist_detail', target);
+                    }}
+                  >
+                    {tr.artist}
+                  </button>
+                </div>
+
+                <div className="hidden min-w-0 md:block truncate text-brand-muted">
                   <button type="button" className="max-w-full truncate text-left hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = albums.find(item => item.name === tr.album && item.artist === tr.artist); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
                 </div>
 
-                <div className="col-span-6 sm:col-span-3 flex items-center justify-end gap-1">
+                <div className="hidden min-w-0 min-[1180px]:flex items-center">
+                  <Badge track={tr} />
+                </div>
+
+                <div className="flex items-center justify-end gap-1">
                   {!playlist.is_smart && (
                     <>
                       <button
@@ -279,6 +294,17 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                   <span className="font-mono text-brand-muted tabular-nums ml-2">
                     {formatDuration(tr.duration)}
                   </span>
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      handleContextMenu(e, tr);
+                    }}
+                    className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-brand-muted opacity-0 transition-opacity hover:bg-brand-accent/10 hover:text-brand-foreground group-hover:opacity-100 focus:opacity-100 focus-visible:outline-none"
+                    aria-label={t('aria_more_actions', settings.language)}
+                  >
+                    <MoreVertical className="h-4 w-4" aria-hidden="true" />
+                  </button>
                 </div>
               </div>
             );

@@ -125,14 +125,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
 
   return (
     <aside
-      className={`app-sidebar relative z-20 m-3 mr-0 flex shrink-0 select-none flex-col justify-between border border-brand-border/70 transition-[width,height,border-radius] duration-300 ease-out ${
+      className={`app-sidebar relative z-20 m-3 mr-0 flex shrink-0 select-none flex-col justify-between overflow-hidden border border-brand-border/70 transition-[width,height,border-radius] duration-300 ease-out ${
         isCollapsed
-          ? 'w-[72px] self-stretch overflow-y-auto rounded-[28px]'
-          : 'w-64 self-stretch overflow-y-auto rounded-[28px]'
+          ? 'w-[72px] self-stretch rounded-[28px]'
+          : 'w-64 self-stretch rounded-[28px]'
       }`}
     >
       {/* Top: Branding & Navigation */}
-      <div className={`flex flex-col gap-6 ${isCollapsed ? 'p-3' : 'p-4'}`}>
+      <div className={`flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto overflow-x-hidden ${isCollapsed ? 'p-3' : 'p-4'}`}>
         {/* Brand */}
         <button
           type="button"
@@ -220,10 +220,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
                       onClick={() => onNavigate('playlist_detail', pl)}
                       className={`flex min-h-[48px] w-full items-center justify-center rounded-xl border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent ${
                         isPlayingHere
-                          ? 'border-brand-accent bg-brand-accent/20 text-brand-accent shadow-[0_0_14px_rgba(34,197,94,0.25)]'
-                          : currentView === 'playlist_detail'
-                            ? 'border-brand-border bg-oled-hover text-brand-accent'
-                            : 'border-transparent text-brand-muted hover:bg-white/55 hover:text-brand-foreground'
+                          ? 'border-brand-accent text-brand-foreground font-semibold shadow-[0_0_14px_rgba(34,197,94,0.25)]'
+                          : 'border-transparent text-brand-muted hover:bg-white/55 hover:text-brand-foreground'
                       }`}
                       aria-label={pl.name}
                       title={pl.name}
@@ -241,7 +239,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
               })}
             </div>
           </div>
-        ) : <div className="flex flex-col gap-2 pt-2 border-t border-brand-border/60">
+        ) : <div className="flex min-h-0 flex-col gap-2 border-t border-brand-border/60 pt-2">
           <div className="flex items-center justify-between px-2 text-xs font-semibold text-brand-muted uppercase tracking-wider">
             <span>{t('playlists_title', settings.language)}</span>
             <div className="flex items-center gap-0.5">
@@ -270,17 +268,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
           </div>
 
           {/* Playlist Links */}
-          <div className="flex flex-col gap-0.5 max-h-48 overflow-y-auto pr-1">
+          <div className="flex min-h-0 flex-col gap-0.5 overflow-visible pr-1">
             {playlists.map(pl => {
               const playlistTracks = getPlaylistTracks(pl);
+              const isPlayingHere = status.state === 'playing' && Boolean(
+                status.current_track && playlistTracks.some(track => track.id === status.current_track?.id)
+              );
               return (
                 <div key={pl.id} className="group relative">
                   <button
                     onClick={() => onNavigate('playlist_detail', pl)}
-                    className={`min-h-[44px] flex w-full items-center justify-between px-3 rounded-lg text-xs transition-colors text-left truncate focus-visible:outline-none ${
-                      currentView === 'playlist_detail'
-                        ? 'bg-oled-hover text-brand-accent font-medium'
-                        : 'text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
+                    className={`min-h-[44px] flex w-full items-center justify-between rounded-lg border-l-2 px-3 pr-11 text-left text-xs transition-colors focus-visible:outline-none ${
+                      isPlayingHere
+                        ? 'border-brand-accent text-brand-foreground font-semibold'
+                        : 'border-transparent text-brand-muted hover:text-brand-foreground hover:bg-oled-hover'
                     }`}
                   >
                     <div className="flex min-w-0 items-center gap-2.5 truncate">
@@ -378,10 +379,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
       >
         <form onSubmit={handleCreateSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-brand-muted">
+            <label htmlFor="sidebar-new-playlist-name" className="text-xs font-medium text-brand-muted">
               {t('input_playlist_name', settings.language)}
             </label>
             <input
+              id="sidebar-new-playlist-name"
               type="text"
               required
               value={newPlaylistName}
@@ -393,10 +395,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-brand-muted">
+            <label htmlFor="sidebar-new-playlist-description" className="text-xs font-medium text-brand-muted">
               {t('input_playlist_desc', settings.language)}
             </label>
             <textarea
+              id="sidebar-new-playlist-description"
               value={newPlaylistDesc}
               onChange={e => setNewPlaylistDesc(e.target.value)}
               placeholder="Optional description"

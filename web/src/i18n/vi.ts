@@ -167,6 +167,7 @@ export const vi = {
   menu_play_next: 'Phát kế tiếp',
   menu_add_queue: 'Thêm vào hàng đợi',
   menu_add_to_playlist: 'Thêm vào danh sách phát...',
+  menu_create_playlist: 'Tạo danh sách phát mới',
   menu_favorite: 'Yêu thích',
   menu_unfavorite: 'Bỏ yêu thích',
   menu_view_album: 'Xem Album',

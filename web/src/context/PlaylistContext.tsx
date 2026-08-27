@@ -27,7 +27,7 @@ interface PlaylistContextType {
   createPlaylist: (name: string, description?: string) => Promise<Playlist>;
   updatePlaylist: (id: string, partial: Partial<Playlist>) => Promise<void>;
   deletePlaylist: (id: string) => Promise<void>;
-  addTrackToPlaylist: (playlistId: string, trackId: string) => Promise<void>;
+  addTrackToPlaylist: (playlistId: string, trackId: string, notify?: boolean) => Promise<void>;
   removeTrackFromPlaylist: (playlistId: string, trackId: string) => Promise<void>;
   reorderPlaylist: (playlistId: string, fromIndex: number, toIndex: number) => Promise<void>;
   getPlaylistTracks: (playlist: Playlist) => Track[];
@@ -120,7 +120,7 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     showToast(t('toast_playlist_deleted', settings.language), 'info');
   };
 
-  const addTrackToPlaylist = async (playlistId: string, trackId: string) => {
+  const addTrackToPlaylist = async (playlistId: string, trackId: string, notify = true) => {
     await IpcService.invoke('add_tracks_to_playlist', { playlistId, trackIds: [trackId] });
     setPlaylists(prev =>
       prev.map(p => {
@@ -130,7 +130,9 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return p;
       })
     );
-    showToast(t('toast_track_added_to_playlist', settings.language), 'success');
+    if (notify) {
+      showToast(t('toast_track_added_to_playlist', settings.language), 'success');
+    }
   };
 
   const removeTrackFromPlaylist = async (playlistId: string, trackId: string) => {

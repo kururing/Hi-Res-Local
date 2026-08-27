@@ -10,6 +10,8 @@ import { t } from '../../i18n';
 import { RemoteArtwork } from '../common/RemoteArtwork';
 import { AlbumArtwork } from '../common/AlbumArtwork';
 import { TrackPlayArtwork } from '../common/TrackPlayArtwork';
+import { TrackMoreButton } from '../common/TrackMoreButton';
+import { artistsShareIdentity } from '../../services/artistIdentity';
 
 interface ArtistDetailViewProps {
   artist: Artist;
@@ -29,6 +31,7 @@ const TOP_TRACK_LIMIT = 5;
 export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
   artist,
   onNavigate,
+  onOpenDetails,
 }) => {
   const { tracks, toggleFavoriteArtist, favoriteArtistNames } = useLibrary();
   const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
@@ -36,8 +39,11 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
   const [showAllTracks, setShowAllTracks] = React.useState(false);
 
   const artistTracks = React.useMemo(() => {
-    return tracks.filter(t => t.artist.toLowerCase() === artist.name.toLowerCase());
-  }, [tracks, artist.name]);
+    const trackIds = new Set(artist.albums.flatMap(album => album.tracks.map(track => track.id)));
+    return tracks.filter(track => (
+      trackIds.has(track.id) || artistsShareIdentity(track.artist, artist.name)
+    ));
+  }, [tracks, artist.albums, artist.name]);
 
   React.useEffect(() => {
     setShowAllTracks(false);
@@ -163,25 +169,40 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
               <div
                 key={tr.id}
                 onDoubleClick={() => playTrack(tr, artistTracks)}
-                className={`flex items-center justify-between px-4 py-3 text-xs transition-colors cursor-pointer ${
+                className={`tracks-table-grid group grid items-center gap-3 px-4 py-3 text-xs transition-colors cursor-pointer ${
                   isPlaying ? 'bg-brand-accent/10 text-brand-accent font-medium' : 'hover:bg-oled-hover text-brand-foreground'
                 }`}
               >
-                <div className="flex items-center gap-3 min-w-0 pr-2">
+                <div className="flex items-center justify-center">
                   <TrackPlayArtwork
                     track={tr}
                     isPlaying={isPlaying}
                     onPlay={() => playTrack(tr, artistTracks)}
                   />
-                  <div className="flex flex-col min-w-0">
-                    <span className="font-semibold truncate">{tr.title}</span>
-                    <button type="button" className="text-left text-[11px] text-brand-muted truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artist.albums.find(item => item.name === tr.album); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
-                  </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="min-w-0 truncate font-semibold">{tr.title}</div>
+
+                <div className="hidden min-w-0 sm:block truncate text-brand-muted">
+                  <span title={artist.name}>{artist.name}</span>
+                </div>
+
+                <div className="hidden min-w-0 md:block truncate text-brand-muted">
+                  <button type="button" className="max-w-full truncate text-left hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artist.albums.find(item => item.name === tr.album); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
+                </div>
+
+                <div className="hidden min-w-0 min-[1180px]:flex items-center">
                   <Badge track={tr} />
+                </div>
+
+                <div className="flex items-center justify-end gap-3">
                   <span className="font-mono text-brand-muted">{formatDuration(tr.duration)}</span>
+                  <TrackMoreButton
+                    track={tr}
+                    onOpenDetails={onOpenDetails}
+                    onNavigateAlbum={() => { const target = artist.albums.find(item => item.name === tr.album); if (target) onNavigate('album_detail', target); }}
+                    onNavigateArtist={() => onNavigate('artist_detail', artist)}
+                  />
                 </div>
               </div>
             );

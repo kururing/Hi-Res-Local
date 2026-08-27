@@ -60,7 +60,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
   return (
     <div className="view-page mx-auto w-full max-w-7xl space-y-8 p-6 select-none md:p-8">
       {/* Header Greeting Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-2xl bg-gradient-to-r from-brand-accent/16 via-oled-card to-brand-secondary/12 border border-brand-border shadow-card-elevated backdrop-blur-xl">
+      <div className="home-hero flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-2xl bg-gradient-to-r from-brand-accent/16 via-oled-card to-brand-secondary/12 border border-brand-border shadow-card-elevated backdrop-blur-xl">
         <div className="flex flex-col gap-1">
           <span className="text-xs font-semibold text-brand-accent uppercase tracking-wider">
             Nghe Nhac Pro Max 2.0
@@ -73,7 +73,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="home-hero-actions flex flex-nowrap items-center gap-3">
           <Button
             variant="accent"
             size="md"

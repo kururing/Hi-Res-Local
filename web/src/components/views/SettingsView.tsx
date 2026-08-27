@@ -303,10 +303,12 @@ export const SettingsView: React.FC = () => {
   const [isDownloadingArtwork, setIsDownloadingArtwork] = useState(false);
   const [artworkProgress, setArtworkProgress] = useState<ArtworkDownloadProgress | null>(null);
   const cancelArtworkDownloadRef = useRef(false);
+  const artworkAbortControllerRef = useRef<AbortController | null>(null);
   const themeImageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => () => {
     cancelArtworkDownloadRef.current = true;
+    artworkAbortControllerRef.current?.abort();
   }, []);
 
   const handleArtworkDownload = async (refreshAll = false) => {
@@ -337,6 +339,8 @@ export const SettingsView: React.FC = () => {
     }
 
     cancelArtworkDownloadRef.current = false;
+    const artworkAbortController = new AbortController();
+    artworkAbortControllerRef.current = artworkAbortController;
     setIsDownloadingArtwork(true);
     setArtworkProgress({
       albumDone: 0,
@@ -349,6 +353,8 @@ export const SettingsView: React.FC = () => {
     let found = 0;
     try {
       const processInBatches = async <T,>(items: T[], worker: (item: T) => Promise<string | null>, onDone: () => void) => {
+        // Keep network usage bounded while allowing independent artwork
+        // lookups to progress together.
         const concurrency = 4;
         for (let offset = 0; offset < items.length && !cancelArtworkDownloadRef.current; offset += concurrency) {
           const batch = items.slice(offset, offset + concurrency);
@@ -359,12 +365,12 @@ export const SettingsView: React.FC = () => {
 
       await processInBatches(
         albumTargets,
-        album => downloadArtwork('album', album.artist, album.name),
+        album => downloadArtwork('album', album.artist, album.name, artworkAbortController.signal),
         () => setArtworkProgress(previous => previous ? { ...previous, albumDone: previous.albumDone + 1, found } : previous)
       );
       await processInBatches(
         artistTargets,
-        artist => downloadArtwork('artist', artist.name),
+        artist => downloadArtwork('artist', artist.name, undefined, artworkAbortController.signal),
         () => setArtworkProgress(previous => previous ? { ...previous, artistDone: previous.artistDone + 1, found } : previous)
       );
 
@@ -377,6 +383,9 @@ export const SettingsView: React.FC = () => {
         cancelArtworkDownloadRef.current ? 'info' : 'success'
       );
     } finally {
+      if (artworkAbortControllerRef.current === artworkAbortController) {
+        artworkAbortControllerRef.current = null;
+      }
       setIsDownloadingArtwork(false);
     }
   };
@@ -780,7 +789,10 @@ export const SettingsView: React.FC = () => {
                   size="md"
                   variant="danger"
                   icon={<X className="h-4 w-4" />}
-                  onClick={() => { cancelArtworkDownloadRef.current = true; }}
+                  onClick={() => {
+                    cancelArtworkDownloadRef.current = true;
+                    artworkAbortControllerRef.current?.abort();
+                  }}
                 >
                   {t('settings_artwork_cancel', settings.language)}
                 </Button>

@@ -70,7 +70,7 @@ export function VirtualGrid<T>({
     return (
       <div
         ref={parentRef}
-        className={['overflow-y-auto overscroll-contain', className].filter(Boolean).join(' ')}
+        className={['overflow-y-auto overscroll-contain p-1', className].filter(Boolean).join(' ')}
         style={style}
       >
         <div
@@ -126,7 +126,7 @@ export function VirtualGrid<T>({
   return (
     <div
       ref={parentRef}
-      className={['overflow-y-auto overscroll-contain', className].filter(Boolean).join(' ')}
+      className={['overflow-y-auto overscroll-contain p-1', className].filter(Boolean).join(' ')}
       style={style}
       onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
     >

@@ -3,8 +3,6 @@ import {
   Search,
   ChevronLeft,
   ChevronRight,
-  Music,
-  Disc,
   User,
   X,
 } from 'lucide-react';
@@ -14,6 +12,9 @@ import { usePlayer } from '../../context/PlayerContext';
 import { fuzzySearch } from '../../services/fuzzy';
 import { Track, Album, Artist } from '../../types/library';
 import { t } from '../../i18n';
+import { TrackArtwork } from '../common/TrackArtwork';
+import { AlbumArtwork } from '../common/AlbumArtwork';
+import { RemoteArtwork } from '../common/RemoteArtwork';
 
 interface HeaderProps {
   currentView: string;
@@ -205,7 +206,11 @@ export const Header: React.FC<HeaderProps> = ({
                           className="flex w-full items-center justify-between p-2 rounded-lg text-left hover:bg-oled-hover cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
-                            <Music className="w-4 h-4 text-brand-accent shrink-0" aria-hidden="true" />
+                            <TrackArtwork
+                              track={tr}
+                              className="h-9 w-9 shrink-0 rounded-lg border border-brand-border/70 bg-oled-card"
+                              iconClassName="h-4 w-4 text-brand-accent"
+                            />
                             <div className="flex flex-col min-w-0">
                               <span className="text-xs font-medium text-brand-foreground truncate">
                                 {tr.title}
@@ -239,7 +244,13 @@ export const Header: React.FC<HeaderProps> = ({
                           }}
                           className="flex w-full items-center gap-2.5 p-2 rounded-lg text-left hover:bg-oled-hover cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                         >
-                          <Disc className="w-4 h-4 text-brand-accent shrink-0" aria-hidden="true" />
+                          <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-brand-border/70 bg-oled-card">
+                            <AlbumArtwork
+                              album={al}
+                              className="h-full w-full"
+                              iconClassName="h-4 w-4 text-brand-accent"
+                            />
+                          </div>
                           <div className="flex flex-col min-w-0">
                             <span className="text-xs font-medium text-brand-foreground truncate">
                               {al.name}
@@ -272,7 +283,9 @@ export const Header: React.FC<HeaderProps> = ({
                           }}
                           className="flex w-full items-center gap-2.5 p-2 rounded-lg text-left hover:bg-oled-hover cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                         >
-                          <User className="w-4 h-4 text-brand-muted shrink-0" aria-hidden="true" />
+                          <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full border border-brand-border/70 bg-oled-card">
+                            <RemoteArtwork kind="artist" artist={ar.name} alt={`${ar.name} portrait`} />
+                          </div>
                           <span className="text-xs font-medium text-brand-foreground truncate">
                             {ar.name}
                           </span>

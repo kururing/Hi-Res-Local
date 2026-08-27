@@ -21,7 +21,10 @@ export const Modal: React.FC<ModalProps> = ({
 }) => {
   const { settings } = useSettings();
   const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
   const titleId = useId();
+
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement
@@ -30,7 +33,7 @@ export const Modal: React.FC<ModalProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key === 'Tab' && isOpen && dialogRef.current) {
@@ -59,9 +62,11 @@ export const Modal: React.FC<ModalProps> = ({
       document.body.style.overflow = 'hidden';
       window.addEventListener('keydown', handleKeyDown);
       requestAnimationFrame(() => {
-        const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(
-          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-        );
+        const firstFocusable = dialogRef.current?.querySelector<HTMLElement>('[autofocus]')
+          ?? dialogRef.current?.querySelector<HTMLElement>('input:not([disabled]), textarea:not([disabled]), select:not([disabled])')
+          ?? dialogRef.current?.querySelector<HTMLElement>(
+            'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+          );
         (firstFocusable ?? dialogRef.current)?.focus();
       });
     }
@@ -70,7 +75,7 @@ export const Modal: React.FC<ModalProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       previouslyFocused?.focus();
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

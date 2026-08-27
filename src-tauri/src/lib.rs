@@ -363,6 +363,7 @@ pub fn run() {
             cache_playlist_cover,
             cache_image_data,
             clear_image_cache,
+            get_apple_music_artist_artwork,
             // Library & Scanning
             get_all_tracks,
             get_library_stats,

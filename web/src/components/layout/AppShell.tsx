@@ -7,6 +7,7 @@ import { QueueDrawer } from '../player/QueueDrawer';
 import { EqualizerModal } from '../player/EqualizerModal';
 import { TrackDetailsModal } from '../views/TrackDetailsModal';
 import { ArtworkAdaptiveTheme } from './ArtworkAdaptiveTheme';
+import { usePlayer } from '../../context/PlayerContext';
 
 import { HomeView } from '../views/HomeView';
 
@@ -52,6 +53,7 @@ const isSameDestination = (current: HistoryEntry, view: string, payload?: unknow
 
 export const AppShell: React.FC = () => {
   const mainRef = useRef<HTMLElement>(null);
+  const { togglePlayPause } = usePlayer();
   const [navigation, setNavigation] = useState<NavigationState>({
     entries: [{ view: 'home' }],
     index: 0,
@@ -59,6 +61,32 @@ export const AppShell: React.FC = () => {
 
   const [selectedTrackDetails, setSelectedTrackDetails] = useState<Track | null>(null);
   const [isTrackDetailsOpen, setIsTrackDetailsOpen] = useState(false);
+
+  useEffect(() => {
+    const handlePlaybackShortcut = (event: KeyboardEvent) => {
+      if (
+        event.code !== 'Space' ||
+        event.repeat ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey
+      ) return;
+
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        const isEditable = target.isContentEditable
+          || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(target.tagName)
+          || target.closest('[contenteditable="true"], [role="textbox"], [role="slider"], [role="button"], [role="menu"]');
+        if (isEditable) return;
+      }
+
+      event.preventDefault();
+      void togglePlayPause();
+    };
+
+    window.addEventListener('keydown', handlePlaybackShortcut);
+    return () => window.removeEventListener('keydown', handlePlaybackShortcut);
+  }, [togglePlayPause]);
 
   useEffect(() => {
     const root = document.documentElement;

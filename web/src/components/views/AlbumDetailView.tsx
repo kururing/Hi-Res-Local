@@ -185,13 +185,13 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                     key={tr.id}
                     onContextMenu={e => handleContextMenu(e, tr)}
                     onDoubleClick={() => playTrack(tr, album.tracks)}
-                    className={`grid grid-cols-12 gap-4 px-4 py-3 text-xs items-center group transition-colors cursor-pointer select-none ${
+                    className={`tracks-table-grid grid gap-3 px-4 py-3 text-xs items-center group transition-colors cursor-pointer select-none ${
                       isPlaying
                         ? 'bg-brand-accent/10 text-brand-accent font-medium'
                         : 'hover:bg-oled-hover text-brand-foreground'
                     }`}
                   >
-                    <div className="col-span-1 flex items-center justify-center">
+                    <div className="flex items-center justify-center">
                       <TrackPlayArtwork
                         track={tr}
                         isPlaying={isPlaying}
@@ -199,14 +199,25 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                       />
                     </div>
 
-                    <div className="col-span-6 flex min-w-0 items-center gap-2 pr-2">
+                    <div className="min-w-0 pr-2">
                       <span className="min-w-0 flex-1 truncate font-semibold group-hover:text-brand-accent transition-colors">
                         {tr.title}
                       </span>
                     </div>
 
-                    <div className="col-span-5 flex items-center justify-end gap-1">
+                    <div className="hidden min-w-0 sm:block truncate text-brand-muted">
+                      <span title={album.artist}>{album.artist}</span>
+                    </div>
+
+                    <div className="hidden min-w-0 md:block truncate text-brand-muted">
+                      <span title={album.name}>{album.name}</span>
+                    </div>
+
+                    <div className="hidden min-w-0 min-[1180px]:flex items-center">
                       <Badge track={tr} />
+                    </div>
+
+                    <div className="flex items-center justify-end gap-1">
 
                       <button
                         onClick={e => {

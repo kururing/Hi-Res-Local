@@ -10,6 +10,7 @@ import { TrackPlayArtwork } from '../common/TrackPlayArtwork';
 import { Track } from '../../types/library';
 import { t } from '../../i18n';
 import { activateOnKeyboard } from '../../services/keyboard';
+import { TrackMoreButton } from '../common/TrackMoreButton';
 
 type FavTab = 'tracks' | 'albums' | 'artists';
 
@@ -20,6 +21,7 @@ interface FavoritesViewProps {
 
 export const FavoritesView: React.FC<FavoritesViewProps> = ({
   onNavigate,
+  onOpenDetails,
 }) => {
   const {
     tracks,
@@ -48,7 +50,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
   }, [artists, favoriteArtistNames]);
 
   return (
-    <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-6 p-6 select-none md:p-8">
+    <div className="view-page mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-6 p-6 select-none md:p-8">
       {/* Header */}
       <div className="flex shrink-0 flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
@@ -143,27 +145,33 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                 return (
                   <div
                     onDoubleClick={() => playTrack(tr, favTracks)}
-                    className={`flex h-full items-center justify-between px-4 text-xs cursor-pointer ${
+                    className={`tracks-table-grid group grid h-full items-center gap-3 px-4 text-xs cursor-pointer ${
                       isPlaying ? 'bg-brand-accent/10 text-brand-accent font-medium' : 'hover:bg-oled-hover text-brand-foreground'
                     }`}
                   >
-                    <div className="flex items-center gap-3 min-w-0 pr-2">
+                    <div className="flex items-center justify-center">
                       <TrackPlayArtwork
                         track={tr}
                         isPlaying={isPlaying}
                         onPlay={() => playTrack(tr, favTracks)}
                       />
-                      <div className="flex flex-col min-w-0">
-                        <span className="font-semibold truncate">{tr.title}</span>
-                        <div className="flex min-w-0 items-center gap-1 text-[11px] text-brand-muted truncate">
-                          <button type="button" className="truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}>{tr.artist}</button>
-                          <span>•</span>
-                          <button type="button" className="truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = albums.find(item => item.name === tr.album && item.artist === tr.artist); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
-                        </div>
-                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
+
+                    <div className="min-w-0 truncate font-semibold">{tr.title}</div>
+
+                    <div className="hidden min-w-0 sm:block truncate text-brand-muted">
+                      <button type="button" className="max-w-full truncate text-left hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}>{tr.artist}</button>
+                    </div>
+
+                    <div className="hidden min-w-0 md:block truncate text-brand-muted">
+                      <button type="button" className="max-w-full truncate text-left hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = albums.find(item => item.name === tr.album && item.artist === tr.artist); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
+                    </div>
+
+                    <div className="hidden min-w-0 min-[1180px]:flex items-center">
                       <Badge track={tr} />
+                    </div>
+
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => toggleFavoriteTrack(tr.id)}
                         className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-rose-500 hover:text-rose-400 focus-visible:outline-none"
@@ -172,6 +180,15 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                       >
                         <Heart className="w-4 h-4 fill-current" aria-hidden="true" />
                       </button>
+                      <span className="font-mono text-brand-muted tabular-nums">
+                        {tr.duration >= 0 ? `${Math.floor(tr.duration / 60)}:${Math.floor(tr.duration % 60).toString().padStart(2, '0')}` : '0:00'}
+                      </span>
+                      <TrackMoreButton
+                        track={tr}
+                        onOpenDetails={onOpenDetails}
+                        onNavigateAlbum={() => { const target = albums.find(item => item.name === tr.album && item.artist === tr.artist); if (target) onNavigate('album_detail', target); }}
+                        onNavigateArtist={() => { const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}
+                      />
                     </div>
                   </div>
                 );

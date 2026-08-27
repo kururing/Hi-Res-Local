@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Play,
   ListPlus,
@@ -10,6 +11,7 @@ import {
   Info,
   Copy,
   Trash2,
+  Plus,
 } from 'lucide-react';
 import { Track } from '../../types/library';
 import { usePlayer } from '../../context/PlayerContext';
@@ -40,7 +42,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const { playTrack, playNext, addToQueue } = usePlayer();
   const { toggleFavoriteTrack, favoriteTrackIds } = useLibrary();
-  const { playlists, addTrackToPlaylist, removeTrackFromPlaylist } = usePlaylists();
+  const { playlists, createPlaylist, addTrackToPlaylist, removeTrackFromPlaylist } = usePlaylists();
   const { showToast } = useToast();
   const { settings } = useSettings();
 
@@ -78,8 +80,17 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
   // Position clamping to keep inside viewport
   const menuWidth = 220;
   const menuHeight = 360;
-  const x = Math.min(state.x, window.innerWidth - menuWidth - 10);
-  const y = Math.min(state.y, window.innerHeight - menuHeight - 10);
+  const submenuWidth = 192;
+  const viewportGap = 10;
+  const x = Math.max(viewportGap, Math.min(state.x, window.innerWidth - menuWidth - viewportGap));
+  const y = Math.max(viewportGap, Math.min(state.y, window.innerHeight - menuHeight - viewportGap));
+  const openSubmenuLeft = x + menuWidth + submenuWidth + viewportGap > window.innerWidth;
+
+  const handleCreatePlaylist = async () => {
+    const playlist = await createPlaylist(track.title, '');
+    await addTrackToPlaylist(playlist.id, track.id, false);
+    onClose();
+  };
 
   const handleCopyPath = () => {
     navigator.clipboard.writeText(track.path);
@@ -100,8 +111,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
     items[next]?.focus();
   };
 
-  return (
-    <div
+  return createPortal(
+    <>
+    {state.isOpen && <div
       ref={menuRef}
       aria-label={t('aria_track_actions', settings.language)}
       onKeyDown={handleMenuKeyDown}
@@ -173,7 +185,20 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
         </button>
 
         {/* Submenu Flyout */}
-        <div className="hidden group-hover:flex group-focus-within:flex flex-col absolute left-full top-0 ml-1 w-48 bg-oled-card border border-brand-border rounded-xl shadow-card-elevated py-1 z-50">
+        <div
+          className={`invisible pointer-events-none absolute top-0 z-50 flex w-48 flex-col rounded-xl border border-brand-border bg-oled-card py-1 opacity-0 shadow-card-elevated transition-opacity group-hover:visible group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:visible group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${
+            openSubmenuLeft ? 'right-full' : 'left-full'
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => void handleCreatePlaylist()}
+            className="mx-1 flex items-center gap-2.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-left font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/25 hover:text-emerald-200"
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            <span>{t('menu_create_playlist', settings.language)}</span>
+          </button>
+          <div className="my-1 h-px bg-brand-border/60" />
           {playlists.filter(p => !p.is_smart).length === 0 ? (
             <span className="px-3 py-2 text-[11px] text-brand-muted">No custom playlists</span>
           ) : (
@@ -261,6 +286,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
         <Copy className="w-4 h-4 text-brand-muted" />
         <span>{t('menu_copy_path', settings.language)}</span>
       </button>
-    </div>
+    </div>}
+    </>,
+    document.body
   );
 };
