@@ -1,97 +1,162 @@
 # Nghe Nhạc Pro Max 🎵
 
-High-performance, local-only desktop music player built with **Tauri 2**, **Rust**, **React 19**, and **Tailwind CSS**.
+Trình phát nhạc desktop hiệu năng cao, ưu tiên dữ liệu cục bộ và chất lượng âm thanh. Ứng dụng được xây dựng bằng **Tauri 2**, **Rust**, **React 19**, **TypeScript** và **Tailwind CSS**.
 
-## Features
+## Tính năng chính
 
-- **Local-first & privacy-conscious**: Playback and library management stay on your machine. iTunes artwork lookup and Discord presence are optional and only run when you explicitly use or enable them.
-- **High-Fidelity Audio Engine**:
-  - Symphonia & CPAL native playback pipeline.
-  - Bit-perfect output support & output device selection.
-  - Gapless transitions & crossfade support (Equal-Power curve).
-  - 10-Band Graphic Equalizer with DSP biquad filtering and presets.
-  - EBU R128 / ReplayGain normalisation with peak clipping prevention.
-- **Comprehensive Library Management**:
-  - Embedded SQLite database with automatic migrations and indexing.
-  - Live directory watching via `notify`.
-  - Lofty-powered metadata tag reading and writing.
-  - Smart playlists, dynamic filtering, duplicate detection, and M3U import/export.
-  - Synchronized and plain text LRC lyrics parsing and display.
+### Phát nhạc chất lượng cao
 
-## Architecture
+- Giải mã âm thanh native bằng FFmpeg và phát qua CPAL.
+- Hỗ trợ các định dạng: MP3, FLAC, WAV, OGG, AAC, ALAC, M4A, AIFF, OPUS, WMA, APE và MPC.
+- Chọn thiết bị đầu ra âm thanh.
+- WASAPI Exclusive và Bit-Perfect trên Windows.
+- Phát liền mạch (gapless), chuyển bài crossfade và hàng đợi phát.
+- Equalizer đồ họa 10 băng tần với preset và cấu hình tùy chỉnh.
+- ReplayGain theo track/album, preamp và chống clipping.
+- Các chế độ phát tuần tự, lặp lại và phát ngẫu nhiên.
+
+### Quản lý thư viện
+
+- Quét một hoặc nhiều thư mục nhạc và tự động theo dõi thay đổi.
+- Đọc, chỉnh sửa metadata và ảnh bìa từ file nhạc.
+- Duyệt theo bài hát, album, nghệ sĩ và thể loại.
+- Tìm kiếm gần đúng, lọc động và phát hiện bài trùng lặp.
+- Yêu thích bài hát, album và nghệ sĩ.
+- Lịch sử nghe nhạc.
+- Playlist thường, smart playlist và nhập/xuất M3U.
+- Lưu dữ liệu trong SQLite với migration tự động.
+- Sao lưu và khôi phục dữ liệu thư viện.
+
+### Lời bài hát và giao diện
+
+- Hiển thị lời LRC đồng bộ hoặc lời văn bản thông thường.
+- Nhập và lưu lời bài hát; hỗ trợ tạo/nhập lời phiên âm.
+- Phiên âm tiếng Nhật, Hàn và Trung ngay trên máy.
+- Giao diện tiếng Việt và tiếng Anh.
+- Nhiều theme và font; hỗ trợ theme tùy chỉnh từ hình ảnh và màu ảnh bìa.
+- Danh sách ảo hóa để xử lý thư viện lớn.
+- Discord Rich Presence tùy chọn.
+- Khởi động cùng hệ thống, thu nhỏ xuống khay và tiếp tục phát khi đóng cửa sổ.
+
+> Ứng dụng hoạt động theo hướng local-first. Dữ liệu thư viện và quá trình phát nhạc nằm trên máy của bạn. Tra cứu ảnh bìa iTunes và Discord Rich Presence chỉ kết nối mạng khi tính năng tương ứng được sử dụng hoặc bật.
+
+## Công nghệ
+
+- **Desktop:** Tauri 2
+- **Backend:** Rust 2021, SQLite (`rusqlite`), FFmpeg, CPAL, Lofty, Tokio
+- **Frontend:** React 19, TypeScript 5, Vite 6, Tailwind CSS
+- **Kiểm thử:** Vitest và Rust test
+
+## Cấu trúc dự án
 
 ```text
-nghenhacpromax/
-├── src-tauri/             # Tauri 2 Desktop Core (Rust)
+Hi-Res-Local/
+├── src-tauri/
 │   ├── src/
-│   │   ├── audio/         # Native audio engine (CPAL, Symphonia, DSP, Gapless)
-│   │   ├── commands/      # Tauri IPC command handlers
-│   │   ├── db/            # SQLite schema, migrations, queries
-│   │   ├── scanner/       # Folder scanning, directory watcher, cover cache
-│   │   ├── tags/          # ID3/FLAC tag reading & writing
-│   │   ├── lyrics/        # LRC parser & manager
-│   │   └── models/        # Rust domain models and DTOs
-│   └── tauri.conf.json    # Tauri application configuration
-├── web/                   # Frontend UI (React 19, TypeScript, Vite, Tailwind)
+│   │   ├── audio/       # Decoder, output, DSP, queue, gapless và WASAPI
+│   │   ├── commands/    # Các lệnh IPC giữa giao diện và backend
+│   │   ├── db/          # Schema, migration, truy vấn và sao lưu SQLite
+│   │   ├── lyrics/      # Đọc và xử lý LRC
+│   │   ├── scanner/     # Quét thư viện, theo dõi thư mục và cache ảnh bìa
+│   │   ├── search/      # Tìm kiếm gần đúng
+│   │   └── tags/        # Đọc và chỉnh sửa metadata
+│   ├── vendor/ffmpeg/   # FFmpeg dùng cho bản Windows
+│   ├── Cargo.toml
+│   └── tauri.conf.json
+├── web/
 │   ├── src/
-│   │   ├── components/    # UI views, player controls, sidebar, modals
-│   │   ├── services/      # Typed Tauri IPC bindings & event listeners
-│   │   └── types/         # Domain TypeScript models matching Rust DTOs
-├── scripts/               # Tauri launcher and Windows build environment setup
-├── package.json           # Root development commands and Tauri CLI
+│   │   ├── components/  # Giao diện, trình phát, modal và các màn hình
+│   │   ├── context/     # Trạng thái thư viện, trình phát, playlist và cài đặt
+│   │   ├── i18n/        # Bản dịch tiếng Việt và tiếng Anh
+│   │   ├── services/    # IPC, lời bài hát, artwork và tiện ích
+│   │   ├── tests/       # Kiểm thử frontend
+│   │   └── types/       # Kiểu dữ liệu TypeScript
+│   └── package.json
+├── scripts/             # Script chạy Tauri và chuẩn bị FFmpeg trên Windows
+├── package.json         # Lệnh phát triển ở thư mục gốc
 └── README.md
 ```
 
-## Getting Started
+## Yêu cầu môi trường
 
-### Prerequisites
+- Node.js 18 trở lên và npm.
+- Rust 1.80 trở lên cùng Cargo.
+- Công cụ build native theo hướng dẫn của Tauri cho hệ điều hành đang dùng.
+- Windows: Microsoft C++ Build Tools và Windows SDK.
 
-- **Node.js**: v18+ and `npm`
-- **Rust**: edition 2021 (MSRV 1.80+)
-- **Windows / macOS / Linux**: C++ Build Tools & Platform SDK
+Trên Windows, dự án cần FFmpeg shared build trong `src-tauri/vendor/ffmpeg`. Repository hiện đã có cấu trúc vendor; nếu thiếu các thư mục `include`, `lib` hoặc `bin`, chạy:
 
-### Development
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg-windows.ps1
+```
 
-Run the frontend and Tauri desktop application together in development mode:
+## Cài đặt
+
+Từ thư mục gốc của dự án:
 
 ```bash
-# Install root (Tauri CLI) and frontend dependencies
 npm ci
 npm --prefix web ci
+```
 
-# Start Tauri development app
+## Chạy ở chế độ phát triển
+
+Chạy đầy đủ ứng dụng desktop:
+
+```bash
 npm run tauri:dev
 ```
 
-Or run frontend standalone in browser for UI rapid prototyping:
+Chỉ chạy giao diện web để phát triển UI:
 
 ```bash
 npm run dev
 ```
 
-### Discord Rich Presence
+Giao diện Vite mặc định chạy tại `http://localhost:1420`.
 
-The app includes its public Discord Application ID. To override it for another Discord application, expose a different ID while developing or building:
+## Build bản phát hành
+
+```bash
+npm run tauri:build
+```
+
+Tauri sẽ build frontend trước, sau đó tạo gói cài đặt phù hợp với hệ điều hành. Sản phẩm build được lưu trong `src-tauri/target/release/bundle`.
+
+## Kiểm tra chất lượng
+
+Frontend:
+
+```bash
+npm run typecheck
+npm run test
+npm run build
+```
+
+Backend Rust:
+
+```bash
+cd src-tauri
+cargo fmt --check
+cargo check
+cargo test
+```
+
+## Discord Rich Presence
+
+Dự án có sẵn Discord Application ID công khai. Có thể dùng ID khác trong quá trình phát triển hoặc build:
 
 ```powershell
 $env:NGHENHAC_DISCORD_CLIENT_ID = "your-discord-application-id"
 npm run tauri:dev
 ```
 
-The **Show activity on Discord** switch is available under Desktop App Behavior. Discord must be running when the switch is enabled.
+Bật **Hiển thị hoạt động trên Discord** trong phần cài đặt của ứng dụng. Discord cần đang chạy để trạng thái được hiển thị.
 
-### Verification & Testing
+## Dữ liệu và quyền riêng tư
 
-```bash
-# Frontend tests and type checks
-npm run test
-npm run typecheck
-npm run build
-
-# Rust backend tests
-cd src-tauri
-cargo check
-cargo test
-cargo fmt --check
-```
-
+- Cơ sở dữ liệu, cài đặt và cache ảnh bìa được lưu cục bộ.
+- Ứng dụng chỉ đọc các thư mục nhạc do người dùng chọn.
+- Lời phiên âm được xử lý cục bộ.
+- Tra cứu ảnh bìa từ xa sử dụng iTunes Search API.
+- Discord Rich Presence có thể tắt hoàn toàn trong cài đặt.
