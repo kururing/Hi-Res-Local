@@ -270,7 +270,7 @@ export const LyricsView: React.FC = () => {
           </div>
         </aside>
       )}
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:pl-6 xl:pl-12 2xl:pl-16">
         <div className="flex items-center justify-center pb-2 shrink-0 gap-3 flex-wrap">
             {/* Accessible Segmented Selector for Lyrics Mode with role=group and aria-pressed */}
             {hasRomanized && hasOriginal && (
@@ -418,10 +418,10 @@ export const LyricsView: React.FC = () => {
                   className="group mx-auto flex min-h-[52px] w-full max-w-5xl cursor-pointer items-center justify-start px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                 >
                   <span
-                    className={`inline-flex max-w-full flex-col items-start gap-1 rounded-[1.6rem] px-5 py-3 text-left transition-[color,background-color,box-shadow] duration-200 sm:px-8 ${
+                    className={`inline-flex max-w-full flex-col items-start gap-1 rounded-[1.6rem] text-left transition-[color,background-color,box-shadow] duration-200 ${
                       isActive
-                        ? 'bg-gradient-to-r from-transparent via-brand-accent/15 to-transparent shadow-[0_10px_30px_rgba(0,0,0,0.12)]'
-                        : 'group-hover:bg-oled-hover/35'
+                        ? '-mx-2 -my-1 rounded-[1.8rem] bg-gradient-to-r from-transparent via-brand-accent/15 to-transparent px-7 py-4 shadow-[0_10px_30px_rgba(0,0,0,0.12)] sm:px-10'
+                        : 'px-5 py-3 group-hover:bg-oled-hover/35 sm:px-8'
                     }`}
                   >
                     {isBlank ? (
