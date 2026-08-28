@@ -32,11 +32,33 @@ export const PlaylistArtwork: React.FC<PlaylistArtworkProps> = ({ playlist, trac
   }, [playlist.cover_url]);
 
   if (coverSource) {
-    return <img src={coverSource} alt={`${playlist.name} cover`} className={`h-full w-full object-cover ${className}`} draggable={false} onError={() => setCoverSource(null)} />;
+    return (
+      <img
+        src={coverSource}
+        alt={`${playlist.name} cover`}
+        className={`h-full w-full object-cover ${className}`}
+        loading="lazy"
+        decoding="async"
+        draggable={false}
+        onError={() => setCoverSource(null)}
+      />
+    );
   }
 
   const coverTracks = tracks.slice(0, 4);
   if (coverTracks.length > 0) {
+    if (coverTracks.length < 4) {
+      return (
+        <div className={`h-full w-full overflow-hidden ${className}`}>
+          <TrackArtwork
+            track={coverTracks[0]}
+            className="h-full w-full"
+            iconClassName="h-5 w-5 text-brand-muted/70"
+          />
+        </div>
+      );
+    }
+
     return (
       <div className={`grid h-full w-full grid-cols-2 grid-rows-2 overflow-hidden ${className}`}>
         {[0, 1, 2, 3].map(index => (

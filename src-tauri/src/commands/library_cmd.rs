@@ -4,7 +4,8 @@ use tauri::{AppHandle, State};
 
 use crate::db::queries_library::{
     add_library_root as db_add_root, get_library_root_by_path, get_library_roots as db_get_roots,
-    remove_library_root as db_remove_root, set_root_active as db_set_active,
+    remove_library_root_with_tracks as db_remove_root_with_tracks,
+    set_root_active as db_set_active,
 };
 use crate::db::queries_settings::set_setting;
 use crate::db::queries_tracks::get_duplicate_groups as db_get_duplicates;
@@ -56,7 +57,11 @@ pub async fn get_library_roots(state: State<'_, AppState>) -> Result<Vec<Library
 }
 
 #[tauri::command]
-pub async fn remove_library_root(id: String, state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn remove_library_root(
+    id: String,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
     let root = {
         let conn = state.db.lock();
         db_get_roots(&conn)
@@ -70,13 +75,27 @@ pub async fn remove_library_root(id: String, state: State<'_, AppState>) -> Resu
     ) {
         let _ = watcher.unwatch_path(&PathBuf::from(&root.path));
     }
-    let conn = state.db.lock();
-    db_remove_root(&conn, &id).map_err(|e| e.to_string())
+    let Some(root) = root else {
+        return Ok(false);
+    };
+    let mut conn = state.db.lock();
+    let removed =
+        db_remove_root_with_tracks(&mut conn, &id, &root.path).map_err(|e| e.to_string())?;
+    drop(conn);
+    if removed {
+        use tauri::Emitter;
+        let _ = app_handle.emit(
+            "library://scan_finished",
+            serde_json::json!({ "total": 0, "success": true }),
+        );
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
 pub async fn remove_library_root_by_path(
     path: String,
+    app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     let root = {
@@ -84,7 +103,7 @@ pub async fn remove_library_root_by_path(
         get_library_root_by_path(&conn, &path).map_err(|e| e.to_string())?
     };
     match root {
-        Some(root) => remove_library_root(root.id, state).await,
+        Some(root) => remove_library_root(root.id, app_handle, state).await,
         None => Ok(false),
     }
 }

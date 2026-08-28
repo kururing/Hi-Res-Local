@@ -20,11 +20,13 @@ export const Badge: React.FC<BadgeProps> = ({
   variant = 'quality',
   className = '',
 }) => {
-  const f = format || track?.format || (track?.path.endsWith('.flac') ? 'FLAC' : track?.path.endsWith('.wav') ? 'WAV' : 'MP3');
+  const rawFormat = format || track?.format || (track?.path.endsWith('.flac') ? 'FLAC' : track?.path.endsWith('.wav') ? 'WAV' : 'MP3');
+  const isDsd = /^(dsf|dff|dsd)$/i.test(rawFormat);
+  const f = isDsd ? 'DSD' : rawFormat;
   const sr = sampleRate ?? track?.sample_rate;
   const bits = bitsPerSample ?? track?.bit_depth ?? track?.bits_per_sample;
 
-  const isHiRes = (sr && sr >= 88200) || (bits && bits >= 24) || f === 'DSD';
+  const isHiRes = (sr && sr >= 88200) || (bits && bits >= 24) || isDsd;
   const isLossless = ['FLAC', 'WAV', 'ALAC', 'AIFF', 'APE', 'DSD'].includes(f.toUpperCase());
 
   const text = variant === 'quality' && track

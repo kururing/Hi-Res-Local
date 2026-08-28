@@ -1,5 +1,5 @@
 import { Track, LibraryStats, ScanProgress } from './library';
-import { PlaybackStatus, LoopMode, AudioCapabilities, AudioOutputDevice, EngineStatus, SystemAudioState } from './audio';
+import { PlaybackStatus, LoopMode, AudioCapabilities, AudioOutputDevice, EngineStatus, SystemAudioState, AsioDriver, AudioBackend, DsdOutputMode, PlaybackMode } from './audio';
 import { LyricData } from './lyrics';
 
 /** Playlist row as stored/returned by the Rust backend. */
@@ -49,6 +49,7 @@ export interface IpcCommands {
   };
   // Library Commands
   'scan_directory': { args: { path: string }; return: Track[] };
+  'scan_library': { args: Record<string, never>; return: number };
   'get_all_tracks': { args: Record<string, never>; return: Track[] };
   'get_track_by_id': { args: { id: string }; return: Track | null };
   'get_library_stats': { args: Record<string, never>; return: LibraryStats };
@@ -134,8 +135,21 @@ export interface IpcCommands {
 
   // Audio Output & Hardware
   'get_audio_output_devices': { args: Record<string, never>; return: AudioOutputDevice[] };
+  'get_asio_drivers': { args: Record<string, never>; return: AsioDriver[] };
   'get_audio_capabilities': { args: Record<string, never>; return: AudioCapabilities };
   'set_audio_output_device': { args: { deviceId: string }; return: void };
+  'set_audio_backend': { args: { backend: AudioBackend }; return: void };
+  'set_dsd_output_mode': { args: { mode: DsdOutputMode; asioDriverId?: string | null }; return: void };
+  'apply_playback_mode': {
+    args: {
+      mode: PlaybackMode;
+      deviceId?: string | null;
+      backend?: AudioBackend | null;
+      dsdTransport?: DsdOutputMode | null;
+      asioDriverId?: string | null;
+    };
+    return: EngineStatus | null;
+  };
   'set_exclusive_mode': { args: { enabled: boolean }; return: void };
   'set_bit_perfect': { args: { enabled: boolean }; return: void };
   'set_equalizer': { args: { enabled: boolean; gains: number[] }; return: void };
@@ -144,6 +158,7 @@ export interface IpcCommands {
 
   // Lyrics Commands
   'get_track_lyrics': { args: { trackId: string }; return: LyricData | null };
+  'fetch_lrclib_lyrics': { args: { trackId: string }; return: LyricData | null };
   'parse_lrc_content': { args: { content: string }; return: LyricData };
   'save_romanized_lyrics': { args: { trackId: string; content: string }; return: LyricData };
   'quit_app': { args: undefined; return: void };
@@ -175,7 +190,11 @@ export interface IpcEvents {
     container_format: string;
     is_lossless: boolean;
     is_hi_res: boolean;
+    source_type?: string | null;
+    dsd_rate?: string | null;
+    dsd_output_mode?: DsdOutputMode | null;
   } | null;
+  'audio://native_dsd_status': { active: boolean; dsd_rate?: string | null; error?: string | null };
   'library://scan_progress': ScanProgress;
   'library://scan_finished': { total: number; success: boolean };
 }

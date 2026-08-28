@@ -1,7 +1,7 @@
 use nghenhacpromax_lib::db::backup::{backup_database, restore_database};
 use nghenhacpromax_lib::db::queries_history::{get_play_history, record_play_history};
 use nghenhacpromax_lib::db::queries_library::{
-    add_library_root, get_library_roots, remove_library_root,
+    add_library_root, get_library_roots, remove_library_root, remove_library_root_with_tracks,
 };
 use nghenhacpromax_lib::db::queries_playlists::{
     add_tracks_to_playlist, create_playlist, evaluate_smart_playlist_tracks,
@@ -159,6 +159,23 @@ fn test_library_roots_crud() {
 
     let empty_roots = get_library_roots(&conn).unwrap();
     assert!(empty_roots.is_empty());
+}
+
+#[test]
+fn removing_library_root_removes_only_contained_tracks() {
+    let db = Database::open_in_memory().expect("Failed to open DB");
+    let mut conn = db.lock();
+    let root = add_library_root(&conn, "/music", "Music").unwrap();
+    let mut contained = create_sample_track("inside", "Inside", "Artist", "Album", "flac");
+    contained.path = "/music/album/inside.flac".into();
+    let mut sibling = create_sample_track("sibling", "Sibling", "Artist", "Album", "flac");
+    sibling.path = "/music2/sibling.flac".into();
+    upsert_track(&conn, &contained).unwrap();
+    upsert_track(&conn, &sibling).unwrap();
+
+    assert!(remove_library_root_with_tracks(&mut conn, &root.id, &root.path).unwrap());
+    assert!(get_track_by_id(&conn, "inside").unwrap().is_none());
+    assert!(get_track_by_id(&conn, "sibling").unwrap().is_some());
 }
 
 #[test]
@@ -359,6 +376,45 @@ fn duplicate_play_start_events_are_idempotent() {
     .unwrap();
     let collapsed = get_play_history(&conn, 10, 0).unwrap();
     assert_eq!(collapsed.len(), 1);
+}
+
+#[test]
+fn completing_a_play_updates_its_start_row_and_counter() {
+    let db = Database::open_in_memory().expect("Failed to open DB");
+    let conn = db.lock();
+    let track = create_sample_track("complete", "Complete", "Artist", "Album", "flac");
+    upsert_track(&conn, &track).unwrap();
+
+    record_play_history(
+        &conn,
+        &RecordPlayInput {
+            track_id: track.id.clone(),
+            completed_duration_ms: 0,
+            fully_played: false,
+        },
+    )
+    .unwrap();
+    record_play_history(
+        &conn,
+        &RecordPlayInput {
+            track_id: track.id.clone(),
+            completed_duration_ms: 42_000,
+            fully_played: true,
+        },
+    )
+    .unwrap();
+
+    let history = get_play_history(&conn, 10, 0).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].completed_duration_ms, 42_000);
+    assert!(history[0].fully_played);
+    assert_eq!(
+        get_track_by_id(&conn, &track.id)
+            .unwrap()
+            .unwrap()
+            .play_count,
+        1
+    );
 }
 
 #[test]

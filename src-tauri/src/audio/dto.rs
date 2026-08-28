@@ -1,5 +1,175 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DsdOutputMode {
+    NativeDsd,
+    Dop,
+    #[default]
+    Pcm,
+}
+
+impl DsdOutputMode {
+    /// Stable index for lock-free storage in an `AtomicU32`.
+    pub const fn to_index(self) -> u32 {
+        match self {
+            Self::NativeDsd => 0,
+            Self::Dop => 1,
+            Self::Pcm => 2,
+        }
+    }
+
+    pub const fn from_index(index: u32) -> Self {
+        match index {
+            0 => Self::NativeDsd,
+            1 => Self::Dop,
+            _ => Self::Pcm,
+        }
+    }
+}
+
+/// User-facing playback mode. Decoupled from the actual backend
+/// ([`AudioBackend`]) and the DSD transport ([`DsdOutputMode`]) which are
+/// resolved at runtime per track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum PlaybackMode {
+    #[default]
+    Auto,
+    HighQuality,
+    Multitask,
+    Advanced,
+}
+
+impl PlaybackMode {
+    /// Stable index for lock-free storage in an `AtomicU32`.
+    pub const fn to_index(self) -> u32 {
+        match self {
+            Self::Auto => 0,
+            Self::HighQuality => 1,
+            Self::Multitask => 2,
+            Self::Advanced => 3,
+        }
+    }
+
+    pub const fn from_index(index: u32) -> Self {
+        match index {
+            1 => Self::HighQuality,
+            2 => Self::Multitask,
+            3 => Self::Advanced,
+            _ => Self::Auto,
+        }
+    }
+}
+
+/// Where the audible volume control actually lives. Never `Analog`:
+/// no backend in this stack can verify an analog attenuator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum VolumeControlKind {
+    /// Windows endpoint (device) volume — bit-perfect / DoP / native DSD paths.
+    WindowsEndpoint,
+    /// Software gain applied in the decode pipeline.
+    #[default]
+    Software,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioBackend {
+    #[default]
+    Shared,
+    WasapiExclusive,
+    Asio,
+}
+
+impl AudioBackend {
+    /// Stable index for lock-free storage in an `AtomicU32`.
+    pub const fn to_index(self) -> u32 {
+        match self {
+            Self::Shared => 0,
+            Self::WasapiExclusive => 1,
+            Self::Asio => 2,
+        }
+    }
+
+    pub const fn from_index(index: u32) -> Self {
+        match index {
+            1 => Self::WasapiExclusive,
+            2 => Self::Asio,
+            _ => Self::Shared,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DsdRate {
+    Dsd64,
+    Dsd128,
+    Dsd256,
+    Dsd512,
+}
+
+impl DsdRate {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Dsd64 => "DSD64",
+            Self::Dsd128 => "DSD128",
+            Self::Dsd256 => "DSD256",
+            Self::Dsd512 => "DSD512",
+        }
+    }
+
+    pub const fn multiplier(self) -> u32 {
+        match self {
+            Self::Dsd64 => 64,
+            Self::Dsd128 => 128,
+            Self::Dsd256 => 256,
+            Self::Dsd512 => 512,
+        }
+    }
+
+    /// DSD bit rate in Hz (44.1 kHz × multiplier).
+    pub const fn sample_rate_hz(self) -> u32 {
+        44_100 * self.multiplier()
+    }
+
+    /// DSD bit rate in Hz (48 kHz × multiplier).
+    pub const fn sample_rate_hz_48(self) -> u32 {
+        48_000 * self.multiplier()
+    }
+
+    /// Both 44.1 kHz and 48 kHz DSD families for this rate label.
+    pub const fn sample_rate_families_hz(self) -> [u32; 2] {
+        [self.sample_rate_hz(), self.sample_rate_hz_48()]
+    }
+
+    /// PCM frame rate of the DoP encapsulation for this DSD rate
+    /// (16 DSD bits per 24-bit DoP sample): DSD64 → 176.4 kHz.
+    pub const fn dop_pcm_rate(self) -> u32 {
+        self.sample_rate_hz() / 16
+    }
+
+    /// DoP PCM frame rate for the 48 kHz DSD family: DSD64 → 192 kHz.
+    pub const fn dop_pcm_rate_48(self) -> u32 {
+        self.sample_rate_hz_48() / 16
+    }
+
+    /// DoP PCM rates for both DSD families.
+    pub const fn dop_pcm_rates(self) -> [u32; 2] {
+        [self.dop_pcm_rate(), self.dop_pcm_rate_48()]
+    }
+
+    pub const ALL: [Self; 4] = [Self::Dsd64, Self::Dsd128, Self::Dsd256, Self::Dsd512];
+
+    /// Rates advertised from a WASAPI Exclusive PCM probe. Each rate is only
+    /// exposed when the endpoint accepts the exact 24-bit DoP carrier rate.
+    pub const ADVERTISED_DOP: [Self; 4] = Self::ALL;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -83,6 +253,12 @@ pub struct QualityBadge {
     pub container_format: String,
     pub is_lossless: bool,
     pub is_hi_res: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsd_rate: Option<DsdRate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsd_output_mode: Option<DsdOutputMode>,
 }
 
 impl QualityBadge {
@@ -212,7 +388,25 @@ pub struct AudioDeviceDTO {
     pub is_default: bool,
     pub is_current: bool,
     pub sample_rates: Vec<u32>,
+    #[serde(default)]
+    pub bit_depths: Vec<u32>,
     pub channels: Vec<u16>,
+    #[serde(default)]
+    pub backend: AudioBackend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asio_driver_id: Option<String>,
+    #[serde(default)]
+    pub native_dsd_supported: bool,
+    #[serde(default)]
+    pub dsd_rates: Vec<DsdRate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AsioDriverDTO {
+    pub id: String,
+    pub name: String,
+    pub native_dsd_supported: bool,
+    pub dsd_rates: Vec<DsdRate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,11 +431,68 @@ impl Default for PlaybackProgress {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EngineStatus {
     pub output_mode: String,
+    /// True only when the wire is bit-perfect AND every DSP stage
+    /// (EQ / ReplayGain / crossfade / software volume) is bypassed.
     pub bit_perfect: bool,
     pub is_native: bool,
     pub output_sample_rate: u32,
     pub output_bit_depth: u32,
     pub source_label: String,
+    #[serde(default)]
+    pub backend: AudioBackend,
+    #[serde(default)]
+    pub dsd_output_mode: DsdOutputMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsd_rate: Option<DsdRate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_dsd_error: Option<String>,
+    /// Human label of the source, e.g. `"DSD128"` or `"FLAC 24-bit / 96 kHz"`.
+    #[serde(default)]
+    pub source_format: String,
+    #[serde(default)]
+    pub source_sample_rate: u32,
+    /// 1 for DSD sources.
+    #[serde(default)]
+    pub source_bit_depth: u32,
+    /// How DSD reaches the device; `None` for PCM sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsd_transport: Option<DsdOutputMode>,
+    /// Human label of what is sent to the device,
+    /// e.g. `"PCM 24-bit / 352.8 kHz (DoP)"` or `"DSD 5.6 MHz (Native)"`.
+    #[serde(default)]
+    pub output_format: String,
+    #[serde(default)]
+    pub volume: f32,
+    #[serde(default)]
+    pub volume_control_kind: VolumeControlKind,
+    /// Set when Auto/High-Quality fell back from a better path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+}
+
+impl Default for EngineStatus {
+    fn default() -> Self {
+        Self {
+            output_mode: "WASAPI Shared".into(),
+            bit_perfect: false,
+            is_native: false,
+            output_sample_rate: 0,
+            output_bit_depth: 32,
+            source_label: String::new(),
+            backend: AudioBackend::Shared,
+            dsd_output_mode: DsdOutputMode::Pcm,
+            dsd_rate: None,
+            native_dsd_error: None,
+            source_format: String::new(),
+            source_sample_rate: 0,
+            source_bit_depth: 0,
+            dsd_transport: None,
+            output_format: String::new(),
+            volume: 1.0,
+            volume_control_kind: VolumeControlKind::Software,
+            fallback_reason: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -294,6 +545,11 @@ pub enum AudioEvent {
     ExclusiveModeChanged {
         enabled: bool,
         output_mode: String,
+        error: Option<String>,
+    },
+    NativeDsdStatus {
+        active: bool,
+        dsd_rate: Option<DsdRate>,
         error: Option<String>,
     },
     DeviceLost(String),

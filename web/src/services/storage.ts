@@ -1,4 +1,4 @@
-import { AppSettings, DEFAULT_SETTINGS, normalizeWasapiExclusiveSettings } from '../types/settings';
+import { AppSettings, DEFAULT_SETTINGS, normalizeAudioSettings } from '../types/settings';
 import { Playlist } from '../types/playlist';
 import { EqualizerPreset } from '../types/audio';
 import { LyricsMode } from '../types/lyrics';
@@ -30,7 +30,12 @@ export const Storage = {
       const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       if (!data) return DEFAULT_SETTINGS;
       const parsed = JSON.parse(data) as Partial<AppSettings>;
-      const settings = normalizeWasapiExclusiveSettings({ ...DEFAULT_SETTINGS, ...parsed });
+      const settings = normalizeAudioSettings({
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        // Legacy payloads have no playback_mode; force the migration branch.
+        playback_mode: (parsed.playback_mode ?? '') as AppSettings['playback_mode'],
+      });
       if (settings.custom_image_theme && settings.custom_image_themes.length === 0) {
         const migrated = {
           ...settings.custom_image_theme,
@@ -152,6 +157,14 @@ export const Storage = {
       localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(trimmed));
     } catch (e) {
       console.error('Failed to add history', e);
+    }
+  },
+
+  clearHistory(): void {
+    try {
+      localStorage.removeItem(STORAGE_KEYS.HISTORY);
+    } catch (e) {
+      console.error('Failed to clear history', e);
     }
   },
 

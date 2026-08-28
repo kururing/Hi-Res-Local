@@ -109,7 +109,7 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
             role="button"
             tabIndex={0}
             aria-label={t('home_open_playlist', settings.language, { name: pl.name })}
-            className="group p-5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col justify-between h-44 shadow-card-elevated relative overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+            className="group min-w-0 p-5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col justify-between h-44 shadow-card-elevated relative overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
           >
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -172,7 +172,7 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
                 )}
               </div>
 
-              <h3 className="font-bold text-base text-brand-foreground truncate group-hover:text-brand-accent transition-colors">
+              <h3 className="block min-w-0 max-w-full truncate font-bold text-base text-brand-foreground group-hover:text-brand-accent transition-colors" title={pl.name}>
                 {pl.name}
               </h3>
               <p className="text-xs text-brand-muted line-clamp-2 mt-1">

@@ -160,13 +160,9 @@ pub fn run() {
                             let _ = app_handle.emit("audio://track_changed", &Some(track));
                         }
                         AudioEvent::ProgressUpdated(progress) => {
-                            let _ = app_handle.emit(
-                                "audio://position",
-                                serde_json::json!({
-                                    "position_secs": (progress.position_ms as f64) / 1000.0,
-                                    "duration_secs": (progress.duration_ms as f64) / 1000.0
-                                }),
-                            );
+                            // Position updates are emitted by the 10 Hz ticker below.
+                            // Keep this event for consumers that need the richer payload,
+                            // but avoid sending the same position through two channels.
                             let _ = app_handle.emit("audio://progress", &progress);
                         }
                         AudioEvent::VolumeChanged { volume, is_muted } => {
@@ -232,6 +228,13 @@ pub fn run() {
                             let _ = app_handle
                                 .emit("audio://error", serde_json::json!({ "message": msg }));
                         }
+                        AudioEvent::NativeDsdStatus { active, dsd_rate, error } => {
+                            player.apply_native_dsd_state(active);
+                            let _ = app_handle.emit(
+                                "audio://native_dsd_status",
+                                serde_json::json!({ "active": active, "dsd_rate": dsd_rate, "error": error }),
+                            );
+                        }
                     }
                 }
             });
@@ -251,6 +254,12 @@ pub fn run() {
                             .emit("audio://track_changed", &Some(&transition.track));
                         let _ = app_handle_ticker
                             .emit("audio://quality_updated", &transition.quality_badge);
+                        #[cfg(windows)]
+                        if let Some(engine_status) = transition.engine_status {
+                            player_ticker.apply_engine_status(engine_status.clone());
+                            let _ = app_handle_ticker
+                                .emit("audio://engine_status", &engine_status);
+                        }
                     }
                     if let Some((position_ms, duration_ms)) = player_ticker.get_progress_tick() {
                         let _ = app_handle_ticker.emit(
@@ -339,7 +348,11 @@ pub fn run() {
             get_player_snapshot,
             // Hardware & Device
             get_audio_output_devices,
+            get_asio_drivers,
             set_audio_output_device,
+            set_audio_backend,
+            set_dsd_output_mode,
+            apply_playback_mode,
             set_exclusive_mode,
             set_bit_perfect,
             get_audio_capabilities,
@@ -397,6 +410,7 @@ pub fn run() {
             update_track_tags,
             // Lyrics
             get_track_lyrics,
+            fetch_lrclib_lyrics,
             parse_lrc_content,
             save_romanized_lyrics,
             // Browse

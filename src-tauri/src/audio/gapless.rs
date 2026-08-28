@@ -4,6 +4,7 @@ use crate::audio::dto::{
     AudioTrack, CrossfadeConfig, CrossfadeCurve, QualityBadge, ReplayGainInfo,
 };
 use crate::audio::error::{AudioError, AudioResult};
+use crate::audio::pcm::AudioFormat;
 
 /// High-quality linear / fractional resampler for multi-channel audio
 #[derive(Debug, Clone)]
@@ -161,11 +162,21 @@ impl PreloadedTrack {
         let mut predecoded_samples = Vec::new();
 
         // Preload the first few packets (~100ms) for instantaneous start
-        for _ in 0..4 {
-            if let Some(packet) = decoder.decode_next_packet()? {
-                predecoded_samples.extend_from_slice(packet);
-            } else {
-                break;
+        // DSD PCM is configured to the device rate after the output stream is
+        // known. Do not consume packets before that configuration, otherwise
+        // those samples would bypass FFmpeg's band-limited resampler.
+        if !decoder
+            .quality_badge()
+            .source_type
+            .as_deref()
+            .is_some_and(|source| source.eq_ignore_ascii_case("DSD"))
+        {
+            for _ in 0..4 {
+                if let Some(packet) = decoder.decode_next_packet()? {
+                    predecoded_samples.extend_from_slice(packet);
+                } else {
+                    break;
+                }
             }
         }
 
@@ -193,11 +204,11 @@ impl PreloadedTrack {
     }
 
     pub fn sample_rate(&self) -> u32 {
-        self.decoder.sample_rate()
+        self.decoder.playback_sample_rate()
     }
 
     pub fn channels(&self) -> u16 {
-        self.decoder.channels()
+        self.decoder.playback_channels()
     }
 
     pub fn quality_badge(&self) -> &QualityBadge {
@@ -263,7 +274,35 @@ impl GaplessController {
     pub fn set_output_spec(&mut self, sample_rate: u32, channels: u16) {
         self.output_sample_rate = sample_rate;
         self.output_channels = channels;
+        if let Some(next) = self.next_preloaded.as_mut() {
+            if let Err(err) = Self::configure_dsd_decoder_output(next, sample_rate) {
+                tracing::warn!(error = %err, "Unable to update preloaded DSD PCM output");
+            }
+        }
         self.update_resampler();
+    }
+
+    fn configure_dsd_decoder_output(
+        source: &mut PreloadedTrack,
+        output_sample_rate: u32,
+    ) -> AudioResult<()> {
+        let is_dsd = source
+            .quality_badge()
+            .source_type
+            .as_deref()
+            .map(|kind| kind.eq_ignore_ascii_case("DSD"))
+            .unwrap_or(false);
+        if output_sample_rate == 0 || !is_dsd {
+            return Ok(());
+        }
+
+        // DSD decoders expose a PCM-equivalent rate (8x the DSD rate). Let
+        // FFmpeg perform the band-limited conversion before Gapless handles
+        // channel layout and output buffering.
+        source.decoder.set_output_format(Some(AudioFormat::f32(
+            output_sample_rate,
+            source.source_format().channels,
+        )))
     }
 
     fn update_resampler(&mut self) {
@@ -301,7 +340,14 @@ impl GaplessController {
         Ok(())
     }
 
-    pub fn set_current(&mut self, preloaded: PreloadedTrack) {
+    pub fn set_current(&mut self, mut preloaded: PreloadedTrack) {
+        if self.output_sample_rate > 0 {
+            if let Err(err) =
+                Self::configure_dsd_decoder_output(&mut preloaded, self.output_sample_rate)
+            {
+                tracing::warn!(error = %err, "Unable to configure DSD PCM output on set_current");
+            }
+        }
         self.current_source = Some(preloaded);
         // A manually opened track starts a new playback generation. Never let a
         // preload left by the previous queue transition after it reaches EOF.
@@ -315,12 +361,13 @@ impl GaplessController {
 
     pub fn preload_next(&mut self, track: AudioTrack) -> AudioResult<()> {
         let preloaded = PreloadedTrack::open(track)?;
-        self.set_preloaded_next(preloaded);
-        Ok(())
+        self.set_preloaded_next(preloaded)
     }
 
-    pub fn set_preloaded_next(&mut self, preloaded: PreloadedTrack) {
+    pub fn set_preloaded_next(&mut self, mut preloaded: PreloadedTrack) -> AudioResult<()> {
+        Self::configure_dsd_decoder_output(&mut preloaded, self.output_sample_rate)?;
         self.next_preloaded = Some(preloaded);
+        Ok(())
     }
 
     pub fn clear_preload(&mut self) {

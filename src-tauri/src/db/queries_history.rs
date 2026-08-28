@@ -35,6 +35,34 @@ pub fn record_play_history(
         .ok();
 
     if let Some((id, played_at, completed_duration_ms, fully_played)) = latest {
+        let completes_latest_start =
+            input.completed_duration_ms > 0 && !fully_played && completed_duration_ms == 0;
+        if completes_latest_start {
+            conn.execute(
+                r#"
+                UPDATE play_history
+                SET completed_duration_ms = ?1, fully_played = ?2
+                WHERE id = ?3
+                "#,
+                params![
+                    input.completed_duration_ms as i64,
+                    if input.fully_played { 1 } else { 0 },
+                    id
+                ],
+            )?;
+            if input.fully_played || input.completed_duration_ms >= 30_000 {
+                increment_play_count(conn, &input.track_id, &now.to_rfc3339())?;
+            }
+            return Ok(PlayHistoryEntry {
+                id,
+                track_id: input.track_id.clone(),
+                track: get_track_by_id(conn, &input.track_id)?,
+                played_at,
+                completed_duration_ms: input.completed_duration_ms,
+                fully_played: input.fully_played,
+            });
+        }
+
         let is_duplicate_start = !input.fully_played
             && input.completed_duration_ms == 0
             && !fully_played

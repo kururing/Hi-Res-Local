@@ -1,15 +1,23 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import { useSettings } from '../../context/SettingsContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { t } from '../../i18n';
 import { Check, Trash2, Plus } from 'lucide-react';
+import { isEqualizerAvailable } from '../../services/playbackDisplay';
+import { IpcService } from '../../services/ipc';
 
 const FREQUENCY_LABELS = ['31Hz', '62Hz', '125Hz', '250Hz', '500Hz', '1kHz', '2kHz', '4kHz', '8kHz', '16kHz'];
+const FLAT_GAINS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const EQ_PREVIEW_INTERVAL_MS = 60;
+
+function gainsAreEqual(left: number[], right: number[]): boolean {
+  return left.length === right.length && left.every((gain, index) => gain === right[index]);
+}
 
 export const EqualizerModal: React.FC = () => {
-  const { isEqualizerOpen, setIsEqualizerOpen } = usePlayer();
+  const { isEqualizerOpen, setIsEqualizerOpen, engineStatus } = usePlayer();
   const {
     settings,
     updateSettings,
@@ -21,27 +29,92 @@ export const EqualizerModal: React.FC = () => {
 
   const [customName, setCustomName] = useState('');
   const [isSavingCustom, setIsSavingCustom] = useState(false);
+  const eqAvailable = isEqualizerAvailable(engineStatus, settings);
+  const configuredGains = settings.eq_preset_id === 'custom'
+    ? settings.eq_custom_gains
+    : (eqPresets.find(preset => preset.id === settings.eq_preset_id)?.gains || FLAT_GAINS);
+  const [draftGains, setDraftGains] = useState<number[]>(() => [...configuredGains]);
+  const draftGainsRef = useRef(draftGains);
+  const isAdjustingEqRef = useRef(false);
+  const pendingPreviewRef = useRef<number[] | null>(null);
+  const previewTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isAdjustingEqRef.current || gainsAreEqual(draftGainsRef.current, configuredGains)) return;
+    const nextGains = [...configuredGains];
+    draftGainsRef.current = nextGains;
+    setDraftGains(nextGains);
+  }, [configuredGains]);
+
+  const clearPendingPreview = useCallback(() => {
+    if (previewTimerRef.current !== null) {
+      window.clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    pendingPreviewRef.current = null;
+  }, []);
+
+  useEffect(() => clearPendingPreview, [clearPendingPreview]);
+
+  const scheduleEqPreview = useCallback((gains: number[]) => {
+    pendingPreviewRef.current = [...gains];
+    if (previewTimerRef.current !== null) return;
+
+    previewTimerRef.current = window.setTimeout(() => {
+      previewTimerRef.current = null;
+      const nextGains = pendingPreviewRef.current;
+      pendingPreviewRef.current = null;
+      if (!nextGains) return;
+      void IpcService.invoke('set_equalizer', { enabled: true, gains: nextGains });
+    }, EQ_PREVIEW_INTERVAL_MS);
+  }, []);
+
+  const commitEqChanges = useCallback(() => {
+    if (!isAdjustingEqRef.current) return;
+    isAdjustingEqRef.current = false;
+    clearPendingPreview();
+    updateSettings({
+      eq_preset_id: 'custom',
+      eq_custom_gains: [...draftGainsRef.current],
+      eq_enabled: true,
+    });
+  }, [clearPendingPreview, updateSettings]);
+
+  const cancelEqChanges = useCallback(() => {
+    if (!isAdjustingEqRef.current) return;
+    isAdjustingEqRef.current = false;
+    clearPendingPreview();
+    const nextGains = [...configuredGains];
+    draftGainsRef.current = nextGains;
+    setDraftGains(nextGains);
+    void IpcService.invoke('set_equalizer', {
+      enabled: settings.eq_enabled,
+      gains: nextGains,
+    });
+  }, [clearPendingPreview, configuredGains, settings.eq_enabled]);
+
+  useEffect(() => {
+    if (!eqAvailable && isEqualizerOpen) {
+      setIsEqualizerOpen(false);
+    }
+  }, [eqAvailable, isEqualizerOpen, setIsEqualizerOpen]);
 
   if (!isEqualizerOpen) return null;
 
-  const currentGains = settings.eq_preset_id === 'custom'
-    ? settings.eq_custom_gains
-    : (eqPresets.find(p => p.id === settings.eq_preset_id)?.gains || [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-
   const handleBandChange = (index: number, newGain: number) => {
-    const nextGains = [...currentGains];
+    const nextGains = [...draftGainsRef.current];
     nextGains[index] = Math.max(-12, Math.min(12, Math.round(newGain * 2) / 2));
-    updateSettings({
-      eq_preset_id: 'custom',
-      eq_custom_gains: nextGains,
-      eq_enabled: true,
-    });
+    isAdjustingEqRef.current = true;
+    draftGainsRef.current = nextGains;
+    setDraftGains(nextGains);
+    scheduleEqPreview(nextGains);
   };
 
   const handleSaveCustom = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customName.trim()) return;
-    saveCustomEqPreset(customName.trim(), currentGains);
+    commitEqChanges();
+    saveCustomEqPreset(customName.trim(), draftGainsRef.current);
     setCustomName('');
     setIsSavingCustom(false);
   };
@@ -49,7 +122,10 @@ export const EqualizerModal: React.FC = () => {
   return (
     <Modal
       isOpen={isEqualizerOpen}
-      onClose={() => setIsEqualizerOpen(false)}
+      onClose={() => {
+        commitEqChanges();
+        setIsEqualizerOpen(false);
+      }}
       title={t('settings_eq_section', settings.language)}
       maxWidth="2xl"
     >
@@ -92,7 +168,7 @@ export const EqualizerModal: React.FC = () => {
         {/* 10 Vertical Sliders */}
         <div className={`grid grid-cols-10 gap-2 p-4 rounded-xl bg-oled-base/40 border border-brand-border transition-opacity ${!settings.eq_enabled ? 'opacity-40 pointer-events-none' : ''}`}>
           {FREQUENCY_LABELS.map((label, idx) => {
-            const gain = currentGains[idx] || 0;
+            const gain = draftGains[idx] || 0;
             return (
               <div key={label} className="flex flex-col items-center gap-2">
                 <span className="text-[11px] font-mono font-medium text-brand-accent">
@@ -109,6 +185,10 @@ export const EqualizerModal: React.FC = () => {
                     step={0.5}
                     value={gain}
                     onChange={e => handleBandChange(idx, parseFloat(e.target.value))}
+                    onPointerUp={commitEqChanges}
+                    onPointerCancel={cancelEqChanges}
+                    onKeyUp={commitEqChanges}
+                    onBlur={commitEqChanges}
                     aria-label={`Gain for ${label}`}
                     style={{
                       writingMode: 'vertical-lr',
@@ -169,7 +249,10 @@ export const EqualizerModal: React.FC = () => {
             </div>
           )}
 
-          <Button size="sm" variant="secondary" onClick={() => setIsEqualizerOpen(false)}>
+          <Button size="sm" variant="secondary" onClick={() => {
+            commitEqChanges();
+            setIsEqualizerOpen(false);
+          }}>
             {t('btn_close', settings.language)}
           </Button>
         </div>

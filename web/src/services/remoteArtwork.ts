@@ -1,8 +1,11 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { IpcService, isTauri } from './ipc';
+import { artistsShareIdentity } from './artistIdentity';
 
 const CACHE_KEY = 'nghenhac_remote_artwork_itunes_v3';
 const DISCORD_URL_CACHE_KEY = 'nghenhac_remote_artwork_itunes_urls_v1';
+const ARTIST_MATCH_VERSION_KEY = 'nghenhac_remote_artwork_artist_match_version';
+const ARTIST_MATCH_VERSION = 'album-evidence-v1';
 const LEGACY_CACHE_KEYS = [
   'nghenhac_remote_artwork_v3',
   'nghenhac_remote_artwork_itunes_v1',
@@ -12,6 +15,10 @@ const ITUNES_SEARCH_URL = 'https://itunes.apple.com/search';
 const ITUNES_LOOKUP_URL = 'https://itunes.apple.com/lookup';
 const NETWORK_TIMEOUT_MS = 7_500;
 const ITUNES_REQUEST_CONCURRENCY = 4;
+const MEMORY_CACHE_LIMIT = 2_000;
+const DISCORD_CACHE_LIMIT = 1_000;
+const MISSING_ARTWORK_LIMIT = 2_000;
+const ARTIST_EVIDENCE_LIMIT = 2_000;
 
 type ArtworkKind = 'album' | 'artist';
 type ArtworkCache = Record<string, string>;
@@ -34,6 +41,7 @@ const memoryCache = new Map<string, string>();
 const discordUrlCache = new Map<string, string>();
 const missingArtwork = new Set<string>();
 const pending = new Map<string, Promise<string | null>>();
+const artistIdEvidence = new Map<string, Map<number, number>>();
 let diskCache: ArtworkCache | null = null;
 let activeITunesRequests = 0;
 const queuedITunesRequests: Array<{
@@ -50,11 +58,40 @@ const queuedArtistArtworkRequests: Array<{
 }> = [];
 let cacheGeneration = 0;
 
+const setBoundedMap = <K, V>(cache: Map<K, V>, key: K, value: V, limit: number): void => {
+  // Delete first so an updated entry becomes the newest item.
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > limit) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+};
+
+const addBoundedSet = <T>(cache: Set<T>, value: T, limit: number): void => {
+  cache.delete(value);
+  cache.add(value);
+  while (cache.size > limit) {
+    const oldest = cache.values().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+};
+
 const readCache = (): ArtworkCache => {
   if (diskCache) return diskCache;
   try {
     LEGACY_CACHE_KEYS.forEach(key => localStorage.removeItem(key));
-    diskCache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}') as ArtworkCache;
+    const cache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}') as ArtworkCache;
+    if (localStorage.getItem(ARTIST_MATCH_VERSION_KEY) !== ARTIST_MATCH_VERSION) {
+      Object.keys(cache).forEach(key => {
+        if (key.startsWith('artist:')) delete cache[key];
+      });
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+      localStorage.setItem(ARTIST_MATCH_VERSION_KEY, ARTIST_MATCH_VERSION);
+    }
+    diskCache = cache;
   }
   catch { diskCache = {}; }
   return diskCache;
@@ -81,6 +118,35 @@ const matchScore = (found: string, expected: string) => {
   if (!actual || !target) return 0;
   if (actual === target) return 5;
   return actual.includes(target) || target.includes(actual) ? 3 : 0;
+};
+
+// Artist names frequently differ only in typography between local tags and
+// remote catalogues (for example, `Hwa Sa`, `Hwa-Sa`, and `Hwasa`). Keep this
+// relaxed identity check scoped to artist matching so album-title matching
+// remains conservative.
+const matchArtistScore = (found: string, expected: string) => {
+  if (artistsShareIdentity(found, expected)) return 5;
+  return matchScore(found, expected);
+};
+
+const artistEvidenceKey = (artist: string) => normalizeName(artist).replace(/\s+/g, '');
+
+const recordArtistIdEvidence = (localArtist: string, remoteArtist: string, artistId?: number) => {
+  if (!artistId || matchArtistScore(remoteArtist, localArtist) < 3) return;
+  const key = artistEvidenceKey(localArtist);
+  const evidence = artistIdEvidence.get(key) ?? new Map<number, number>();
+  evidence.set(artistId, (evidence.get(artistId) ?? 0) + 1);
+  setBoundedMap(artistIdEvidence, key, evidence, ARTIST_EVIDENCE_LIMIT);
+};
+
+const getConfirmedArtistId = (artist: string): number | null => {
+  const ranked = [...(artistIdEvidence.get(artistEvidenceKey(artist)) ?? new Map()).entries()]
+    .sort((left, right) => right[1] - left[1]);
+  if (ranked.length === 0) return null;
+  // Equal evidence means the albums point to multiple artists with the same
+  // display name. Fall back to a catalogue search instead of guessing.
+  if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) return null;
+  return ranked[0][0];
 };
 
 const createLinkedTimeout = (externalSignal?: AbortSignal) => {
@@ -138,7 +204,44 @@ const requestITunes = (url: string, signal?: AbortSignal): Promise<ITunesSearchR
 const searchITunes = (params: URLSearchParams, signal?: AbortSignal) =>
   requestITunes(`${ITUNES_SEARCH_URL}?${params}`, signal);
 
-const findArtist = async (artist: string, signal?: AbortSignal): Promise<ITunesAlbumResult | null> => {
+const findArtist = async (artist: string, albumHint?: string, signal?: AbortSignal): Promise<ITunesAlbumResult | null> => {
+  const confirmedArtistId = getConfirmedArtistId(artist);
+  if (confirmedArtistId) {
+    return { artistId: confirmedArtistId, artistName: artist };
+  }
+
+  if (albumHint?.trim()) {
+    const albumSearch = await searchITunes(new URLSearchParams({
+      term: `${artist} ${albumHint}`.trim(),
+      media: 'music',
+      entity: 'album',
+      country: 'vn',
+      limit: '25',
+    }), signal);
+    const albumCandidates = (albumSearch.results || [])
+      .filter(item => item.artistId && item.artistName && item.collectionName)
+      .map(item => ({
+        item,
+        artistScore: matchArtistScore(item.artistName || '', artist),
+        albumScore: matchScore(item.collectionName || '', albumHint),
+      }))
+      .sort((left, right) =>
+        (right.artistScore + right.albumScore) - (left.artistScore + left.albumScore)
+      );
+    const albumMatch = albumCandidates.find(candidate =>
+      candidate.artistScore >= 3 && candidate.albumScore >= 3
+    )?.item ?? null;
+    if (albumMatch) return albumMatch;
+
+    // Local tags and iTunes often describe the same release differently
+    // (translated titles, "Pt. 6", or "- Single"). The combined search is
+    // still useful identity evidence when every strong artist-name result
+    // points to one artist ID. Do not use this fallback for namesakes.
+    const strongArtistCandidates = albumCandidates.filter(candidate => candidate.artistScore >= 3);
+    const artistIds = new Set(strongArtistCandidates.map(candidate => candidate.item.artistId));
+    if (artistIds.size === 1) return strongArtistCandidates[0]?.item ?? null;
+  }
+
   const search = await searchITunes(new URLSearchParams({
     term: artist,
     media: 'music',
@@ -149,13 +252,13 @@ const findArtist = async (artist: string, signal?: AbortSignal): Promise<ITunesA
   }), signal);
   return (search.results || [])
     .filter(item => item.artistId && item.artistName)
-    .map(item => ({ item, score: matchScore(item.artistName || '', artist) }))
+    .map(item => ({ item, score: matchArtistScore(item.artistName || '', artist) }))
     .sort((a, b) => b.score - a.score)[0]?.item ?? null;
 };
 
-const fetchArtistArtworkUrl = async (artist: string, signal?: AbortSignal): Promise<string | null> => {
-  const match = await findArtist(artist, signal);
-  if (!match?.artistId || matchScore(match.artistName || '', artist) < 3) return null;
+const fetchArtistArtworkUrl = async (artist: string, albumHint?: string, signal?: AbortSignal): Promise<string | null> => {
+  const match = await findArtist(artist, albumHint, signal);
+  if (!match?.artistId || matchArtistScore(match.artistName || '', artist) < 3) return null;
 
   if (isTauri()) {
     try {
@@ -179,7 +282,7 @@ const fetchArtistArtworkUrl = async (artist: string, signal?: AbortSignal): Prom
     limit: '25',
   })}`, signal);
   const album = (lookup.results || []).find(item =>
-    item.artworkUrl100 && matchScore(item.artistName || '', artist) >= 3
+    item.artworkUrl100 && matchArtistScore(item.artistName || '', artist) >= 3
   );
   return album?.artworkUrl100 ? toLargeArtworkUrl(album.artworkUrl100) : null;
 };
@@ -198,11 +301,11 @@ const pumpArtistArtworkRequests = () => {
   }
 };
 
-const findArtistArtworkUrl = (artist: string, signal?: AbortSignal): Promise<string | null> => new Promise((resolve, reject) => {
+const findArtistArtworkUrl = (artist: string, albumHint?: string, signal?: AbortSignal): Promise<string | null> => new Promise((resolve, reject) => {
   queuedArtistArtworkRequests.push({
     run: () => {
       signal?.throwIfAborted();
-      return fetchArtistArtworkUrl(artist, signal);
+      return fetchArtistArtworkUrl(artist, albumHint, signal);
     },
     resolve,
     reject,
@@ -253,8 +356,14 @@ const persistArtwork = async (key: string, source: string): Promise<string> => {
   return convertFileSrc(path);
 };
 
-const findITunesArtworkUrl = async (kind: ArtworkKind, artist: string, album?: string, signal?: AbortSignal): Promise<string | null> => {
-  if (kind === 'artist') return findArtistArtworkUrl(artist, signal);
+const findITunesArtworkUrl = async (
+  kind: ArtworkKind,
+  artist: string,
+  album?: string,
+  signal?: AbortSignal,
+  artistAlbumHint?: string,
+): Promise<string | null> => {
+  if (kind === 'artist') return findArtistArtworkUrl(artist, artistAlbumHint, signal);
   const term = `${artist} ${album || ''}`.trim();
   const params = new URLSearchParams({
     term,
@@ -266,11 +375,11 @@ const findITunesArtworkUrl = async (kind: ArtworkKind, artist: string, album?: s
   const search = await searchITunes(params, signal);
   const candidates = (search.results || [])
     .filter(item => item.artworkUrl100 && item.artistName)
-    .map(item => ({
-      item,
-      score: matchScore(item.artistName || '', artist)
-        + matchScore(item.collectionName || '', album || ''),
-    }))
+    .map(item => {
+      const artistScore = matchArtistScore(item.artistName || '', artist);
+      const albumScore = matchScore(item.collectionName || '', album || '');
+      return { item, artistScore, albumScore, score: artistScore + albumScore };
+    })
     .sort((a, b) => b.score - a.score);
   const best = candidates[0];
   // Local files often contain shortened artist/album names or soundtrack
@@ -278,6 +387,9 @@ const findITunesArtworkUrl = async (kind: ArtworkKind, artist: string, album?: s
   // not fail just because the other metadata differs slightly.
   const minimumScore = 3;
   if (!best || best.score < minimumScore || !best.item.artworkUrl100) return null;
+  if (best.artistScore >= 3 && best.albumScore >= 3) {
+    recordArtistIdEvidence(artist, best.item.artistName || '', best.item.artistId);
+  }
   return toLargeArtworkUrl(best.item.artworkUrl100);
 };
 
@@ -290,10 +402,12 @@ export const clearArtworkCache = () => {
   discordUrlCache.clear();
   missingArtwork.clear();
   pending.clear();
+  artistIdEvidence.clear();
   diskCache = {};
   try {
     localStorage.removeItem(CACHE_KEY);
     localStorage.removeItem(DISCORD_URL_CACHE_KEY);
+    localStorage.removeItem(ARTIST_MATCH_VERSION_KEY);
     LEGACY_CACHE_KEYS.forEach(key => localStorage.removeItem(key));
   } catch { /* storage unavailable */ }
   if (isTauri()) {
@@ -310,12 +424,12 @@ export const getArtworkUrlForDiscord = async (artist: string, album?: string): P
   try {
     const stored = JSON.parse(localStorage.getItem(DISCORD_URL_CACHE_KEY) || '{}') as ArtworkCache;
     if (stored[key]) {
-      discordUrlCache.set(key, stored[key]);
+      setBoundedMap(discordUrlCache, key, stored[key], DISCORD_CACHE_LIMIT);
       return stored[key];
     }
     const url = await findITunesArtworkUrl('album', artist, album);
     if (!url) return null;
-    discordUrlCache.set(key, url);
+    setBoundedMap(discordUrlCache, key, url, DISCORD_CACHE_LIMIT);
     try { localStorage.setItem(DISCORD_URL_CACHE_KEY, JSON.stringify({ ...stored, [key]: url })); } catch { /* storage quota */ }
     return url;
   } catch {
@@ -323,7 +437,13 @@ export const getArtworkUrlForDiscord = async (artist: string, album?: string): P
   }
 };
 
-export const downloadArtwork = async (kind: ArtworkKind, artist: string, album?: string, signal?: AbortSignal): Promise<string | null> => {
+export const downloadArtwork = async (
+  kind: ArtworkKind,
+  artist: string,
+  album?: string,
+  signal?: AbortSignal,
+  artistAlbumHint?: string,
+): Promise<string | null> => {
   const key = keyFor(kind, artist, album);
   if (!artist.trim() || !navigator.onLine || missingArtwork.has(key)) {
     return getCachedArtwork(kind, artist, album);
@@ -338,9 +458,11 @@ export const downloadArtwork = async (kind: ArtworkKind, artist: string, album?:
   const request = (async () => {
     try {
       signal?.throwIfAborted();
-      const rawUrl = await findITunesArtworkUrl(kind, artist, album, signal);
+      const rawUrl = await findITunesArtworkUrl(kind, artist, album, signal, artistAlbumHint);
       if (!rawUrl) {
-        if (requestGeneration === cacheGeneration) missingArtwork.add(key);
+        if (requestGeneration === cacheGeneration) {
+          addBoundedSet(missingArtwork, key, MISSING_ARTWORK_LIMIT);
+        }
         return null;
       }
       const downloaded = await toDataUrl(rawUrl, signal);
@@ -348,7 +470,7 @@ export const downloadArtwork = async (kind: ArtworkKind, artist: string, album?:
       const cachedSource = await persistArtwork(key, downloaded);
       signal?.throwIfAborted();
       if (requestGeneration !== cacheGeneration) return cachedSource;
-      memoryCache.set(key, cachedSource);
+      setBoundedMap(memoryCache, key, cachedSource, MEMORY_CACHE_LIMIT);
       writeCache({ ...readCache(), [key]: cachedSource });
       return cachedSource;
     } catch {

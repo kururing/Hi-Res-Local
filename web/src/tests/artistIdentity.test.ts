@@ -21,6 +21,11 @@ describe('artist identity keys', () => {
     expect(artistsShareIdentity('아이오아이', '아이오아이 (I.O.I)')).toBe(true);
   });
 
+  it('matches artist names that differ only by separators', () => {
+    expect(artistsShareIdentity('Hwa Sa', 'Hwasa')).toBe(true);
+    expect(artistsShareIdentity('Hwa-Sa', 'HWASA')).toBe(true);
+  });
+
   it('does not merge unrelated featured artists', () => {
     expect(artistsShareIdentity('IU', 'IU (feat. SUGA)')).toBe(false);
   });

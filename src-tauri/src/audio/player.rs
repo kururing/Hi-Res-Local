@@ -5,13 +5,15 @@ use tokio::sync::broadcast;
 
 use crate::audio::control::AudioControlHandle;
 use crate::audio::dto::{
-    AudioDeviceDTO, AudioEvent, AudioTrack, CrossfadeConfig, EngineStatus, EqConfig, EqPreset,
-    PlaybackProgress, PlaybackState, PlayerSnapshot, RepeatMode, ReplayGainConfig,
-    SystemAudioState,
+    AudioBackend, AudioDeviceDTO, AudioEvent, AudioTrack, CrossfadeConfig, DsdOutputMode,
+    EngineStatus, EqConfig, EqPreset, PlaybackMode, PlaybackProgress, PlaybackState,
+    PlayerSnapshot, RepeatMode, ReplayGainConfig, SystemAudioState,
 };
 use crate::audio::error::{AudioError, AudioResult};
 use crate::audio::pcm::AudioFormat;
-use crate::audio::pipeline::{spawn_decode_thread, AudioPipeline, DecodeCommand};
+use crate::audio::pipeline::{
+    can_reuse_route_for_gapless, spawn_decode_thread, AudioPipeline, DecodeCommand, PlanStep,
+};
 use crate::audio::queue::PlaybackQueue;
 use crate::sync_util::{recover_mutex, recover_rw_read, recover_rw_write};
 
@@ -62,6 +64,17 @@ struct InnerPlayerState {
     engine_status: Option<EngineStatus>,
     exclusive_mode: bool,
     bit_perfect: bool,
+}
+
+struct PlaybackRoutingSnapshot {
+    mode: u32,
+    backend: u32,
+    transport: u32,
+    #[cfg(windows)]
+    driver: Option<String>,
+    exclusive: bool,
+    bit_perfect: bool,
+    device: Option<String>,
 }
 
 pub struct AudioPlayer {
@@ -311,6 +324,10 @@ impl AudioPlayer {
         if inner.state == PlaybackState::Playing {
             inner.state = PlaybackState::Paused;
             self.pipeline.is_playing.store(false, Ordering::SeqCst);
+            #[cfg(windows)]
+            self.pipeline
+                .native_dsd_playing
+                .store(false, Ordering::SeqCst);
             self.audio_control.set_paused(true);
             self.emit_event(AudioEvent::StateChanged(PlaybackState::Paused));
         }
@@ -325,6 +342,10 @@ impl AudioPlayer {
                 inner.state = PlaybackState::Playing;
             }
             self.pipeline.is_playing.store(true, Ordering::SeqCst);
+            #[cfg(windows)]
+            self.pipeline
+                .native_dsd_playing
+                .store(true, Ordering::SeqCst);
             self.audio_control.set_paused(false);
             self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
             Ok(())
@@ -353,6 +374,10 @@ impl AudioPlayer {
             inner.engine_status = None;
         }
         self.pipeline.is_playing.store(false, Ordering::SeqCst);
+        #[cfg(windows)]
+        self.pipeline
+            .native_dsd_playing
+            .store(false, Ordering::SeqCst);
         self.pipeline.position_ms.store(0, Ordering::SeqCst);
         self.send_decode(DecodeCommand::Stop { generation });
 
@@ -399,22 +424,36 @@ impl AudioPlayer {
     }
 
     pub fn set_volume(&self, volume: f32) -> AudioResult<()> {
-        let clamped = volume.clamp(0.0, 1.0);
-        let bit_perfect = recover_rw_read(&self.inner).bit_perfect;
+        #[cfg(windows)]
+        let native_dsd = self.pipeline.native_dsd_active.load(Ordering::Acquire);
+        #[cfg(not(windows))]
+        let native_dsd = false;
+        let clamped = if native_dsd {
+            1.0
+        } else {
+            volume.clamp(0.0, 1.0)
+        };
+        // Per-track Auto routing is resolved by the decode pipeline. Read the
+        // live pipeline flag instead of the user-mode snapshot so an Auto
+        // track that entered bit-perfect Exclusive controls the Windows
+        // endpoint rather than writing to the bypassed software gain.
+        let bit_perfect = self.pipeline.bit_perfect.load(Ordering::Acquire) && !native_dsd;
+        let unity_gain = bit_perfect || native_dsd;
         #[cfg(windows)]
         if bit_perfect {
             self.audio_control.set_endpoint_volume(clamped)?;
         }
-        if !bit_perfect {
-            self.pipeline
-                .volume_bits
-                .store(clamped.to_bits(), Ordering::Relaxed);
-        }
         let is_muted = {
             let mut inner = recover_rw_write(&self.inner);
-            inner.volume = clamped;
+            if !native_dsd {
+                inner.volume = clamped;
+            }
             inner.is_muted
         };
+        if !native_dsd {
+            self.pipeline
+                .store_user_volume(clamped, is_muted, !unity_gain);
+        }
         self.emit_event(AudioEvent::VolumeChanged {
             volume: clamped,
             is_muted,
@@ -423,7 +462,12 @@ impl AudioPlayer {
     }
 
     pub fn set_muted(&self, muted: bool) -> AudioResult<()> {
-        let bit_perfect = recover_rw_read(&self.inner).bit_perfect;
+        #[cfg(windows)]
+        let native_dsd = self.pipeline.native_dsd_active.load(Ordering::Acquire);
+        #[cfg(not(windows))]
+        let native_dsd = false;
+        let muted = if native_dsd { false } else { muted };
+        let bit_perfect = self.pipeline.bit_perfect.load(Ordering::Acquire) && !native_dsd;
         #[cfg(windows)]
         if bit_perfect {
             self.audio_control.set_endpoint_muted(muted)?;
@@ -433,9 +477,14 @@ impl AudioPlayer {
         }
         let volume = {
             let mut inner = recover_rw_write(&self.inner);
-            inner.is_muted = muted;
+            if !native_dsd {
+                inner.is_muted = muted;
+            }
             inner.volume
         };
+        if !native_dsd {
+            self.pipeline.store_user_volume(volume, muted, !bit_perfect);
+        }
         self.emit_event(AudioEvent::VolumeChanged {
             volume,
             is_muted: muted,
@@ -444,10 +493,18 @@ impl AudioPlayer {
     }
 
     pub fn toggle_mute(&self) -> AudioResult<()> {
-        let (vol, muted, bit_perfect) = {
+        #[cfg(windows)]
+        let native_dsd = self.pipeline.native_dsd_active.load(Ordering::Acquire);
+        #[cfg(not(windows))]
+        let native_dsd = false;
+        let (vol, muted) = {
             let inner = recover_rw_read(&self.inner);
-            (inner.volume, !inner.is_muted, inner.bit_perfect)
+            (
+                inner.volume,
+                if native_dsd { false } else { !inner.is_muted },
+            )
         };
+        let bit_perfect = self.pipeline.bit_perfect.load(Ordering::Acquire) && !native_dsd;
         #[cfg(windows)]
         if bit_perfect {
             self.audio_control.set_endpoint_muted(muted)?;
@@ -456,6 +513,9 @@ impl AudioPlayer {
             self.pipeline.is_muted.store(muted, Ordering::Relaxed);
         }
         recover_rw_write(&self.inner).is_muted = muted;
+        if !native_dsd {
+            self.pipeline.store_user_volume(vol, muted, !bit_perfect);
+        }
         self.emit_event(AudioEvent::VolumeChanged {
             volume: vol,
             is_muted: muted,
@@ -467,9 +527,6 @@ impl AudioPlayer {
         #[cfg(windows)]
         {
             let (volume, is_muted) = self.audio_control.endpoint_audio_state()?;
-            let mut inner = recover_rw_write(&self.inner);
-            inner.volume = volume;
-            inner.is_muted = is_muted;
             Ok(SystemAudioState { volume, is_muted })
         }
         #[cfg(not(windows))]
@@ -648,13 +705,6 @@ impl AudioPlayer {
     }
 
     pub fn set_bit_perfect(&self, enabled: bool) -> AudioResult<()> {
-        #[cfg(windows)]
-        let endpoint_state = if enabled {
-            let (volume, is_muted) = self.audio_control.endpoint_audio_state()?;
-            Some((volume, is_muted))
-        } else {
-            None
-        };
         {
             let mut inner = recover_rw_write(&self.inner);
             if enabled && !inner.exclusive_mode {
@@ -663,30 +713,12 @@ impl AudioPlayer {
                 ));
             }
             inner.bit_perfect = enabled;
-            #[cfg(windows)]
-            if let Some((volume, is_muted)) = endpoint_state {
-                inner.volume = volume;
-                inner.is_muted = is_muted;
-            }
         }
         self.pipeline.bit_perfect.store(enabled, Ordering::SeqCst);
         if enabled {
-            self.pipeline
-                .volume_bits
-                .store(1.0f32.to_bits(), Ordering::SeqCst);
-            self.pipeline.is_muted.store(false, Ordering::SeqCst);
-            #[cfg(windows)]
-            if let Some((volume, is_muted)) = endpoint_state {
-                self.emit_event(AudioEvent::VolumeChanged { volume, is_muted });
-            }
+            self.pipeline.enter_unity_gain_volume();
         } else {
-            let inner = recover_rw_read(&self.inner);
-            self.pipeline
-                .volume_bits
-                .store(inner.volume.to_bits(), Ordering::SeqCst);
-            self.pipeline
-                .is_muted
-                .store(inner.is_muted, Ordering::SeqCst);
+            self.restore_applied_software_volume();
         }
         self.send_decode(DecodeCommand::SetBitPerfect(enabled));
 
@@ -702,6 +734,421 @@ impl AudioPlayer {
             _ => {}
         }
         Ok(())
+    }
+
+    pub fn set_dsd_output_mode(&self, mode: DsdOutputMode) -> AudioResult<()> {
+        #[cfg(windows)]
+        if self.pipeline.native_dsd_active.load(Ordering::Acquire) {
+            self.pipeline
+                .native_dsd_playing
+                .store(false, Ordering::Release);
+        }
+        self.pipeline
+            .dsd_output_mode
+            .store(mode.to_index(), Ordering::SeqCst);
+        let position_ms = self.pipeline.position_ms.load(Ordering::Relaxed);
+        let state = recover_rw_read(&self.inner).state;
+        if matches!(state, PlaybackState::Playing | PlaybackState::Paused) {
+            self.reopen_current_preserving_position(state == PlaybackState::Playing, position_ms)?;
+        }
+        Ok(())
+    }
+
+    pub fn set_dsd_output_mode_with_driver(
+        &self,
+        mode: DsdOutputMode,
+        driver_id: Option<String>,
+    ) -> AudioResult<()> {
+        #[cfg(windows)]
+        {
+            *recover_mutex(&self.pipeline.asio_driver_id) = driver_id;
+        }
+        self.set_dsd_output_mode(mode)
+    }
+
+    /// Apply a user-facing playback mode atomically: device, backend preference,
+    /// DSD transport and exclusive flags. On failure the previous routing is
+    /// restored so the UI can roll back without leaving a half-applied engine.
+    pub fn apply_playback_mode(
+        &self,
+        mode: PlaybackMode,
+        device_id: Option<String>,
+        backend: Option<AudioBackend>,
+        dsd_transport: Option<DsdOutputMode>,
+        asio_driver_id: Option<String>,
+    ) -> AudioResult<EngineStatus> {
+        let snapshot = self.snapshot_playback_routing();
+        match self.apply_playback_mode_inner(
+            mode,
+            device_id,
+            backend,
+            dsd_transport,
+            asio_driver_id,
+        ) {
+            Ok(status) => Ok(status),
+            Err(error) => {
+                if let Err(restore_error) = self.restore_playback_routing(&snapshot) {
+                    tracing::warn!(
+                        target: "audio",
+                        error = %restore_error,
+                        "failed to restore previous playback routing after apply_playback_mode error"
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn snapshot_playback_routing(&self) -> PlaybackRoutingSnapshot {
+        PlaybackRoutingSnapshot {
+            mode: self.pipeline.playback_mode.load(Ordering::Acquire),
+            backend: self.pipeline.advanced_backend.load(Ordering::Acquire),
+            transport: self.pipeline.dsd_output_mode.load(Ordering::Acquire),
+            #[cfg(windows)]
+            driver: recover_mutex(&self.pipeline.asio_driver_id).clone(),
+            exclusive: recover_rw_read(&self.inner).exclusive_mode,
+            bit_perfect: recover_rw_read(&self.inner).bit_perfect,
+            #[cfg(windows)]
+            device: self.audio_control.selected_device_id(),
+            #[cfg(not(windows))]
+            device: recover_rw_read(&self.inner)
+                .active_device
+                .as_ref()
+                .map(|device| device.id.clone()),
+        }
+    }
+
+    fn restore_playback_routing(&self, snapshot: &PlaybackRoutingSnapshot) -> AudioResult<()> {
+        self.pipeline
+            .playback_mode
+            .store(snapshot.mode, Ordering::SeqCst);
+        self.pipeline
+            .advanced_backend
+            .store(snapshot.backend, Ordering::SeqCst);
+        self.pipeline
+            .dsd_output_mode
+            .store(snapshot.transport, Ordering::SeqCst);
+        #[cfg(windows)]
+        {
+            *recover_mutex(&self.pipeline.asio_driver_id) = snapshot.driver.clone();
+        }
+        if let Err(error) = self.audio_control.select_device(snapshot.device.clone()) {
+            tracing::warn!(
+                target: "audio",
+                error = %error,
+                "failed to restore previous output device during playback-mode rollback"
+            );
+        }
+        let _ = self.apply_exclusive_without_reopen(snapshot.exclusive);
+        if snapshot.exclusive && snapshot.bit_perfect {
+            let _ = self.set_bit_perfect_flag_only(true);
+        } else if !snapshot.bit_perfect {
+            self.pipeline.bit_perfect.store(false, Ordering::SeqCst);
+            recover_rw_write(&self.inner).bit_perfect = false;
+            self.restore_applied_software_volume();
+            self.send_decode(DecodeCommand::SetBitPerfect(false));
+        }
+        self.reopen_if_active()?;
+        Ok(())
+    }
+
+    fn apply_playback_mode_inner(
+        &self,
+        mode: PlaybackMode,
+        device_id: Option<String>,
+        backend: Option<AudioBackend>,
+        dsd_transport: Option<DsdOutputMode>,
+        asio_driver_id: Option<String>,
+    ) -> AudioResult<EngineStatus> {
+        if let Some(device) = device_id {
+            self.audio_control.select_device(Some(device))?;
+        }
+
+        self.pipeline
+            .playback_mode
+            .store(mode.to_index(), Ordering::SeqCst);
+
+        #[cfg(windows)]
+        if let Some(driver) = asio_driver_id {
+            *recover_mutex(&self.pipeline.asio_driver_id) = if driver.is_empty() {
+                None
+            } else {
+                Some(driver)
+            };
+        }
+
+        match mode {
+            PlaybackMode::Auto => {
+                self.pipeline
+                    .advanced_backend
+                    .store(AudioBackend::Shared.to_index(), Ordering::SeqCst);
+                self.pipeline
+                    .dsd_output_mode
+                    .store(DsdOutputMode::Pcm.to_index(), Ordering::SeqCst);
+                // Idle Shared so other apps can mix until the next track
+                // re-resolves Exclusive/DoP/Native as needed.
+                let _ = self.apply_exclusive_without_reopen(false);
+            }
+            PlaybackMode::HighQuality => {
+                self.pipeline
+                    .advanced_backend
+                    .store(AudioBackend::WasapiExclusive.to_index(), Ordering::SeqCst);
+                self.pipeline
+                    .dsd_output_mode
+                    .store(DsdOutputMode::Dop.to_index(), Ordering::SeqCst);
+                // Best-effort Exclusive; handle_open still falls back to Shared.
+                let _ = self.apply_exclusive_without_reopen(true);
+                if recover_rw_read(&self.inner).exclusive_mode {
+                    let _ = self.set_bit_perfect_flag_only(true);
+                }
+            }
+            PlaybackMode::Multitask => {
+                self.pipeline
+                    .advanced_backend
+                    .store(AudioBackend::Shared.to_index(), Ordering::SeqCst);
+                self.pipeline
+                    .dsd_output_mode
+                    .store(DsdOutputMode::Pcm.to_index(), Ordering::SeqCst);
+                self.apply_exclusive_without_reopen(false)?;
+            }
+            PlaybackMode::Advanced => {
+                let resolved_backend = backend.unwrap_or_else(|| {
+                    AudioBackend::from_index(self.pipeline.advanced_backend.load(Ordering::Acquire))
+                });
+                let resolved_transport = dsd_transport.unwrap_or_else(|| {
+                    DsdOutputMode::from_index(self.pipeline.dsd_output_mode.load(Ordering::Acquire))
+                });
+                self.validate_advanced_selection(resolved_backend, resolved_transport)?;
+                self.pipeline
+                    .advanced_backend
+                    .store(resolved_backend.to_index(), Ordering::SeqCst);
+                self.pipeline
+                    .dsd_output_mode
+                    .store(resolved_transport.to_index(), Ordering::SeqCst);
+                match resolved_backend {
+                    AudioBackend::WasapiExclusive => {
+                        self.apply_exclusive_without_reopen(true)?;
+                        let _ = self.set_bit_perfect_flag_only(true);
+                    }
+                    AudioBackend::Shared | AudioBackend::Asio => {
+                        self.apply_exclusive_without_reopen(false)?;
+                    }
+                }
+            }
+        }
+
+        self.reopen_if_active()?;
+        Ok(self.current_or_idle_engine_status())
+    }
+
+    fn validate_advanced_selection(
+        &self,
+        backend: AudioBackend,
+        transport: DsdOutputMode,
+    ) -> AudioResult<()> {
+        if backend == AudioBackend::Asio || transport == DsdOutputMode::NativeDsd {
+            let drivers = crate::audio::asio::enumerate_drivers();
+            if drivers.is_empty() {
+                return Err(AudioError::DeviceUnavailable(
+                    "No ASIO driver is installed".into(),
+                ));
+            }
+            if !drivers.iter().any(|driver| driver.native_dsd_supported) {
+                return Err(AudioError::DeviceUnavailable(
+                    "ASIO is Native DSD only. No installed ASIO driver supports Native DSD".into(),
+                ));
+            }
+        }
+        #[cfg(windows)]
+        if transport == DsdOutputMode::Dop && !self.dop_available_on_current_device() {
+            return Err(AudioError::FormatNotSupported {
+                requested: "DoP".into(),
+                details: "DoP is not available on this device".into(),
+            });
+        }
+        #[cfg(not(windows))]
+        if transport == DsdOutputMode::Dop {
+            return Err(AudioError::FormatNotSupported {
+                requested: "DoP".into(),
+                details: "DoP is only available on Windows WASAPI Exclusive".into(),
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn dop_available_on_current_device(&self) -> bool {
+        use crate::audio::wasapi::{FormatNegotiator, WasapiDeviceManager};
+        let mut manager = WasapiDeviceManager::new();
+        if let Some(id) = self.current_output_device_id() {
+            manager.select_device(Some(id));
+        }
+        manager
+            .get_active_device()
+            .ok()
+            .is_some_and(|device| !FormatNegotiator::probe_dop_rates(&device).is_empty())
+    }
+
+    pub fn current_output_device_id(&self) -> Option<String> {
+        #[cfg(windows)]
+        {
+            if let Some(device) = recover_mutex(&self.pipeline.output_device).clone() {
+                if !device.id.is_empty() && device.id != "default" {
+                    return Some(device.id);
+                }
+            }
+            if let Some(id) = self.audio_control.selected_device_id() {
+                return Some(id);
+            }
+        }
+        recover_rw_read(&self.inner)
+            .active_device
+            .as_ref()
+            .map(|device| device.id.clone())
+    }
+
+    /// Toggle Exclusive hardware without reopening the current track.
+    fn apply_exclusive_without_reopen(&self, enabled: bool) -> AudioResult<()> {
+        #[cfg(not(windows))]
+        {
+            if enabled {
+                return Err(AudioError::Playback(
+                    "WASAPI Exclusive is only available on Windows".into(),
+                ));
+            }
+            recover_rw_write(&self.inner).exclusive_mode = false;
+            recover_rw_write(&self.inner).bit_perfect = false;
+            self.pipeline.exclusive_mode.store(false, Ordering::SeqCst);
+            self.pipeline.bit_perfect.store(false, Ordering::SeqCst);
+            return Ok(());
+        }
+
+        #[cfg(windows)]
+        {
+            let currently = recover_rw_read(&self.inner).exclusive_mode;
+            if currently == enabled {
+                return Ok(());
+            }
+            let probe_source = AudioFormat::s16(48_000, 2);
+            let configure = self
+                .audio_control
+                .set_exclusive_mode(enabled, probe_source)?;
+            {
+                let mut inner = recover_rw_write(&self.inner);
+                inner.exclusive_mode = enabled;
+                if !enabled {
+                    inner.bit_perfect = false;
+                }
+            }
+            self.pipeline
+                .exclusive_mode
+                .store(enabled, Ordering::SeqCst);
+            if !enabled {
+                self.pipeline.bit_perfect.store(false, Ordering::SeqCst);
+                self.restore_applied_software_volume();
+                self.send_decode(DecodeCommand::SetBitPerfect(false));
+            }
+            self.send_decode(DecodeCommand::SetExclusiveMode(enabled));
+            if let Some(cfg) = configure {
+                self.update_active_device(cfg.device);
+                self.emit_event(AudioEvent::ExclusiveModeChanged {
+                    enabled: true,
+                    output_mode: "WASAPI Exclusive".into(),
+                    error: None,
+                });
+            } else {
+                self.emit_event(AudioEvent::ExclusiveModeChanged {
+                    enabled: false,
+                    output_mode: "WASAPI Shared".into(),
+                    error: None,
+                });
+            }
+            Ok(())
+        }
+    }
+
+    fn set_bit_perfect_flag_only(&self, enabled: bool) -> AudioResult<()> {
+        {
+            let mut inner = recover_rw_write(&self.inner);
+            if enabled && !inner.exclusive_mode {
+                return Err(AudioError::Playback(
+                    "Enable WASAPI Exclusive before Bit-Perfect mode".into(),
+                ));
+            }
+            inner.bit_perfect = enabled;
+        }
+        self.pipeline.bit_perfect.store(enabled, Ordering::SeqCst);
+        if enabled {
+            self.pipeline.enter_unity_gain_volume();
+        } else {
+            self.restore_applied_software_volume();
+        }
+        self.send_decode(DecodeCommand::SetBitPerfect(enabled));
+        Ok(())
+    }
+
+    fn reopen_if_active(&self) -> AudioResult<()> {
+        let position_ms = self.pipeline.position_ms.load(Ordering::Relaxed);
+        let state = recover_rw_read(&self.inner).state;
+        match state {
+            PlaybackState::Playing => self.reopen_current_preserving_position(true, position_ms),
+            PlaybackState::Paused => self.reopen_current_preserving_position(false, position_ms),
+            _ => Ok(()),
+        }
+    }
+
+    fn current_or_idle_engine_status(&self) -> EngineStatus {
+        if let Some(status) = recover_rw_read(&self.inner).engine_status.clone() {
+            if !status.source_label.is_empty() || status.output_sample_rate > 0 {
+                return status;
+            }
+        }
+        let exclusive = recover_rw_read(&self.inner).exclusive_mode;
+        let bit_perfect = recover_rw_read(&self.inner).bit_perfect;
+        let volume = recover_rw_read(&self.inner).volume;
+        let rate = self.pipeline.sample_rate.load(Ordering::Relaxed);
+        EngineStatus {
+            output_mode: if exclusive {
+                "WASAPI Exclusive".into()
+            } else {
+                "WASAPI Shared".into()
+            },
+            bit_perfect: exclusive && bit_perfect,
+            is_native: false,
+            output_sample_rate: rate,
+            output_bit_depth: if exclusive { 24 } else { 32 },
+            backend: if exclusive {
+                AudioBackend::WasapiExclusive
+            } else {
+                AudioBackend::Shared
+            },
+            volume,
+            volume_control_kind: if exclusive && bit_perfect {
+                crate::audio::dto::VolumeControlKind::WindowsEndpoint
+            } else {
+                crate::audio::dto::VolumeControlKind::Software
+            },
+            ..Default::default()
+        }
+    }
+
+    fn restore_applied_software_volume(&self) {
+        self.pipeline.restore_software_volume();
+        let inner = recover_rw_read(&self.inner);
+        self.emit_event(AudioEvent::VolumeChanged {
+            volume: inner.volume,
+            is_muted: inner.is_muted,
+        });
+    }
+
+    /// Bypass DSP gain while Native DSD is active without overwriting the
+    /// user's software volume/mute preference.
+    pub fn apply_native_dsd_state(&self, active: bool) {
+        if active {
+            self.pipeline.enter_unity_gain_volume();
+        } else {
+            self.restore_applied_software_volume();
+        }
     }
 
     pub fn set_exclusive_mode(&self, enabled: bool) -> AudioResult<()> {
@@ -735,13 +1182,7 @@ impl AudioPlayer {
                 .store(enabled, Ordering::SeqCst);
             if !enabled {
                 self.pipeline.bit_perfect.store(false, Ordering::SeqCst);
-                let inner = recover_rw_read(&self.inner);
-                self.pipeline
-                    .volume_bits
-                    .store(inner.volume.to_bits(), Ordering::SeqCst);
-                self.pipeline
-                    .is_muted
-                    .store(inner.is_muted, Ordering::SeqCst);
+                self.restore_applied_software_volume();
                 self.send_decode(DecodeCommand::SetBitPerfect(false));
             }
             self.send_decode(DecodeCommand::SetExclusiveMode(enabled));
@@ -754,6 +1195,7 @@ impl AudioPlayer {
                     output_sample_rate: cfg.negotiated.format.sample_rate,
                     output_bit_depth: cfg.negotiated.format.bit_depth,
                     source_label: source_label_from_format(&cfg.negotiated.format, None),
+                    ..Default::default()
                 };
                 self.apply_engine_status(status.clone());
                 self.update_active_device(cfg.device);
@@ -772,6 +1214,7 @@ impl AudioPlayer {
                     output_sample_rate: rate,
                     output_bit_depth: 32,
                     source_label: String::new(),
+                    ..Default::default()
                 };
                 self.apply_engine_status(status.clone());
                 self.emit_event(AudioEvent::EngineStatusUpdated(status));
@@ -823,10 +1266,18 @@ impl AudioPlayer {
                 inner.state = PlaybackState::Playing;
             }
             self.pipeline.is_playing.store(true, Ordering::SeqCst);
+            #[cfg(windows)]
+            self.pipeline
+                .native_dsd_playing
+                .store(true, Ordering::SeqCst);
             self.audio_control.set_paused(false);
             self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
         } else {
             self.pipeline.is_playing.store(false, Ordering::SeqCst);
+            #[cfg(windows)]
+            self.pipeline
+                .native_dsd_playing
+                .store(false, Ordering::SeqCst);
             self.audio_control.set_paused(true);
         }
         self.send_decode(DecodeCommand::OpenTrack {
@@ -847,15 +1298,7 @@ impl AudioPlayer {
         }
         self.pipeline.exclusive_mode.store(false, Ordering::SeqCst);
         self.pipeline.bit_perfect.store(false, Ordering::SeqCst);
-        {
-            let inner = recover_rw_read(&self.inner);
-            self.pipeline
-                .volume_bits
-                .store(inner.volume.to_bits(), Ordering::SeqCst);
-            self.pipeline
-                .is_muted
-                .store(inner.is_muted, Ordering::SeqCst);
-        }
+        self.restore_applied_software_volume();
         #[cfg(windows)]
         {
             let _ = self
@@ -872,6 +1315,7 @@ impl AudioPlayer {
             output_sample_rate: rate,
             output_bit_depth: 32,
             source_label: String::new(),
+            ..Default::default()
         };
         self.apply_engine_status(status.clone());
         self.emit_event(AudioEvent::EngineStatusUpdated(status));
@@ -886,11 +1330,20 @@ impl AudioPlayer {
         recover_rw_read(&self.inner).bit_perfect
     }
 
+    #[cfg(test)]
+    pub(crate) fn applied_software_volume(&self) -> f32 {
+        self.pipeline.applied_volume()
+    }
+
     pub fn apply_engine_status(&self, status: EngineStatus) {
         if status.source_label.is_empty() && status.output_sample_rate == 0 {
             recover_rw_write(&self.inner).engine_status = None;
         } else {
-            recover_rw_write(&self.inner).engine_status = Some(status);
+            let mut inner = recover_rw_write(&self.inner);
+            inner.exclusive_mode = status.backend == AudioBackend::WasapiExclusive
+                || status.output_mode.starts_with("WASAPI Exclusive");
+            inner.bit_perfect = status.bit_perfect;
+            inner.engine_status = Some(status);
         }
     }
 
@@ -910,21 +1363,45 @@ impl AudioPlayer {
     }
 
     fn check_and_preload_next(&self) {
-        if self.pipeline.bit_perfect.load(Ordering::Relaxed) {
-            self.send_decode(DecodeCommand::ClearPreload);
-            return;
-        }
         // plan_next (not peek_next) pins the shuffle pick so the preloaded track
         // is the one a later queue.next() actually resolves to.
         let next_track = recover_rw_write(&self.inner).queue.plan_next().cloned();
         match next_track {
-            Some(track) => {
+            Some(track) if self.can_gaplessly_preload(&track) => {
                 let generation = self.pipeline.generation.load(Ordering::SeqCst);
                 self.send_decode(DecodeCommand::PreloadNext { track, generation });
             }
-            // No upcoming track: drop any stale preload so it can't play at EOF.
-            None => self.send_decode(DecodeCommand::ClearPreload),
+            // No compatible upcoming track: let EOF advance through OpenTrack so
+            // the next source gets its own backend/device/transport plan.
+            _ => self.send_decode(DecodeCommand::ClearPreload),
         }
+    }
+
+    fn can_gaplessly_preload(&self, track: &AudioTrack) -> bool {
+        if self.pipeline.bit_perfect.load(Ordering::Acquire) {
+            return false;
+        }
+        #[cfg(windows)]
+        if self.pipeline.native_dsd_active.load(Ordering::Acquire) {
+            return false;
+        }
+
+        let mode = PlaybackMode::from_index(self.pipeline.playback_mode.load(Ordering::Acquire));
+        let backend =
+            AudioBackend::from_index(self.pipeline.advanced_backend.load(Ordering::Acquire));
+        let transport =
+            DsdOutputMode::from_index(self.pipeline.dsd_output_mode.load(Ordering::Acquire));
+        let extension = std::path::Path::new(&track.path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default();
+        let is_dsd = extension.eq_ignore_ascii_case("dsf") || extension.eq_ignore_ascii_case("dff");
+        let current = if self.pipeline.exclusive_mode.load(Ordering::Acquire) {
+            PlanStep::ExclusivePcm
+        } else {
+            PlanStep::Shared
+        };
+        can_reuse_route_for_gapless(mode, is_dsd, backend, transport, current)
     }
 
     fn start_playback_for_current(&self) -> AudioResult<()> {
@@ -945,6 +1422,10 @@ impl AudioPlayer {
                 .store(track.duration_ms, Ordering::Relaxed);
         }
         self.pipeline.is_playing.store(true, Ordering::SeqCst);
+        #[cfg(windows)]
+        self.pipeline
+            .native_dsd_playing
+            .store(true, Ordering::SeqCst);
         self.audio_control.set_paused(false);
         self.pipeline.position_ms.store(0, Ordering::SeqCst);
         self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));

@@ -23,6 +23,34 @@ fn exclusive_output_is_opt_in_and_guards_bit_perfect() {
 }
 
 #[test]
+fn engine_status_syncs_per_track_auto_routing_flags() {
+    let player = AudioPlayer::new();
+    player.apply_engine_status(EngineStatus {
+        output_mode: "WASAPI Exclusive".into(),
+        bit_perfect: true,
+        output_sample_rate: 96_000,
+        source_label: "FLAC 24-bit / 96 kHz".into(),
+        backend: AudioBackend::WasapiExclusive,
+        ..Default::default()
+    });
+
+    assert!(player.exclusive_mode());
+    assert!(player.bit_perfect());
+
+    player.apply_engine_status(EngineStatus {
+        output_mode: "WASAPI Shared".into(),
+        bit_perfect: false,
+        output_sample_rate: 48_000,
+        source_label: "MP3 / 48 kHz".into(),
+        backend: AudioBackend::Shared,
+        ..Default::default()
+    });
+
+    assert!(!player.exclusive_mode());
+    assert!(!player.bit_perfect());
+}
+
+#[test]
 fn exclusive_mode_defaults_off_and_rejects_bit_perfect_without_exclusive() {
     let player = AudioPlayer::new();
     assert!(!player.exclusive_mode());
@@ -339,4 +367,77 @@ fn test_adapters_behavior() {
     let mut standard_adapter = StandardAudioAdapter::new();
     standard_adapter.set_format(96000, 2);
     assert_eq!(standard_adapter.active_stream_format(), Some((96000, 2)));
+}
+
+#[test]
+fn apply_playback_mode_advanced_asio_without_drivers_fails() {
+    if !crate::audio::asio::enumerate_drivers().is_empty() {
+        return;
+    }
+    let player = AudioPlayer::new();
+    let err = player
+        .apply_playback_mode(
+            crate::audio::dto::PlaybackMode::Advanced,
+            None,
+            Some(crate::audio::dto::AudioBackend::Asio),
+            Some(crate::audio::dto::DsdOutputMode::NativeDsd),
+            None,
+        )
+        .expect_err("Advanced ASIO must fail when no driver is installed");
+    let message = err.to_string().to_ascii_lowercase();
+    assert!(message.contains("asio"), "unexpected error: {message}");
+}
+
+#[test]
+fn apply_playback_mode_multitask_succeeds() {
+    let player = AudioPlayer::new();
+    let status = player
+        .apply_playback_mode(
+            crate::audio::dto::PlaybackMode::Multitask,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("Multitask must apply without hardware ASIO");
+    assert!(!player.exclusive_mode());
+    assert!(!player.bit_perfect());
+    assert_eq!(status.backend, crate::audio::dto::AudioBackend::Shared);
+}
+
+#[test]
+fn software_volume_survives_unity_gain_and_system_state_read() {
+    let player = AudioPlayer::new();
+    player.set_volume(0.25).expect("set software volume");
+    player.set_muted(true).expect("mute software path");
+    assert!((player.get_snapshot().volume - 0.25).abs() < 0.0001);
+    assert!(player.get_snapshot().is_muted);
+    assert!((player.applied_software_volume() - 0.25).abs() < 0.0001);
+
+    let _ = player.get_system_audio_state();
+    assert!(
+        (player.get_snapshot().volume - 0.25).abs() < 0.0001,
+        "endpoint reads must not overwrite software volume"
+    );
+    assert!(player.get_snapshot().is_muted);
+
+    #[cfg(windows)]
+    {
+        if player.set_exclusive_mode(true).is_err() {
+            return;
+        }
+        if player.set_bit_perfect(true).is_err() {
+            let _ = player.set_exclusive_mode(false);
+            return;
+        }
+        assert!((player.applied_software_volume() - 1.0).abs() < 0.0001);
+        assert!((player.get_snapshot().volume - 0.25).abs() < 0.0001);
+        assert!(player.get_snapshot().is_muted);
+        player.set_bit_perfect(false).expect("leave bit-perfect");
+        assert!((player.applied_software_volume() - 0.25).abs() < 0.0001);
+        assert!((player.get_snapshot().volume - 0.25).abs() < 0.0001);
+        assert!(player.get_snapshot().is_muted);
+        let _ = player.set_exclusive_mode(false);
+        assert!((player.applied_software_volume() - 0.25).abs() < 0.0001);
+    }
 }

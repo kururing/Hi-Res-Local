@@ -41,7 +41,7 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({ onNavigate }) => {
           getKey={album => album.id}
           renderItem={album => (
             <div
-              className="group relative p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col shadow-card-elevated"
+              className="group relative min-w-0 p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col shadow-card-elevated"
             >
               <button
                 type="button"
@@ -68,10 +68,10 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({ onNavigate }) => {
               </div>
 
               {/* Title & Artist */}
-              <span className="font-semibold text-xs sm:text-sm text-brand-foreground truncate group-hover:text-brand-accent transition-colors">
+              <span className="block min-w-0 max-w-full truncate font-semibold text-xs sm:text-sm text-brand-foreground group-hover:text-brand-accent transition-colors" title={album.name}>
                 {album.name}
               </span>
-              <span className="text-xs text-brand-muted truncate mt-0.5 font-medium">
+              <span className="mt-0.5 block min-w-0 max-w-full truncate text-xs text-brand-muted font-medium" title={album.artist}>
                 {album.artist}
               </span>
               <span className="text-[10px] text-brand-muted font-mono mt-1">

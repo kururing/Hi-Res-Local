@@ -35,7 +35,7 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => {
   const { playlists, createPlaylist, importM3uFile, getPlaylistTracks, updatePlaylist, deletePlaylist } = usePlaylists();
-  const { status } = usePlayer();
+  const { status, activePlaylistId } = usePlayer();
   const { settings } = useSettings();
   const { stats } = useLibrary();
 
@@ -210,9 +210,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
             <div className="mt-1 flex flex-col gap-1">
               {playlists.map(pl => {
                 const playlistTracks = getPlaylistTracks(pl);
-                const isPlayingHere = status.state === 'playing' && Boolean(
-                  status.current_track && playlistTracks.some(track => track.id === status.current_track?.id)
-                );
+                const isPlayingHere = status.state === 'playing' && activePlaylistId === pl.id;
                 return (
                   <div key={pl.id} className="group relative">
                     <button
@@ -271,9 +269,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
           <div className="flex min-h-0 flex-col gap-0.5 overflow-visible pr-1">
             {playlists.map(pl => {
               const playlistTracks = getPlaylistTracks(pl);
-              const isPlayingHere = status.state === 'playing' && Boolean(
-                status.current_track && playlistTracks.some(track => track.id === status.current_track?.id)
-              );
+              const isPlayingHere = status.state === 'playing' && activePlaylistId === pl.id;
               return (
                 <div key={pl.id} className="group relative">
                   <button

@@ -35,3 +35,8 @@ src-tauri/target
 *.db
 *.db-shm
 *.db-wal
+
+# Local audio diagnostics / generated visualizations
+/.audio_check.wav
+/audio_spectrum.png
+/moon_ring_spectrum.png

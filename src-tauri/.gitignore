@@ -5,3 +5,7 @@
 /vendor/ffmpeg/lib/
 /vendor/ffmpeg/include/
 /vendor/llvm-bindgen/
+
+# The extracted ASIO sources are required by build.rs. Keep the original
+# download archive local to avoid committing the same SDK twice.
+/vendor/asio-sdk.zip

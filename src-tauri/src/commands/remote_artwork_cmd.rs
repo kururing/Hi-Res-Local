@@ -77,9 +77,8 @@ pub async fn get_apple_music_artist_artwork(
         .error_for_status()
         .map_err(|error| error.to_string())?;
     let html = response.text().await.map_err(|error| error.to_string())?;
-    Ok(square_artist_artwork(&html).or_else(|| {
-        meta_content(&html, "og:image").filter(|value| value.starts_with("https://"))
-    }))
+    Ok(square_artist_artwork(&html)
+        .or_else(|| meta_content(&html, "og:image").filter(|value| value.starts_with("https://"))))
 }
 
 #[cfg(test)]
@@ -88,7 +87,8 @@ mod tests {
 
     #[test]
     fn extracts_og_image_regardless_of_attribute_order() {
-        let html = r#"<meta content="https://example.com/artist.jpg?a=1&amp;b=2" property="og:image">"#;
+        let html =
+            r#"<meta content="https://example.com/artist.jpg?a=1&amp;b=2" property="og:image">"#;
         assert_eq!(
             meta_content(html, "og:image").as_deref(),
             Some("https://example.com/artist.jpg?a=1&b=2")

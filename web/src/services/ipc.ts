@@ -90,7 +90,7 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
     }
     case 'clear_play_history': {
       const count = Storage.getHistory().length;
-      localStorage.removeItem('nghenhac_history_v2');
+      Storage.clearHistory();
       return count as IpcCommands[K]['return'];
     }
     case 'get_all_tracks': {
@@ -163,6 +163,21 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
       }
       IpcService.emitMockEvent('library://scan_finished', { total, success: true });
       return mockTracks as IpcCommands[K]['return'];
+    }
+    case 'scan_library': {
+      const total = mockLibraryRoots.length * 12;
+      for (let i = 1; i <= total; i++) {
+        await new Promise(r => setTimeout(r, 60));
+        const progress: ScanProgress = {
+          total_files: total,
+          scanned_files: i,
+          current_path: `library/track_${i}.flac`,
+          is_scanning: i < total,
+        };
+        IpcService.emitMockEvent('library://scan_progress', progress);
+      }
+      IpcService.emitMockEvent('library://scan_finished', { total, success: true });
+      return total as IpcCommands[K]['return'];
     }
 
     case 'get_playlists': {
@@ -332,6 +347,10 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
       return MOCK_OUTPUT_DEVICES as IpcCommands[K]['return'];
     }
 
+    case 'get_asio_drivers': {
+      return [] as IpcCommands[K]['return'];
+    }
+
     case 'get_audio_capabilities': {
       return {
         exclusive_mode_supported: false,
@@ -339,10 +358,46 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
         gapless_supported: true,
         replay_gain_supported: true,
         equalizer_supported: true,
+        asio_supported: false,
+        native_dsd_supported: false,
+        // The browser mock cannot probe hardware, so report nothing as verified.
+        dsd_rates: [],
+        dop_supported: false,
+        dop_rates: [],
+        asio_drivers_present: false,
+      } as IpcCommands[K]['return'];
+    }
+
+    case 'apply_playback_mode': {
+      return {
+        output_mode: 'WASAPI Shared',
+        bit_perfect: false,
+        is_native: false,
+        output_sample_rate: 48000,
+        output_bit_depth: 32,
+        source_label: '',
+        backend: 'shared',
+        dsd_output_mode: 'pcm',
+        source_format: '',
+        source_sample_rate: 0,
+        source_bit_depth: 0,
+        dsd_transport: null,
+        output_format: 'PCM float 32-bit / 48 kHz',
+        volume: 1,
+        volume_control_kind: 'software',
+        fallback_reason: null,
       } as IpcCommands[K]['return'];
     }
 
     case 'set_audio_output_device': {
+      return undefined as IpcCommands[K]['return'];
+    }
+
+    case 'set_audio_backend': {
+      return undefined as IpcCommands[K]['return'];
+    }
+
+    case 'set_dsd_output_mode': {
       return undefined as IpcCommands[K]['return'];
     }
 
@@ -379,6 +434,11 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
         (track.id === 'track-13' ? SAMPLE_LRC_ROMANIZED : undefined);
       const parsed = parseLrc(track.lyrics, romanizedContent);
       return parsed as IpcCommands[K]['return'];
+    }
+
+    case 'fetch_lrclib_lyrics': {
+      // Remote lyrics are intentionally unavailable in mock preview mode.
+      return null as IpcCommands[K]['return'];
     }
 
     case 'parse_lrc_content': {

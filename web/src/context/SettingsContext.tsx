@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { AppSettings, DEFAULT_SETTINGS, AppLanguage, AppTheme, isWasapiExclusiveMode, withWasapiExclusiveMode } from '../types/settings';
+import { AppSettings, DEFAULT_SETTINGS, AppLanguage, AppTheme, withWasapiExclusiveMode } from '../types/settings';
 import { Storage } from '../services/storage';
 import { IpcService, isTauri } from '../services/ipc';
 import { EqualizerPreset } from '../types/audio';
@@ -27,7 +27,7 @@ interface SettingsContextType {
   deleteCustomEqPreset: (id: string) => void;
   applyEqPreset: (presetId: string) => void;
   addMusicFolder: (folder: string) => void;
-  removeMusicFolder: (folder: string) => void;
+  removeMusicFolder: (folder: string) => Promise<void>;
 }
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
@@ -143,35 +143,37 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }).catch(error => console.error('Failed to apply equalizer settings', error));
   }, [settings.eq_enabled, settings.eq_preset_id, settings.eq_custom_gains]);
 
-  // Restore persisted audio mode: device → Exclusive → Bit-Perfect.
+  // Restore the persisted playback mode with a single engine call, then the
+  // remaining audio preferences (crossfade, replay gain).
   useEffect(() => {
     if (!isTauri()) return;
     void (async () => {
       try {
-        await IpcService.invoke('set_audio_output_device', {
+        await IpcService.invoke('apply_playback_mode', {
+          mode: settings.playback_mode,
           deviceId: settings.output_device || 'default',
+          backend: settings.playback_mode === 'advanced' ? settings.audio_backend : null,
+          dsdTransport: settings.playback_mode === 'advanced' ? settings.dsd_output_mode : null,
+          asioDriverId: settings.asio_driver_id,
         });
-
-        const wantExclusive = isWasapiExclusiveMode(settings);
-        if (wantExclusive) {
-          try {
-            await IpcService.invoke('set_exclusive_mode', { enabled: true });
-            await IpcService.invoke('set_bit_perfect', { enabled: true });
-          } catch (error) {
-            console.error('Failed to restore WASAPI Exclusive', error);
-            try {
-              await IpcService.invoke('set_exclusive_mode', { enabled: false });
-            } catch (rollbackError) {
-              console.error('Failed to roll back WASAPI Exclusive restore', rollbackError);
-            }
-            updateSettings(withWasapiExclusiveMode(false));
-            return;
-          }
-        } else {
-          await IpcService.invoke('set_bit_perfect', { enabled: false });
-          await IpcService.invoke('set_exclusive_mode', { enabled: false });
+      } catch (error) {
+        console.warn(`Failed to restore playback mode "${settings.playback_mode}"; trying Auto`, error);
+        try {
+          await IpcService.invoke('apply_playback_mode', {
+            mode: 'auto',
+            deviceId: settings.output_device || 'default',
+            backend: null,
+            dsdTransport: null,
+            asioDriverId: settings.asio_driver_id,
+          });
+          // Keep the preferred mode in both memory and storage. EngineStatus
+          // exposes the temporary Auto route while a future launch can retry.
+        } catch (autoError) {
+          console.warn('Failed to apply Auto playback mode fallback', autoError);
         }
+      }
 
+      try {
         await IpcService.invoke('set_crossfade', {
           duration_secs: settings.crossfade_duration,
         });
@@ -181,8 +183,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           prevent_clipping: true,
         });
       } catch (error) {
-        console.error('Failed to restore native audio mode', error);
-        updateSettings(withWasapiExclusiveMode(false));
+        console.error('Failed to restore audio preferences', error);
       }
     })();
     // Restore once from the initial persisted settings.
@@ -271,12 +272,16 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const removeMusicFolder = (folder: string) => {
-    void IpcService.invoke('remove_library_root_by_path', { path: folder })
-      .catch(error => console.warn('Failed to remove library folder', error));
-    updateSettings({
-      music_folders: settings.music_folders.filter(f => f !== folder),
-    });
+  const removeMusicFolder = async (folder: string) => {
+    try {
+      const removed = await IpcService.invoke('remove_library_root_by_path', { path: folder });
+      if (!removed) return;
+      updateSettings({
+        music_folders: settings.music_folders.filter(f => f !== folder),
+      });
+    } catch (error) {
+      console.warn('Failed to remove library folder', error);
+    }
   };
 
   return (

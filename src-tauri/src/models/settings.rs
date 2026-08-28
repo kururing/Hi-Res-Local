@@ -21,6 +21,12 @@ pub struct AppSettings {
     pub crossfade_duration_ms: u32,
     pub exclusive_audio_mode: bool,
     pub volume: f32,
+    #[serde(default = "default_dsd_output_mode")]
+    pub dsd_output_mode: String,
+    #[serde(default = "default_audio_backend")]
+    pub audio_backend: String,
+    #[serde(default)]
+    pub asio_driver_id: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -35,6 +41,17 @@ impl Default for AppSettings {
             crossfade_duration_ms: 0,
             exclusive_audio_mode: false,
             volume: 1.0,
+            dsd_output_mode: default_dsd_output_mode(),
+            audio_backend: default_audio_backend(),
+            asio_driver_id: None,
         }
     }
+}
+
+fn default_dsd_output_mode() -> String {
+    "native_dsd".into()
+}
+
+fn default_audio_backend() -> String {
+    "shared".into()
 }

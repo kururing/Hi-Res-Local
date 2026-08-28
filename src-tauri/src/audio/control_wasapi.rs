@@ -354,8 +354,9 @@ fn current_device_dto(
     let id = device_id_string(device)?;
     let name = device_friendly_name(device).unwrap_or_else(|_| id.clone());
     let is_default = manager.selected_device_id().is_none();
-    let (sample_rates, channels, _) = FormatNegotiator::probe_supported_cached(device, &id)
-        .unwrap_or_else(|_| (vec![44_100, 48_000], vec![2], vec![16, 24, 32]));
+    let (sample_rates, channels, bit_depths) =
+        FormatNegotiator::probe_supported_cached(device, &id)
+            .unwrap_or_else(|_| (vec![44_100, 48_000], vec![2], vec![16, 24, 32]));
 
     Ok(AudioDeviceDTO {
         id,
@@ -363,11 +364,26 @@ fn current_device_dto(
         is_default,
         is_current: true,
         sample_rates,
+        bit_depths,
         channels,
+        backend: crate::audio::dto::AudioBackend::WasapiExclusive,
+        asio_driver_id: None,
+        native_dsd_supported: false,
+        dsd_rates: Vec::new(),
     })
 }
 
 pub fn source_label_from_format(format: &AudioFormat, badge: Option<&QualityBadge>) -> String {
+    if let Some(badge) = badge.filter(|badge| badge.source_type.as_deref() == Some("DSD")) {
+        let rate = badge.dsd_rate.map(|value| value.label()).unwrap_or("DSD");
+        let container = badge.container_format.to_uppercase();
+        let mode = match badge.dsd_output_mode {
+            Some(crate::audio::dto::DsdOutputMode::NativeDsd) => "ASIO Native DSD",
+            Some(crate::audio::dto::DsdOutputMode::Dop) => "DoP",
+            _ => "DSD → PCM",
+        };
+        return format!("{rate} • {container} • {mode} • {} ch", format.channels);
+    }
     let codec = badge
         .map(|b| b.codec_name.to_uppercase())
         .unwrap_or_else(|| "PCM".into());

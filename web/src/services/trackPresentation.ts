@@ -19,6 +19,16 @@ export function normalizeLibraryTrack(track: Track & BackendTrackFields): Track 
 }
 
 export function formatQualityLabel(track: Track): string {
+  const format = track.format?.toLowerCase();
+  if (format === 'dsf' || format === 'dff') {
+    const rate = track.sample_rate || 0;
+    const base = rate % 48_000 === 0 ? 48_000 : 44_100;
+    const multiplier = base > 0 ? Math.round(rate / base) : 0;
+    const dsdRate = [64, 128, 256, 512].includes(multiplier)
+      ? `DSD${multiplier}`
+      : 'DSD';
+    return `${dsdRate} • ${format === 'dff' ? 'DFF/DST' : 'DSF'}`;
+  }
   const sampleRate = track.sample_rate && track.sample_rate > 0
     ? (track.sample_rate % 1000 === 0
       ? `${track.sample_rate / 1000} kHz`

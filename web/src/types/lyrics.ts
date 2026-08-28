@@ -14,6 +14,7 @@ export interface LyricData {
   lines: LyricLine[];
   is_synced: boolean;
   plain_text?: string;
+  source?: 'local' | 'lrclib';
   romanized?: LyricData;
 }
 

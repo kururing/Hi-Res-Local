@@ -45,6 +45,7 @@ impl OutputDeviceManager {
                 };
 
                 let mut sample_rates = Vec::new();
+                let mut bit_depths = Vec::new();
                 let mut channels = Vec::new();
 
                 if let Ok(configs) = dev.supported_output_configs() {
@@ -52,6 +53,21 @@ impl OutputDeviceManager {
                         let min_sr = cfg.min_sample_rate().0;
                         let max_sr = cfg.max_sample_rate().0;
                         let ch = cfg.channels();
+                        let bits = match cfg.sample_format() {
+                            cpal::SampleFormat::I8 | cpal::SampleFormat::U8 => 8,
+                            cpal::SampleFormat::I16 | cpal::SampleFormat::U16 => 16,
+                            cpal::SampleFormat::I32
+                            | cpal::SampleFormat::U32
+                            | cpal::SampleFormat::F32 => 32,
+                            cpal::SampleFormat::I64
+                            | cpal::SampleFormat::U64
+                            | cpal::SampleFormat::F64 => 64,
+                            _ => 0,
+                        };
+
+                        if bits > 0 && !bit_depths.contains(&bits) {
+                            bit_depths.push(bits);
+                        }
 
                         if !channels.contains(&ch) {
                             channels.push(ch);
@@ -66,6 +82,7 @@ impl OutputDeviceManager {
                 }
 
                 sample_rates.sort_unstable();
+                bit_depths.sort_unstable();
                 channels.sort_unstable();
 
                 list.push(AudioDeviceDTO {
@@ -74,7 +91,12 @@ impl OutputDeviceManager {
                     is_default,
                     is_current,
                     sample_rates,
+                    bit_depths,
                     channels,
+                    backend: crate::audio::dto::AudioBackend::Shared,
+                    asio_driver_id: None,
+                    native_dsd_supported: false,
+                    dsd_rates: Vec::new(),
                 });
             }
         }

@@ -47,7 +47,9 @@ impl NegotiatedFormat {
     }
 }
 
-const CANDIDATE_RATES: &[u32] = &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000];
+const CANDIDATE_RATES: &[u32] = &[
+    44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000, 705_600, 768_000,
+];
 
 /// GUID: `KSDATAFORMAT_SUBTYPE_PCM`
 const SUBTYPE_PCM: GUID = GUID::from_u128(0x0000_0001_0000_0010_8000_00aa_0038_9b71);
@@ -228,6 +230,41 @@ impl FormatNegotiator {
         Ok((rates, channels, bit_depths))
     }
 
+    /// Probe which DSD rates this endpoint may carry as DoP 1.1.
+    ///
+    /// This is a **wire** check only: Exclusive 24-bit stereo PCM at
+    /// `dsd_rate / 16` (both 44.1 kHz and 48 kHz families). It does **not**
+    /// prove the DAC decodes DoP markers (`0x05`/`0xFA`). HDMI, Bluetooth,
+    /// onboard HD Audio, and known PCM-only names are rejected. All
+    /// DSD64/128/256/512 carrier rates are probed. Empty means DoP must not be
+    /// offered.
+    pub fn probe_dop_rates(device: &IMMDevice) -> Vec<crate::audio::dto::DsdRate> {
+        if !dop_device_eligible(device) {
+            return Vec::new();
+        }
+        let Ok(client) = activate_client(device) else {
+            return Vec::new();
+        };
+        crate::audio::dop::advertised_dop_rates(|pcm_rate| exclusive_s24_at(&client, pcm_rate))
+    }
+
+    /// True when this DSD bit rate can be offered as DoP on `device`:
+    /// eligible endpoint, an advertised DSD rate, and Exclusive 24-bit at the
+    /// exact DoP PCM rate (`dsd_sample_rate / 16`).
+    pub fn dop_wire_supported(device: &IMMDevice, dsd_sample_rate: u32) -> bool {
+        if !dop_device_eligible(device) {
+            return false;
+        }
+        let advertised = Self::probe_dop_rates(device);
+        if !crate::audio::dop::dop_sample_rate_is_advertised(dsd_sample_rate, &advertised) {
+            return false;
+        }
+        let Ok(client) = activate_client(device) else {
+            return false;
+        };
+        exclusive_s24_at(&client, crate::audio::dop::dop_pcm_rate(dsd_sample_rate))
+    }
+
     /// Cached [`Self::probe_supported`] keyed by WASAPI endpoint id.
     pub fn probe_supported_cached(
         device: &IMMDevice,
@@ -375,6 +412,20 @@ fn probe_exact(
         }
     }
     Ok(None)
+}
+
+fn exclusive_s24_at(client: &IAudioClient, pcm_rate: u32) -> bool {
+    let fmt = AudioFormat::s24_in_32(pcm_rate, 2);
+    build_wave_candidates(&fmt)
+        .iter()
+        .any(|wave| is_exclusive_supported(client, &wave.wave).unwrap_or(false))
+}
+
+fn dop_device_eligible(device: &IMMDevice) -> bool {
+    let enumerator = super::device::device_enumerator_name(device).unwrap_or_default();
+    let form_factor = super::device::device_form_factor(device).unwrap_or(u32::MAX);
+    let name = super::device::device_friendly_name(device).unwrap_or_default();
+    crate::audio::dop::dop_endpoint_eligible(&enumerator, form_factor, &name)
 }
 
 fn is_exclusive_supported(client: &IAudioClient, wave: &HeldWaveFormat) -> AudioResult<bool> {

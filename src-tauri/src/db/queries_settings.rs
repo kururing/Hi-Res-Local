@@ -48,6 +48,10 @@ pub fn get_app_settings(conn: &Connection) -> AppResult<AppSettings> {
     let volume = get_setting(conn, "volume")?
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0);
+    let dsd_output_mode =
+        get_setting(conn, "dsd_output_mode")?.unwrap_or_else(|| "native_dsd".into());
+    let audio_backend = get_setting(conn, "audio_backend")?.unwrap_or_else(|| "shared".into());
+    let asio_driver_id = get_setting(conn, "asio_driver_id")?;
 
     Ok(AppSettings {
         library_roots,
@@ -59,6 +63,9 @@ pub fn get_app_settings(conn: &Connection) -> AppResult<AppSettings> {
         crossfade_duration_ms: crossfade_ms,
         exclusive_audio_mode: exclusive_audio,
         volume,
+        dsd_output_mode,
+        audio_backend,
+        asio_driver_id,
     })
 }
 
@@ -99,6 +106,13 @@ pub fn save_app_settings(conn: &Connection, settings: &AppSettings) -> AppResult
         },
     )?;
     set_setting(conn, "volume", &settings.volume.to_string())?;
+    set_setting(conn, "dsd_output_mode", &settings.dsd_output_mode)?;
+    set_setting(conn, "audio_backend", &settings.audio_backend)?;
+    if let Some(driver) = &settings.asio_driver_id {
+        set_setting(conn, "asio_driver_id", driver)?;
+    } else {
+        conn.execute("DELETE FROM app_settings WHERE key = 'asio_driver_id'", [])?;
+    }
 
     Ok(())
 }

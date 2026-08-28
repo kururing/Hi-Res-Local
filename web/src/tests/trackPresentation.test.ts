@@ -52,4 +52,22 @@ describe('track presentation', () => {
       bit_depth: 24,
     })).toBe('24-bit / 96 kHz');
   });
+
+  it('labels DSD containers with their native DSD rate', () => {
+    expect(formatQualityLabel({
+      ...baseTrack,
+      duration: 183,
+      format: 'DSF',
+      sample_rate: 2_822_400,
+      bit_depth: 1,
+    })).toBe('DSD64 • DSF');
+
+    expect(formatQualityLabel({
+      ...baseTrack,
+      duration: 183,
+      format: 'DFF',
+      sample_rate: 11_289_600,
+      bit_depth: 1,
+    })).toBe('DSD256 • DFF/DST');
+  });
 });

@@ -9,12 +9,17 @@ import {
   Palette,
   Download,
   Upload,
-  Sparkles,
   Power,
   ImagePlus,
   LoaderCircle,
   RefreshCw,
   X,
+  Wand2,
+  Gem,
+  Layers,
+  SlidersHorizontal,
+  BadgeCheck,
+  Activity,
 } from 'lucide-react';
 import { useSettings } from '../../context/SettingsContext';
 import { useLibrary } from '../../context/LibraryContext';
@@ -23,10 +28,11 @@ import { useToast } from '../../context/ToastContext';
 import { Button } from '../common/Button';
 import { Storage } from '../../services/storage';
 import { IpcService, isTauri } from '../../services/ipc';
-import { AudioCapabilities, AudioOutputDevice } from '../../types/audio';
-import { t } from '../../i18n';
+import { AsioDriver, AudioBackend, AudioCapabilities, AudioOutputDevice, DsdOutputMode, DsdRate, PlaybackMode } from '../../types/audio';
+import { localizeAudioError, t } from '../../i18n';
 import { applyImageThemeAccent, createArtworkTheme, createImageTheme } from '../../services/imageTheme';
-import { AppSettings, AppTheme, isWasapiExclusiveMode, withWasapiExclusiveMode } from '../../types/settings';
+import { AppSettings, AppTheme, normalizeAudioSettings } from '../../types/settings';
+import { engineSourceDisplay, engineTransportDisplay, getAdvancedOptionGating, coerceUnavailableAudioOptions, volumeControlLabel, isEqualizerAvailable } from '../../services/playbackDisplay';
 import { APP_FONT_OPTIONS } from '../../services/fonts';
 import { clearArtworkCache, downloadArtwork, getCachedArtwork } from '../../services/remoteArtwork';
 import { resolveTrackArtworkSource } from '../../services/trackArtwork';
@@ -38,6 +44,26 @@ interface ArtworkDownloadProgress {
   artistTotal: number;
   found: number;
 }
+
+const DSD_RATE_ORDER: DsdRate[] = ['dsd64', 'dsd128', 'dsd256', 'dsd512'];
+
+const formatCapabilityRate = (rate?: number): string => {
+  if (!rate) return '—';
+  const khz = rate / 1000;
+  return `${Number.isInteger(khz) ? khz : khz.toFixed(1)} kHz`;
+};
+
+const maxDsdRate = (rates?: DsdRate[]): string => {
+  const max = DSD_RATE_ORDER.filter(rate => rates?.includes(rate)).at(-1);
+  return max ? max.toUpperCase() : '—';
+};
+
+const formatChannelCapability = (channels: number, vi: boolean): string => {
+  if (channels === 1) return vi ? 'Mono (1 kênh)' : 'Mono (1 channel)';
+  if (channels === 2) return vi ? 'Stereo (2 kênh)' : 'Stereo (2 channels)';
+  if (channels > 2) return vi ? `${channels} kênh` : `${channels} channels`;
+  return vi ? 'Chưa xác định' : 'Unknown';
+};
 
 const ArtworkProgressRow: React.FC<{ label: string; done: number; total: number }> = ({
   label,
@@ -145,8 +171,66 @@ const ImageThemeControls: React.FC<ImageThemeControlsProps> = ({
   onSaveCurrentTheme,
   onBlurChange,
   onBlurPercentChange,
-}) => (
-  <div className="rounded-2xl border border-brand-border/70 bg-oled-base/55 p-4 sm:p-5">
+}) => {
+  const [blurDraftPercent, setBlurDraftPercent] = useState(settings.custom_theme_blur_percent);
+  const blurDraftRef = useRef(settings.custom_theme_blur_percent);
+  const isAdjustingBlurRef = useRef(false);
+  const blurAnimationFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isAdjustingBlurRef.current) return;
+    blurDraftRef.current = settings.custom_theme_blur_percent;
+    setBlurDraftPercent(settings.custom_theme_blur_percent);
+  }, [settings.custom_theme_blur_percent]);
+
+  const applyBlurPreview = useCallback((percent: number) => {
+    setBlurDraftPercent(percent);
+    document.documentElement.style.setProperty(
+      '--custom-theme-blur',
+      settings.custom_theme_blur ? `${percent * 0.6}px` : '0px',
+    );
+  }, [settings.custom_theme_blur]);
+
+  const previewBlurPercent = useCallback((percent: number) => {
+    const nextPercent = Math.max(0, Math.min(100, Math.round(percent)));
+    isAdjustingBlurRef.current = true;
+    blurDraftRef.current = nextPercent;
+    if (blurAnimationFrameRef.current !== null) return;
+    blurAnimationFrameRef.current = window.requestAnimationFrame(() => {
+      blurAnimationFrameRef.current = null;
+      applyBlurPreview(blurDraftRef.current);
+    });
+  }, [applyBlurPreview]);
+
+  const commitBlurPercent = useCallback(() => {
+    if (!isAdjustingBlurRef.current) return;
+    if (blurAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(blurAnimationFrameRef.current);
+      blurAnimationFrameRef.current = null;
+    }
+    isAdjustingBlurRef.current = false;
+    applyBlurPreview(blurDraftRef.current);
+    onBlurPercentChange(blurDraftRef.current);
+  }, [applyBlurPreview, onBlurPercentChange]);
+
+  const cancelBlurPreview = useCallback(() => {
+    if (blurAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(blurAnimationFrameRef.current);
+      blurAnimationFrameRef.current = null;
+    }
+    isAdjustingBlurRef.current = false;
+    blurDraftRef.current = settings.custom_theme_blur_percent;
+    applyBlurPreview(settings.custom_theme_blur_percent);
+  }, [applyBlurPreview, settings.custom_theme_blur_percent]);
+
+  useEffect(() => () => {
+    if (blurAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(blurAnimationFrameRef.current);
+    }
+  }, []);
+
+  return (
+    <div className="rounded-2xl border border-brand-border/70 bg-oled-base/55 p-4 sm:p-5">
     <div className="mb-4 border-b border-brand-border/60">
       <SettingsSwitch
         checked={settings.artwork_adaptive_theme}
@@ -257,7 +341,7 @@ const ImageThemeControls: React.FC<ImageThemeControlsProps> = ({
                 {t('settings_image_theme_blur_amount', settings.language)}
               </label>
               <span className="min-w-12 text-right text-xs font-semibold tabular-nums text-brand-accent">
-                {settings.custom_theme_blur_percent}%
+                {blurDraftPercent}%
               </span>
             </div>
             <input
@@ -266,10 +350,14 @@ const ImageThemeControls: React.FC<ImageThemeControlsProps> = ({
               min="0"
               max="100"
               step="1"
-              value={settings.custom_theme_blur_percent}
-              onChange={event => onBlurPercentChange(Number(event.target.value))}
+              value={blurDraftPercent}
+              onChange={event => previewBlurPercent(Number(event.target.value))}
+              onPointerUp={commitBlurPercent}
+              onPointerCancel={cancelBlurPreview}
+              onKeyUp={commitBlurPercent}
+              onBlur={commitBlurPercent}
               className="w-full"
-              aria-valuetext={`${settings.custom_theme_blur_percent}%`}
+              aria-valuetext={`${blurDraftPercent}%`}
             />
             <p className="mt-2 text-[11px] leading-relaxed text-brand-muted">
               {t('settings_image_theme_blur_hint', settings.language)}
@@ -278,8 +366,9 @@ const ImageThemeControls: React.FC<ImageThemeControlsProps> = ({
         )}
       </div>
     </fieldset>
-  </div>
-);
+    </div>
+  );
+};
 
 export const SettingsView: React.FC = () => {
   const {
@@ -290,13 +379,15 @@ export const SettingsView: React.FC = () => {
     removeMusicFolder,
   } = useSettings();
 
-  const { scanDirectory, scanProgress, albums, artists } = useLibrary();
+  const { scanDirectory, rescanLibrary, scanProgress, albums, artists } = useLibrary();
   const { status, setIsEqualizerOpen, engineStatus } = usePlayer();
   const { showToast } = useToast();
+  const eqAvailable = isEqualizerAvailable(engineStatus, settings);
 
   const [outputDevices, setOutputDevices] = useState<AudioOutputDevice[]>([]);
   const [isLoadingDevices, setIsLoadingDevices] = useState(true);
   const [audioCapabilities, setAudioCapabilities] = useState<AudioCapabilities | null>(null);
+  const [asioDrivers, setAsioDrivers] = useState<AsioDriver[]>([]);
   const [isUpdatingAudio, setIsUpdatingAudio] = useState(false);
   const [isUpdatingStartup, setIsUpdatingStartup] = useState(false);
   const [isCreatingTheme, setIsCreatingTheme] = useState(false);
@@ -370,7 +461,21 @@ export const SettingsView: React.FC = () => {
       );
       await processInBatches(
         artistTargets,
-        artist => downloadArtwork('artist', artist.name, undefined, artworkAbortController.signal),
+        artist => {
+          // A substantial album is a stronger identity hint than the artist
+          // name alone when the catalogue contains multiple namesakes.
+          const representativeAlbum = artist.albums.reduce(
+            (best, album) => !best || album.track_count > best.track_count ? album : best,
+            artist.albums[0]
+          );
+          return downloadArtwork(
+            'artist',
+            artist.name,
+            undefined,
+            artworkAbortController.signal,
+            representativeAlbum?.name,
+          );
+        },
         () => setArtworkProgress(previous => previous ? { ...previous, artistDone: previous.artistDone + 1, found } : previous)
       );
 
@@ -509,6 +614,7 @@ export const SettingsView: React.FC = () => {
         if (byName) updateSettings({ output_device: byName.id });
       }
       setAudioCapabilities(await IpcService.invoke('get_audio_capabilities'));
+      setAsioDrivers(await IpcService.invoke('get_asio_drivers'));
     } catch (error) {
       console.error('Failed to load audio devices', error);
       showToast(t('toast_audio_setting_failed', settings.language), 'error');
@@ -553,67 +659,223 @@ export const SettingsView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (
-      audioCapabilities?.exclusive_mode_supported === false &&
-      isWasapiExclusiveMode(settings)
-    ) {
-      void (async () => {
-        try {
-          await IpcService.invoke('set_bit_perfect', { enabled: false });
-          await IpcService.invoke('set_exclusive_mode', { enabled: false });
-        } catch (error) {
-          console.error('Failed to clear unsupported WASAPI Exclusive setting', error);
-        } finally {
-          updateSettings(withWasapiExclusiveMode(false));
-        }
-      })();
-    }
-  }, [
-    audioCapabilities?.exclusive_mode_supported,
-    settings.bit_perfect,
-    settings.wasapi_exclusive,
-    updateSettings,
-  ]);
+  const vi = settings.language === 'vi';
+  const advancedGating = getAdvancedOptionGating(audioCapabilities);
 
-  const wasapiExclusiveChecked =
-    engineStatus && engineStatus.output_mode
-      ? /exclusive/i.test(engineStatus.output_mode) && engineStatus.bit_perfect
-      : isWasapiExclusiveMode(settings);
-
-  // Keep persisted flags aligned with the live engine when status is available.
-  useEffect(() => {
-    if (!engineStatus?.output_mode) return;
-    const liveOn = /exclusive/i.test(engineStatus.output_mode) && engineStatus.bit_perfect;
-    if (liveOn !== isWasapiExclusiveMode(settings)) {
-      updateSettings(withWasapiExclusiveMode(liveOn));
-    }
-  }, [engineStatus, settings, updateSettings]);
-
-  const handleWasapiExclusiveChange = (enabled: boolean) => {
+  // The mode owns the legacy flags: every change goes through the single
+  // apply_playback_mode command and persists only when the engine accepted it.
+  const handlePlaybackModeChange = (mode: PlaybackMode) => {
+    if (mode === settings.playback_mode || isUpdatingAudio) return;
+    const next = normalizeAudioSettings({ ...settings, playback_mode: mode });
     void applyAudioSetting(
       async () => {
-        if (enabled) {
-          try {
-            await IpcService.invoke('set_exclusive_mode', { enabled: true });
-            await IpcService.invoke('set_bit_perfect', { enabled: true });
-          } catch (error) {
-            try {
-              await IpcService.invoke('set_bit_perfect', { enabled: false });
-              await IpcService.invoke('set_exclusive_mode', { enabled: false });
-            } catch (rollbackError) {
-              console.error('Failed to roll back WASAPI Exclusive enable', rollbackError);
-            }
-            throw error;
-          }
-        } else {
-          await IpcService.invoke('set_bit_perfect', { enabled: false });
-          await IpcService.invoke('set_exclusive_mode', { enabled: false });
-        }
+        await IpcService.invoke('apply_playback_mode', {
+          mode,
+          deviceId: settings.output_device || 'default',
+          backend: mode === 'advanced' ? next.audio_backend : null,
+          dsdTransport: mode === 'advanced' ? next.dsd_output_mode : null,
+          asioDriverId: next.asio_driver_id,
+        });
+        setAudioCapabilities(await IpcService.invoke('get_audio_capabilities'));
       },
-      withWasapiExclusiveMode(enabled)
+      {
+        playback_mode: next.playback_mode,
+        wasapi_exclusive: next.wasapi_exclusive,
+        bit_perfect: next.bit_perfect,
+        audio_backend: next.audio_backend,
+        dsd_output_mode: next.dsd_output_mode,
+      }
     );
   };
+
+  const handleAdvancedOptionChange = (
+    overrides: Partial<Pick<AppSettings, 'audio_backend' | 'dsd_output_mode' | 'asio_driver_id'>>
+  ) => {
+    const coupled: typeof overrides = { ...overrides };
+    if (coupled.audio_backend === 'asio') {
+      coupled.dsd_output_mode = 'native_dsd';
+    }
+    if (coupled.audio_backend === 'shared') {
+      const transport = coupled.dsd_output_mode ?? settings.dsd_output_mode;
+      if (transport === 'dop' || transport === 'native_dsd') {
+        coupled.dsd_output_mode = 'pcm';
+      }
+    }
+    if (coupled.dsd_output_mode === 'dop') {
+      coupled.audio_backend = 'wasapi_exclusive';
+    }
+    if (coupled.dsd_output_mode === 'native_dsd') {
+      coupled.audio_backend = 'asio';
+    }
+    const next = normalizeAudioSettings({ ...settings, ...coupled, playback_mode: 'advanced' });
+    void applyAudioSetting(
+      async () => {
+        await IpcService.invoke('apply_playback_mode', {
+          mode: 'advanced',
+          deviceId: settings.output_device || 'default',
+          backend: next.audio_backend,
+          dsdTransport: next.dsd_output_mode,
+          asioDriverId: next.asio_driver_id,
+        });
+        setAudioCapabilities(await IpcService.invoke('get_audio_capabilities'));
+      },
+      {
+        playback_mode: 'advanced',
+        audio_backend: next.audio_backend,
+        dsd_output_mode: next.dsd_output_mode,
+        asio_driver_id: next.asio_driver_id,
+        wasapi_exclusive: next.wasapi_exclusive,
+        bit_perfect: next.bit_perfect,
+      }
+    );
+  };
+
+  const handleOutputDeviceChange = (deviceId: string) => {
+    if (deviceId === settings.output_device || isUpdatingAudio) return;
+    void (async () => {
+      setIsUpdatingAudio(true);
+      let deviceSwitched = false;
+      try {
+        await IpcService.invoke('set_audio_output_device', { deviceId });
+        deviceSwitched = true;
+        const capabilities = await IpcService.invoke('get_audio_capabilities');
+        setAudioCapabilities(capabilities);
+        const next = coerceUnavailableAudioOptions(
+          { ...settings, output_device: deviceId },
+          capabilities
+        );
+        await IpcService.invoke('apply_playback_mode', {
+          mode: next.playback_mode,
+          deviceId,
+          backend: next.playback_mode === 'advanced' ? next.audio_backend : null,
+          dsdTransport: next.playback_mode === 'advanced' ? next.dsd_output_mode : null,
+          asioDriverId: next.asio_driver_id,
+        });
+        updateSettings({
+          output_device: deviceId,
+          audio_backend: next.audio_backend,
+          dsd_output_mode: next.dsd_output_mode,
+          wasapi_exclusive: next.wasapi_exclusive,
+          bit_perfect: next.bit_perfect,
+        });
+        showToast(t('toast_audio_setting_applied', settings.language), 'success');
+      } catch (error) {
+        console.error('Failed to switch audio device', error);
+        if (deviceSwitched) {
+          updateSettings({ output_device: deviceId });
+          try {
+            setAudioCapabilities(await IpcService.invoke('get_audio_capabilities'));
+          } catch (capabilitiesError) {
+            console.error('Failed to refresh audio capabilities after device switch', capabilitiesError);
+          }
+        }
+        showToast(t('toast_audio_setting_failed', settings.language), 'error');
+      } finally {
+        setIsUpdatingAudio(false);
+      }
+    })();
+  };
+
+  const playbackModeOptions: {
+    id: PlaybackMode;
+    icon: typeof Wand2;
+    label: string;
+    desc: string;
+  }[] = [
+    {
+      id: 'auto',
+      icon: Wand2,
+      label: vi ? 'Tự động (khuyến nghị)' : 'Automatic (recommended)',
+      desc: vi
+        ? 'Chọn đường âm thanh tốt nhất và tự hạ cấp an toàn khi cần.'
+        : 'Picks the best audio path and falls back safely when needed.',
+    },
+    {
+      id: 'high_quality',
+      icon: Gem,
+      label: vi ? 'Chất lượng cao' : 'High quality',
+      desc: vi
+        ? 'WASAPI Exclusive, bit-perfect khi có thể; DSD giải mã ra PCM. DoP chỉ bật trong Nâng cao.'
+        : 'WASAPI Exclusive, bit-perfect when possible; DSD is decoded to PCM. DoP is Advanced-only.',
+    },
+    {
+      id: 'multitask',
+      icon: Layers,
+      label: vi ? 'Đa nhiệm' : 'Multitasking',
+      desc: vi
+        ? 'WASAPI Shared, âm thanh chung với ứng dụng khác; DSD chuyển thành PCM.'
+        : 'WASAPI Shared, audio mixes with other apps; DSD is converted to PCM.',
+    },
+    {
+      id: 'advanced',
+      icon: SlidersHorizontal,
+      label: vi ? 'Nâng cao' : 'Advanced',
+      desc: vi
+        ? 'Tự chọn backend và DSD transport.'
+        : 'Choose the backend and DSD transport yourself.',
+    },
+  ];
+
+  const engineBackendLabel = engineStatus
+    ? engineStatus.backend === 'asio'
+      ? 'ASIO'
+      : engineStatus.backend === 'wasapi_exclusive'
+        ? 'WASAPI Exclusive'
+        : engineStatus.backend === 'shared'
+          ? 'WASAPI Shared'
+          : engineStatus.output_mode || '—'
+    : '—';
+
+  const engineSourceLabel = engineSourceDisplay(engineStatus);
+
+  const engineTransportLabel = engineTransportDisplay(engineStatus);
+
+  const engineDeviceLabel = (() => {
+    const selectedId = settings.output_device || 'default';
+    if (selectedId !== 'default') {
+      return outputDevices.find(device => device.id === selectedId)?.name
+        || (vi ? 'Thiết bị đã chọn không khả dụng' : 'Selected device unavailable');
+    }
+    const windowsDefault = outputDevices.find(device => device.id !== 'default' && device.is_default);
+    return windowsDefault?.name
+      ? `${windowsDefault.name} (${vi ? 'mặc định Windows' : 'Windows default'})`
+      : t('settings_output_device_default', settings.language);
+  })();
+
+  const selectedOutputDevice = settings.output_device && settings.output_device !== 'default'
+    ? outputDevices.find(device => device.id === settings.output_device)
+    : outputDevices.find(device => device.id !== 'default' && device.is_default)
+      || outputDevices.find(device => device.id === 'default');
+  const maxPcmRate = Math.max(0, ...(selectedOutputDevice?.sample_rates || []));
+  const maxPcmDepth = Math.max(0, ...(selectedOutputDevice?.bit_depths || []));
+  const maxChannels = Math.max(0, ...(selectedOutputDevice?.channels || []));
+  const selectedAsioDriver = settings.asio_driver_id
+    ? asioDrivers.find(driver => driver.id === settings.asio_driver_id)
+    : undefined;
+  const nativeDsdRates = selectedAsioDriver?.dsd_rates || audioCapabilities?.dsd_rates;
+
+  const engineVolumeLabel = engineStatus
+    ? `${Math.round((status.volume ?? engineStatus.volume ?? 1) * 100)}% (${volumeControlLabel(engineStatus.volume_control_kind)})`
+    : '—';
+
+  const asioDisabledReason = audioCapabilities?.asio_drivers_present
+    ? (vi
+        ? 'Driver ASIO không hỗ trợ Native DSD. ASIO trong app này chỉ dùng cho Native DSD.'
+        : 'This ASIO driver does not support Native DSD. ASIO in this app is Native DSD only.')
+    : (vi ? 'Không tìm thấy driver ASIO nào' : 'No ASIO driver found');
+  const exclusiveDisabledReason = vi
+    ? 'WASAPI Exclusive chưa khả dụng trên thiết bị này'
+    : 'WASAPI Exclusive is not available on this device';
+  const dopDisabledReason = vi
+    ? 'DoP chưa khả dụng trên thiết bị này'
+    : 'DoP is not available on this device';
+  const nativeDsdDisabledReason = audioCapabilities?.asio_drivers_present
+    ? (vi
+        ? 'Driver ASIO không hỗ trợ Native DSD'
+        : 'This ASIO driver does not support Native DSD')
+    : (vi
+        ? 'Không tìm thấy driver ASIO nào'
+        : 'No ASIO driver found');
 
   const handleStartupChange = async (enabled: boolean) => {
     if (!isTauri()) {
@@ -723,7 +985,7 @@ export const SettingsView: React.FC = () => {
                 >
                   <span className="font-mono text-brand-foreground truncate pr-4">{folder}</span>
                   <button
-                    onClick={() => removeMusicFolder(folder)}
+                    onClick={() => void removeMusicFolder(folder)}
                     className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-rose-400 focus-visible:outline-none"
                     aria-label={t('settings_remove_folder', settings.language, { folder })}
                   >
@@ -759,8 +1021,8 @@ export const SettingsView: React.FC = () => {
             size="sm"
             variant="secondary"
             icon={<FolderSync className="w-3.5 h-3.5" />}
-            onClick={() => scanDirectory()}
-            disabled={scanProgress?.is_scanning}
+            onClick={() => void rescanLibrary()}
+            disabled={scanProgress?.is_scanning || settings.music_folders.length === 0}
           >
             {scanProgress?.is_scanning ? t('settings_scanning', settings.language) : t('settings_btn_rescan', settings.language)}
           </Button>
@@ -885,14 +1147,7 @@ export const SettingsView: React.FC = () => {
               value={settings.output_device || 'default'}
               disabled={isUpdatingAudio || isLoadingDevices || outputDevices.length === 0}
               aria-busy={isUpdatingAudio || isLoadingDevices}
-              onChange={e => {
-                const deviceId = e.target.value;
-                if (deviceId === settings.output_device) return;
-                void applyAudioSetting(
-                  () => IpcService.invoke('set_audio_output_device', { deviceId }),
-                  { output_device: deviceId }
-                );
-              }}
+              onChange={e => handleOutputDeviceChange(e.target.value)}
               className="min-h-11 w-full appearance-none rounded-xl border border-brand-border bg-oled-base px-4 py-2.5 pr-11 text-xs text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:cursor-wait disabled:opacity-60 sm:text-sm"
             >
               {!outputDevices.some(d => d.id === settings.output_device) && settings.output_device !== 'default' && (
@@ -922,50 +1177,320 @@ export const SettingsView: React.FC = () => {
               ? t('settings_output_device_applying', settings.language)
               : t('settings_output_device_hint', settings.language)}
           </p>
+          {!isLoadingDevices && selectedOutputDevice && (
+            <section
+              className="rounded-xl border border-brand-border/70 bg-oled-base/60 p-3"
+              aria-label={vi ? 'Năng lực tối đa của DAC' : 'Maximum DAC capabilities'}
+            >
+              <div className="mb-3 flex items-start gap-2">
+                <Activity className="mt-0.5 h-4 w-4 shrink-0 text-brand-accent" aria-hidden="true" />
+                <div className="min-w-0">
+                  <h3 className="text-xs font-semibold text-brand-foreground">
+                    {vi ? 'Năng lực DAC đã xác minh' : 'Verified DAC capabilities'}
+                  </h3>
+                  <p className="truncate text-xs leading-relaxed text-brand-muted" title={selectedOutputDevice.name}>
+                    {selectedOutputDevice.name}
+                  </p>
+                </div>
+              </div>
+              <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-lg border border-brand-border/50 bg-oled-card/50 p-2.5">
+                  <dt className="text-[11px] leading-relaxed text-brand-muted">
+                    {vi ? 'Chất lượng PCM tối đa' : 'Maximum PCM quality'}
+                  </dt>
+                  <dd className="mt-0.5 text-xs font-semibold leading-relaxed text-brand-foreground">
+                    {maxPcmDepth > 0 ? `${maxPcmDepth}-bit / ` : ''}{formatCapabilityRate(maxPcmRate)}
+                  </dd>
+                </div>
+                <div className="rounded-lg border border-brand-border/50 bg-oled-card/50 p-2.5">
+                  <dt className="text-[11px] leading-relaxed text-brand-muted">
+                    {vi ? 'Kiểu âm thanh' : 'Speaker layout'}
+                  </dt>
+                  <dd className="mt-0.5 text-xs font-semibold leading-relaxed text-brand-foreground">
+                    {formatChannelCapability(maxChannels, vi)}
+                  </dd>
+                </div>
+                <div className="rounded-lg border border-brand-border/50 bg-oled-card/50 p-2.5">
+                  <dt className="text-[11px] leading-relaxed text-brand-muted">
+                    {vi ? 'DSD qua cổng DoP' : 'DSD over DoP'}
+                  </dt>
+                  <dd className="mt-0.5 text-xs font-semibold leading-relaxed text-brand-foreground">
+                    {maxDsdRate(audioCapabilities?.dop_rates)}
+                  </dd>
+                </div>
+                <div className="rounded-lg border border-brand-border/50 bg-oled-card/50 p-2.5">
+                  <dt className="text-[11px] leading-relaxed text-brand-muted">
+                    {vi ? 'DSD trực tiếp qua ASIO' : 'Native DSD over ASIO'}
+                  </dt>
+                  <dd className="mt-0.5 text-xs font-semibold leading-relaxed text-brand-foreground">
+                    {maxDsdRate(nativeDsdRates)}
+                  </dd>
+                </div>
+              </dl>
+              <p className="mt-2 text-[11px] leading-relaxed text-brand-muted">
+                {vi
+                  ? 'Dấu “—” nghĩa là thiết bị hoặc driver chưa xác nhận hỗ trợ. Các thông số được kiểm tra trực tiếp, không suy đoán từ tên DAC.'
+                  : '“—” means support was not verified by the device or driver. Values are probed directly, not inferred from the DAC name.'}
+              </p>
+            </section>
+          )}
         </div>
 
-        {/* WASAPI Exclusive */}
-        <div className="p-4 rounded-xl bg-oled-base/60 border border-brand-border space-y-2">
-          <div className="flex items-center gap-2 border-b border-brand-border/60 pb-2">
-            <Sparkles className="w-4 h-4 text-amber-400" aria-hidden="true" />
-            <span className="text-xs font-semibold uppercase tracking-wider text-brand-muted">
-              Windows Audio
-            </span>
+        {/* Playback mode */}
+        <fieldset className="space-y-3" aria-busy={isUpdatingAudio}>
+          <legend className="text-xs font-semibold uppercase tracking-wider text-brand-muted">
+            {vi ? 'Chế độ phát nhạc' : 'Playback mode'}
+          </legend>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {playbackModeOptions.map(option => {
+              const isSelected = settings.playback_mode === option.id;
+              const Icon = option.icon;
+              return (
+                <label
+                  key={option.id}
+                  className={`flex min-h-[76px] items-start gap-3 rounded-xl border p-3 transition-colors ${
+                    isSelected
+                      ? 'border-brand-accent bg-brand-accent/10'
+                      : 'border-brand-border bg-oled-base hover:bg-oled-hover'
+                  } ${isUpdatingAudio ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}
+                >
+                  <input
+                    type="radio"
+                    name="playback-mode"
+                    value={option.id}
+                    checked={isSelected}
+                    disabled={isUpdatingAudio}
+                    onChange={() => handlePlaybackModeChange(option.id)}
+                    className="mt-1 h-4 w-4 shrink-0 cursor-pointer border-brand-border bg-oled-base text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:ring-offset-2 focus-visible:ring-offset-oled-card disabled:cursor-wait"
+                  />
+                  <Icon
+                    className={`mt-0.5 h-4 w-4 shrink-0 ${isSelected ? 'text-brand-accent' : 'text-brand-muted'}`}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0">
+                    <span className={`block text-sm font-semibold ${isSelected ? 'text-brand-accent' : 'text-brand-foreground'}`}>
+                      {option.label}
+                    </span>
+                    <span className="mt-0.5 block text-xs leading-relaxed text-brand-muted">
+                      {option.desc}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
           </div>
-          <p className="text-xs text-brand-muted px-0.5">
-            {t('settings_output_mode', settings.language)}:{' '}
-            <span className="font-semibold text-brand-foreground">
-              {engineStatus?.output_mode ||
-                (isWasapiExclusiveMode(settings)
-                  ? t('settings_output_mode_exclusive', settings.language)
-                  : t('settings_output_mode_shared', settings.language))}
-            </span>
-          </p>
-          <SettingsSwitch
-            checked={wasapiExclusiveChecked}
-            disabled={isUpdatingAudio || audioCapabilities?.exclusive_mode_supported === false}
-            loading={isUpdatingAudio}
-            label={t('settings_bit_perfect_wasapi', settings.language)}
-            description={t('settings_bit_perfect_wasapi_desc', settings.language)}
-            onChange={handleWasapiExclusiveChange}
-          />
-          {audioCapabilities?.exclusive_mode_supported === false && (
-            <p className="text-xs font-medium text-amber-500">
-              {t('settings_bit_perfect_unavailable', settings.language)}
+        </fieldset>
+
+        {/* Advanced options (mode = advanced only) */}
+        {settings.playback_mode === 'advanced' && (
+          <div className="grid grid-cols-1 gap-4 rounded-xl border border-brand-border bg-oled-base/60 p-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label
+                htmlFor="audio-backend"
+                className="text-xs font-semibold uppercase tracking-wider text-brand-muted"
+              >
+                Audio backend
+              </label>
+              <select
+                id="audio-backend"
+                value={settings.audio_backend}
+                disabled={isUpdatingAudio}
+                onChange={event => handleAdvancedOptionChange({ audio_backend: event.target.value as AudioBackend })}
+                className="min-h-11 w-full rounded-xl border border-brand-border bg-oled-base px-4 py-2.5 text-xs text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:opacity-60 sm:text-sm"
+              >
+                <option value="shared">WASAPI Shared</option>
+                <option
+                  value="wasapi_exclusive"
+                  disabled={advancedGating.exclusiveBackendDisabled}
+                  title={advancedGating.exclusiveBackendDisabled ? exclusiveDisabledReason : undefined}
+                >
+                  WASAPI Exclusive
+                </option>
+                <option value="asio" disabled={advancedGating.asioBackendDisabled} title={advancedGating.asioBackendDisabled ? asioDisabledReason : undefined}>
+                  ASIO
+                </option>
+              </select>
+              <p className="text-xs leading-relaxed text-brand-muted">
+                {vi
+                  ? 'ASIO chỉ phát Native DSD. File PCM (FLAC, MP3…) luôn đi WASAPI Shared, không phải Exclusive.'
+                  : 'ASIO is Native DSD only. PCM files (FLAC, MP3…) always play through WASAPI Shared, not Exclusive.'}
+              </p>
+              {advancedGating.asioBackendDisabled && (
+                <p className="text-xs leading-relaxed text-amber-500">{asioDisabledReason}</p>
+              )}
+              {advancedGating.exclusiveBackendDisabled && (
+                <p className="text-xs leading-relaxed text-amber-500">{exclusiveDisabledReason}</p>
+              )}
+
+              <label
+                htmlFor="asio-driver"
+                className="block pt-2 text-xs font-semibold uppercase tracking-wider text-brand-muted"
+              >
+                ASIO driver
+              </label>
+              <select
+                id="asio-driver"
+                value={settings.asio_driver_id || ''}
+                disabled={advancedGating.asioBackendDisabled || asioDrivers.length === 0 || isUpdatingAudio}
+                title={advancedGating.asioBackendDisabled ? asioDisabledReason : undefined}
+                onChange={event => handleAdvancedOptionChange({ asio_driver_id: event.target.value || null })}
+                className="min-h-11 w-full rounded-xl border border-brand-border bg-oled-base px-4 py-2.5 text-xs text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:opacity-60 sm:text-sm"
+              >
+                <option value="">Auto</option>
+                {asioDrivers.map(driver => (
+                  <option key={driver.id} value={driver.id}>
+                    {driver.name}
+                  </option>
+                ))}
+              </select>
+              {asioDrivers.length === 0 && (
+                <p className="text-xs leading-relaxed text-brand-muted">
+                  {vi
+                    ? 'Chưa phát hiện ASIO driver. Driver DAC phải được cài riêng.'
+                    : 'No ASIO driver detected. DAC drivers must be installed separately.'}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label
+                htmlFor="dsd-transport"
+                className="text-xs font-semibold uppercase tracking-wider text-brand-muted"
+              >
+                DSD transport
+              </label>
+              <select
+                id="dsd-transport"
+                value={settings.dsd_output_mode}
+                disabled={isUpdatingAudio}
+                onChange={event => handleAdvancedOptionChange({ dsd_output_mode: event.target.value as DsdOutputMode })}
+                className="min-h-11 w-full rounded-xl border border-brand-border bg-oled-base px-4 py-2.5 text-xs text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:opacity-60 sm:text-sm"
+              >
+                <option value="native_dsd" disabled={advancedGating.nativeDsdDisabled} title={advancedGating.nativeDsdDisabled ? nativeDsdDisabledReason : undefined}>
+                  Native DSD (ASIO)
+                </option>
+                <option value="dop" disabled={advancedGating.dopDisabled} title={advancedGating.dopDisabled ? dopDisabledReason : undefined}>
+                  DoP (DSD over PCM)
+                </option>
+                <option value="pcm">DSD → PCM</option>
+              </select>
+              {advancedGating.nativeDsdDisabled && (
+                <p className="text-xs leading-relaxed text-brand-muted">{nativeDsdDisabledReason}</p>
+              )}
+              {advancedGating.dopDisabled && (
+                <p className="text-xs leading-relaxed text-brand-muted">{dopDisabledReason}</p>
+              )}
+              <p className="text-xs leading-relaxed text-brand-muted">
+                {vi
+                  ? 'DoP cần WASAPI Exclusive. Chọn Shared sẽ giải mã DSD thành PCM.'
+                  : 'DoP requires WASAPI Exclusive. Shared decodes DSD to PCM.'}
+              </p>
+              <p className="pt-2 text-xs leading-relaxed text-brand-muted">
+                EQ: {settings.eq_enabled ? (vi ? 'bật' : 'on') : (vi ? 'tắt' : 'off')}
+                {' · '}
+                ReplayGain: {settings.replay_gain_mode}
+                {' · '}
+                Crossfade: {settings.crossfade_duration > 0 ? `${settings.crossfade_duration}s` : (vi ? 'tắt' : 'off')}
+              </p>
+              {engineStatus?.native_dsd_error && (
+                <p className="text-xs font-medium text-red-400" role="alert">
+                  {localizeAudioError(engineStatus.native_dsd_error, settings.language)}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Current engine status */}
+        <div
+          aria-live="polite"
+          className="space-y-3 rounded-xl border border-brand-border bg-oled-base/60 p-4"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-border/60 pb-2">
+            <div className="flex items-center gap-2">
+              <Activity className="h-4 w-4 text-brand-accent" aria-hidden="true" />
+              <span className="text-xs font-semibold uppercase tracking-wider text-brand-muted">
+                {vi ? 'Trạng thái hiện tại' : 'Current status'}
+              </span>
+            </div>
+            {engineStatus?.bit_perfect === true && (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/50 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-400"
+                title={vi ? 'DSP (EQ, crossfade…) được bỏ qua' : 'DSP (EQ, crossfade…) is bypassed'}
+              >
+                <BadgeCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                {vi ? 'Bit-perfect tới driver' : 'Bit-perfect to driver'}
+                <span className="font-normal text-emerald-400/80">
+                  {vi ? '· DSP bỏ qua' : '· DSP bypassed'}
+                </span>
+              </span>
+            )}
+          </div>
+          {engineStatus ? (
+            <>
+              <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-brand-muted">Backend</dt>
+                  <dd className="text-right font-semibold text-brand-foreground">{engineBackendLabel}</dd>
+                </div>
+                <div className="flex min-w-0 items-baseline justify-between gap-3">
+                  <dt className="shrink-0 text-brand-muted">{vi ? 'Thiết bị' : 'Device'}</dt>
+                  <dd className="min-w-0 truncate text-right font-semibold text-brand-foreground" title={engineDeviceLabel}>
+                    {engineDeviceLabel}
+                  </dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-brand-muted">{vi ? 'Định dạng nguồn' : 'Source format'}</dt>
+                  <dd className="text-right font-semibold text-brand-foreground">{engineSourceLabel}</dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-brand-muted">{vi ? 'Đầu ra / Transport' : 'Output / Transport'}</dt>
+                  <dd className="text-right font-semibold text-brand-foreground">{engineTransportLabel}</dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-brand-muted">{vi ? 'Âm lượng' : 'Volume'}</dt>
+                  <dd className="text-right font-semibold text-brand-foreground">{engineVolumeLabel}</dd>
+                </div>
+              </dl>
+              {engineStatus.fallback_reason && (
+                <p className="text-[11px] leading-relaxed text-amber-500" role="status">
+                  {engineStatus.fallback_reason}
+                </p>
+              )}
+              {engineStatus.bit_perfect && (
+                <p className="text-[11px] leading-relaxed text-brand-muted">
+                  {vi
+                    ? 'Đã xác minh luồng chính xác tới driver Windows; phần cứng hoặc driver vẫn có thể xử lý lại tín hiệu.'
+                    : 'Exact stream verified to the Windows driver; the driver or hardware may still process the signal.'}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-xs text-brand-muted">
+              {vi ? 'Chưa phát nhạc' : 'Not playing'}
             </p>
           )}
         </div>
 
         {/* Equalizer Shortcut Button */}
-        <div className="flex items-center justify-between pt-2 border-t border-brand-border/60">
-          <div className="flex items-center gap-2 text-xs text-brand-foreground font-medium">
-            <Sliders className="w-4 h-4 text-brand-accent" />
-            <span>{t('settings_equalizer_state', settings.language, { state: t(settings.eq_enabled ? 'settings_enabled' : 'settings_disabled', settings.language) })}</span>
+        <div className="flex items-center justify-between gap-3 pt-2 border-t border-brand-border/60">
+          <div className={`flex min-w-0 flex-col gap-0.5 ${!eqAvailable ? 'opacity-50' : ''}`}>
+            <div className="flex items-center gap-2 text-xs text-brand-foreground font-medium">
+              <Sliders className={`w-4 h-4 ${eqAvailable ? 'text-brand-accent' : 'text-brand-muted'}`} />
+              <span>{t('settings_equalizer_state', settings.language, { state: t(settings.eq_enabled ? 'settings_enabled' : 'settings_disabled', settings.language) })}</span>
+            </div>
+            {!eqAvailable && (
+              <p className="pl-6 text-[11px] leading-relaxed text-brand-muted">
+                {t('settings_equalizer_unavailable', settings.language)}
+              </p>
+            )}
           </div>
           <Button
             size="sm"
             variant="secondary"
             icon={<Sliders className="w-3.5 h-3.5" />}
+            disabled={!eqAvailable}
+            title={!eqAvailable ? t('settings_equalizer_unavailable', settings.language) : undefined}
             onClick={() => setIsEqualizerOpen(true)}
           >
             {t('settings_open_equalizer', settings.language)}

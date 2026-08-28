@@ -6,8 +6,9 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
-use windows::core::{PCWSTR, PWSTR};
+use windows::core::{GUID, PCWSTR, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
     eConsole, eRender, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
@@ -17,7 +18,7 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
     COINIT_MULTITHREADED, STGM_READ,
 };
-use windows::Win32::System::Variant::VT_LPWSTR;
+use windows::Win32::System::Variant::{VT_LPWSTR, VT_UI4};
 
 use crate::audio::dto::AudioDeviceDTO;
 use crate::audio::error::{AudioError, AudioResult};
@@ -172,7 +173,12 @@ impl WasapiDeviceManager {
             is_default: true,
             is_current: self.selected_device_id.is_none(),
             sample_rates: default_rates.clone(),
+            bit_depths: vec![16, 24, 32],
             channels: default_channels.clone(),
+            backend: crate::audio::dto::AudioBackend::WasapiExclusive,
+            asio_driver_id: None,
+            native_dsd_supported: false,
+            dsd_rates: Vec::new(),
         });
 
         for i in 0..count {
@@ -194,7 +200,7 @@ impl WasapiDeviceManager {
                 None => false, // "default" sentinel is current when nothing pinned
             };
 
-            let (sample_rates, channels, _bit_depths) =
+            let (sample_rates, channels, bit_depths) =
                 FormatNegotiator::probe_supported_cached(&device, &id).unwrap_or_else(|_| {
                     (
                         default_rates.clone(),
@@ -209,7 +215,12 @@ impl WasapiDeviceManager {
                 is_default,
                 is_current,
                 sample_rates,
+                bit_depths,
                 channels,
+                backend: crate::audio::dto::AudioBackend::WasapiExclusive,
+                asio_driver_id: None,
+                native_dsd_supported: false,
+                dsd_rates: Vec::new(),
             });
         }
 
@@ -409,5 +420,51 @@ pub(crate) fn device_friendly_name(device: &IMMDevice) -> AudioResult<String> {
 
         let _ = PropVariantClear(&mut prop);
         Ok(name)
+    }
+}
+
+/// `PKEY_Device_EnumeratorName` (`{a45c254e-df1c-4efd-8020-67d146a850e0}, 24`).
+const PKEY_DEVICE_ENUMERATOR_NAME: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0xa45c_254e_df1c_4efd_8020_67d1_46a8_50e0),
+    pid: 24,
+};
+
+/// `PKEY_AudioEndpoint_FormFactor` (`{1da5d803-d492-4edd-8c23-e0c0ffee7f0e}, 0`).
+const PKEY_AUDIO_ENDPOINT_FORMFACTOR: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0x1da5_d803_d492_4edd_8c23_e0c0_ffee_7f0e),
+    pid: 0,
+};
+
+pub(crate) fn device_enumerator_name(device: &IMMDevice) -> Option<String> {
+    unsafe {
+        let store = device.OpenPropertyStore(STGM_READ).ok()?;
+        let mut prop = store.GetValue(&PKEY_DEVICE_ENUMERATOR_NAME).ok()?;
+        let name = {
+            let inner = &prop.Anonymous.Anonymous;
+            if inner.vt != VT_LPWSTR {
+                let _ = PropVariantClear(&mut prop);
+                return None;
+            }
+            inner.Anonymous.pwszVal.to_string().ok()
+        };
+        let _ = PropVariantClear(&mut prop);
+        name
+    }
+}
+
+pub(crate) fn device_form_factor(device: &IMMDevice) -> Option<u32> {
+    unsafe {
+        let store = device.OpenPropertyStore(STGM_READ).ok()?;
+        let mut prop = store.GetValue(&PKEY_AUDIO_ENDPOINT_FORMFACTOR).ok()?;
+        let value = {
+            let inner = &prop.Anonymous.Anonymous;
+            if inner.vt != VT_UI4 {
+                let _ = PropVariantClear(&mut prop);
+                return None;
+            }
+            Some(inner.Anonymous.ulVal)
+        };
+        let _ = PropVariantClear(&mut prop);
+        value
     }
 }

@@ -1,7 +1,7 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,13 +20,11 @@ const IDLE_WAIT: Duration = Duration::from_secs(3600);
 
 pub struct LibraryWatcher {
     watcher: RecommendedWatcher,
-    watch_tx: Sender<PathBuf>,
 }
 
 impl LibraryWatcher {
     pub fn new(db: Arc<Database>, app_handle: Option<AppHandle>) -> Result<Self, notify::Error> {
         let (tx, rx) = channel::<notify::Result<Event>>();
-        let (path_tx, _path_rx) = channel::<PathBuf>();
 
         let watcher = RecommendedWatcher::new(tx, Config::default())?;
 
@@ -42,16 +40,12 @@ impl LibraryWatcher {
             tracing::error!("Failed to spawn library watcher thread: {err}");
         }
 
-        Ok(Self {
-            watcher,
-            watch_tx: path_tx,
-        })
+        Ok(Self { watcher })
     }
 
     pub fn watch_path(&mut self, path: &Path) -> Result<(), notify::Error> {
         if path.exists() {
             self.watcher.watch(path, RecursiveMode::Recursive)?;
-            let _ = self.watch_tx.send(path.to_path_buf());
         }
         Ok(())
     }

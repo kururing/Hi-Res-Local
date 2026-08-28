@@ -8,9 +8,57 @@
 //! Also: queue, gapless preload, EQ, ReplayGain, crossfade, quality / engine status IPC.
 
 pub mod adapters;
+pub mod asio;
+#[cfg(windows)]
+mod asio_bridge_ffi {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct NgAsioInfo {
+        pub output_channels: i32,
+        pub bytes_per_channel: i32,
+        pub sample_type: i32,
+        pub sample_rate_hz: i32,
+    }
+
+    pub type NgAsioFillFn = unsafe extern "C" fn(
+        user: *mut c_void,
+        channel_buffers: *mut *mut c_void,
+        channel_count: i32,
+        bytes_per_channel: i32,
+    );
+    pub type NgAsioStatusFn = unsafe extern "C" fn(user: *mut c_void, code: i32);
+
+    unsafe extern "C" {
+        pub fn ng_asio_open_native(
+            driver_name: *const i8,
+            sample_rate_hz: f64,
+            requested_channels: i32,
+            fill: Option<NgAsioFillFn>,
+            status: Option<NgAsioStatusFn>,
+            user: *mut c_void,
+            out_info: *mut NgAsioInfo,
+            error: *mut i8,
+            error_capacity: i32,
+        ) -> *mut c_void;
+        pub fn ng_asio_probe_native(
+            driver_name: *const i8,
+            sample_rate_hz: f64,
+            sample_type: *mut i32,
+            error: *mut i8,
+            error_capacity: i32,
+        ) -> i32;
+        pub fn ng_asio_start(session: *mut c_void, error: *mut i8, error_capacity: i32) -> i32;
+        pub fn ng_asio_stop(session: *mut c_void, error: *mut i8, error_capacity: i32) -> i32;
+        pub fn ng_asio_close(session: *mut c_void);
+    }
+}
 mod control;
 pub mod decoder;
 pub mod device;
+pub mod dop;
+pub mod dsd;
 pub mod dsp;
 pub mod dto;
 pub mod engine;
@@ -36,9 +84,10 @@ pub use dsp::{
     soft_limit, BiquadFilter, CrossfadeProcessor, EqualizerProcessor, ReplayGainProcessor,
 };
 pub use dto::{
-    AudioDeviceDTO, AudioEvent, AudioTrack, CrossfadeConfig, CrossfadeCurve, EngineStatus, EqBand,
-    EqConfig, EqPreset, PlaybackProgress, PlaybackState, PlayerSnapshot, QualityBadge, RepeatMode,
-    ReplayGainConfig, ReplayGainInfo, ReplayGainMode, SystemAudioState,
+    AsioDriverDTO, AudioBackend, AudioDeviceDTO, AudioEvent, AudioTrack, CrossfadeConfig,
+    CrossfadeCurve, DsdOutputMode, DsdRate, EngineStatus, EqBand, EqConfig, EqPreset, PlaybackMode,
+    PlaybackProgress, PlaybackState, PlayerSnapshot, QualityBadge, RepeatMode, ReplayGainConfig,
+    ReplayGainInfo, ReplayGainMode, SystemAudioState, VolumeControlKind,
 };
 pub use error::{AudioError, AudioResult};
 pub use gapless::{GaplessController, LinearResampler, PreloadedTrack};

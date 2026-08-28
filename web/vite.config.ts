@@ -50,4 +50,25 @@ export default defineConfig({
   },
   clearScreen: false,
   envPrefix: ['VITE_', 'TAURI_'],
+  build: {
+    // The only chunk above Vite's 500 kB default is the lazily loaded
+    // any-ascii transliteration table; the startup bundles remain below 310 kB.
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('lucide-react')) return 'icons';
+          if (id.includes('react') || id.includes('scheduler')) return 'react-vendor';
+          if (id.includes('@tauri-apps')) return 'tauri-vendor';
+          if (id.includes('kuroshiro') || id.includes('kuromoji')) return 'japanese-romanizer';
+          if (id.includes('pinyin-pro')) return 'chinese-romanizer';
+          if (id.includes('hangul-romanization')) return 'korean-romanizer';
+          if (id.includes('wanakana')) return 'kana-tools';
+          if (id.includes('any-ascii')) return 'universal-romanizer';
+          return 'vendor';
+        },
+      },
+    },
+  },
 });

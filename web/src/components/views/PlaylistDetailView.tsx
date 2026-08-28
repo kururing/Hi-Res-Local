@@ -44,7 +44,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
   onOpenDetails,
 }) => {
   const { getPlaylistTracks, deletePlaylist, removeTrackFromPlaylist, reorderPlaylist, exportM3uFile } = usePlaylists();
-  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
+  const { playTrack, playQueue, playRandomQueue, status } = usePlayer();
   const { albums, artists } = useLibrary();
   const { toggleFavoriteTrack, favoriteTrackIds } = useLibrary();
   const { settings } = useSettings();
@@ -140,7 +140,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
               variant="accent"
               size="md"
               icon={<Play className="w-4 h-4 fill-current" />}
-              onClick={() => playlistTracks.length > 0 && playQueue(playlistTracks, 0)}
+              onClick={() => playlistTracks.length > 0 && playQueue(playlistTracks, 0, playlist.id)}
             >
             {t('detail_play', settings.language)}
             </Button>
@@ -148,10 +148,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
               variant="secondary"
               size="md"
               icon={<Shuffle className="w-4 h-4" />}
-              onClick={() => {
-                if (!status.shuffle) void toggleShuffle();
-                playQueue(playlistTracks, 0);
-              }}
+              onClick={() => void playRandomQueue(playlistTracks, playlist.id)}
             >
               {t('detail_shuffle', settings.language)}
             </Button>
@@ -195,7 +192,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
             return (
               <div
                 onContextMenu={e => handleContextMenu(e, tr)}
-                onDoubleClick={() => playTrack(tr, playlistTracks)}
+                onDoubleClick={() => playTrack(tr, playlistTracks, playlist.id)}
                 className={`tracks-table-grid grid gap-3 px-4 h-full text-xs items-center group cursor-pointer select-none ${
                   isPlaying ? 'bg-brand-accent/10 text-brand-accent font-medium' : 'hover:bg-oled-hover text-brand-foreground'
                 }`}
@@ -204,12 +201,12 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({
                   <TrackPlayArtwork
                     track={tr}
                     isPlaying={isPlaying}
-                    onPlay={() => playTrack(tr, playlistTracks)}
+                    onPlay={() => playTrack(tr, playlistTracks, playlist.id)}
                   />
                 </div>
 
                 <div className="min-w-0 pr-2">
-                  <span className="min-w-0 truncate font-semibold group-hover:text-brand-accent">
+                  <span className="block min-w-0 max-w-full truncate font-semibold group-hover:text-brand-accent" title={tr.title}>
                     {tr.title}
                   </span>
                 </div>

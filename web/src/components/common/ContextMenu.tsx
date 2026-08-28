@@ -193,10 +193,10 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
           <button
             type="button"
             onClick={() => void handleCreatePlaylist()}
-            className="mx-1 flex items-center gap-2.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-left font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/25 hover:text-emerald-200"
+            className="mx-1 flex min-w-0 items-center gap-2.5 whitespace-nowrap rounded-lg bg-emerald-500/15 px-3 py-2 text-left font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/25 hover:text-emerald-200"
           >
             <Plus className="h-4 w-4" aria-hidden="true" />
-            <span>{t('menu_create_playlist', settings.language)}</span>
+            <span className="min-w-0 truncate">{t('menu_create_playlist', settings.language)}</span>
           </button>
           <div className="my-1 h-px bg-brand-border/60" />
           {playlists.filter(p => !p.is_smart).length === 0 ? (

@@ -35,7 +35,7 @@ export const GenresView: React.FC<GenresViewProps> = ({ onNavigate }) => {
             role="button"
             tabIndex={0}
             aria-label={`Open genre ${genre.name}`}
-            className={`group p-5 rounded-2xl bg-gradient-to-br ${genre.color_gradient} border border-brand-border/70 hover:border-brand-accent cursor-pointer transition-all duration-300 transform hover:-translate-y-1 hover:shadow-card-elevated flex flex-col justify-between h-36 relative overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent`}
+            className={`group min-w-0 p-5 rounded-2xl bg-gradient-to-br ${genre.color_gradient} border border-brand-border/70 hover:border-brand-accent cursor-pointer transition-all duration-300 transform hover:-translate-y-1 hover:shadow-card-elevated flex flex-col justify-between h-36 relative overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent`}
           >
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-white/80 uppercase tracking-wider">
@@ -45,7 +45,7 @@ export const GenresView: React.FC<GenresViewProps> = ({ onNavigate }) => {
             </div>
 
             <div>
-              <h3 className="text-lg sm:text-xl font-bold text-white font-display truncate">
+              <h3 className="block min-w-0 max-w-full truncate text-lg sm:text-xl font-bold text-white font-display" title={genre.name}>
                 {genre.name}
               </h3>
               <span className="text-xs text-white/80 font-mono">

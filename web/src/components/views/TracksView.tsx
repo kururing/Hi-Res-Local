@@ -63,11 +63,11 @@ const TrackRow = React.memo(function TrackRow({
         <TrackPlayArtwork track={tr} isPlaying={isPlaying} onPlay={() => onPlay(tr)} />
       </div>
 
-      <div className="flex flex-col min-w-0 pr-2">
-        <span className="font-semibold truncate group-hover:text-brand-accent">
+      <div className="flex min-w-0 flex-col pr-2">
+        <span className="block min-w-0 max-w-full truncate font-semibold group-hover:text-brand-accent" title={tr.title}>
           {tr.title}
         </span>
-        <span className="sm:hidden mt-0.5 text-xs text-brand-muted truncate">
+        <span className="sm:hidden mt-0.5 block min-w-0 max-w-full truncate text-xs text-brand-muted" title={tr.artist}>
           {tr.artist}
         </span>
       </div>
@@ -144,7 +144,7 @@ interface TracksViewProps {
 
 export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetails }) => {
   const { tracks, albums, artists, toggleFavoriteTrack, favoriteTrackIds, scanDirectory } = useLibrary();
-  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
+  const { playTrack, playQueue, playRandomQueue, status } = usePlayer();
   const { settings } = useSettings();
 
   const [sortKey, setSortKey] = useState<SortKey>('date_added');
@@ -273,10 +273,7 @@ export const TracksView: React.FC<TracksViewProps> = ({ onNavigate, onOpenDetail
               variant="secondary"
               size="md"
               icon={<Shuffle className="w-4 h-4" />}
-              onClick={() => {
-                if (!status.shuffle) void toggleShuffle();
-                playQueue(sortedTracks, 0);
-              }}
+              onClick={() => void playRandomQueue(sortedTracks)}
             >
               {t('tracks_shuffle_all', settings.language)}
             </Button>

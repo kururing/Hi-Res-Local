@@ -5,8 +5,9 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::audio::adapters::ExclusiveAudioAdapter;
 use crate::audio::dto::{
-    AudioDeviceDTO, AudioTrack, CrossfadeConfig, CrossfadeCurve, EqConfig, EqPreset,
-    PlayerSnapshot, RepeatMode, ReplayGainConfig, ReplayGainMode, SystemAudioState,
+    AsioDriverDTO, AudioBackend, AudioDeviceDTO, AudioTrack, CrossfadeConfig, CrossfadeCurve,
+    DsdOutputMode, DsdRate, EngineStatus, EqConfig, EqPreset, PlaybackMode, PlayerSnapshot,
+    RepeatMode, ReplayGainConfig, ReplayGainMode, SystemAudioState,
 };
 use crate::db::queries_tracks::{
     get_track_by_id as db_get_track_by_id, get_tracks_summary as db_get_tracks_summary,
@@ -78,6 +79,45 @@ pub struct AudioCapabilitiesDTO {
     pub gapless_supported: bool,
     pub replay_gain_supported: bool,
     pub equalizer_supported: bool,
+    pub asio_supported: bool,
+    pub native_dsd_supported: bool,
+    pub dsd_rates: Vec<DsdRate>,
+    pub dop_supported: bool,
+    pub dop_rates: Vec<DsdRate>,
+    pub asio_drivers_present: bool,
+}
+
+/// Combine probed hardware facts into the capability DTO the UI gates on.
+/// ASIO / Native DSD never follow `SDK_AVAILABLE` alone — empty driver lists
+/// disable those options even when the SDK was compiled in.
+pub fn build_audio_capabilities(
+    exclusive_mode_supported: bool,
+    drivers: &[AsioDriverDTO],
+    dop_rates: Vec<DsdRate>,
+) -> AudioCapabilitiesDTO {
+    let mut dsd_rates = Vec::new();
+    for driver in drivers {
+        for rate in &driver.dsd_rates {
+            if !dsd_rates.contains(rate) {
+                dsd_rates.push(*rate);
+            }
+        }
+    }
+    let asio_drivers_present = !drivers.is_empty();
+    let native_dsd_supported = drivers.iter().any(|driver| driver.native_dsd_supported);
+    AudioCapabilitiesDTO {
+        exclusive_mode_supported,
+        media_controls_supported: false,
+        gapless_supported: true,
+        replay_gain_supported: true,
+        equalizer_supported: true,
+        asio_supported: asio_drivers_present,
+        native_dsd_supported,
+        dsd_rates,
+        dop_supported: !dop_rates.is_empty(),
+        dop_rates,
+        asio_drivers_present,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,6 +358,66 @@ pub async fn set_bit_perfect(enabled: bool, state: State<'_, AppState>) -> Resul
 }
 
 #[tauri::command]
+pub async fn get_asio_drivers() -> Result<Vec<AsioDriverDTO>, String> {
+    Ok(crate::audio::asio::drivers_snapshot())
+}
+
+#[tauri::command]
+pub async fn apply_playback_mode(
+    mode: PlaybackMode,
+    device_id: Option<String>,
+    backend: Option<AudioBackend>,
+    dsd_transport: Option<DsdOutputMode>,
+    asio_driver_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<EngineStatus, String> {
+    state
+        .player
+        .apply_playback_mode(mode, device_id, backend, dsd_transport, asio_driver_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_audio_backend(
+    backend: AudioBackend,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    match backend {
+        AudioBackend::Shared => state
+            .player
+            .set_exclusive_mode(false)
+            .map_err(|e| e.to_string()),
+        AudioBackend::WasapiExclusive => state
+            .player
+            .set_exclusive_mode(true)
+            .map_err(|e| e.to_string()),
+        AudioBackend::Asio => state
+            .player
+            .apply_playback_mode(
+                PlaybackMode::Advanced,
+                None,
+                Some(AudioBackend::Asio),
+                Some(DsdOutputMode::NativeDsd),
+                None,
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn set_dsd_output_mode(
+    mode: DsdOutputMode,
+    asio_driver_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .player
+        .set_dsd_output_mode_with_driver(mode, asio_driver_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn set_exclusive_mode(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
     // Keep the adapter flag in sync for capability/legacy readers, but Exclusive
     // I/O is owned exclusively by the Player / WASAPI control plane.
@@ -335,26 +435,35 @@ pub async fn set_exclusive_mode(enabled: bool, state: State<'_, AppState>) -> Re
 pub async fn get_audio_capabilities(
     state: State<'_, AppState>,
 ) -> Result<AudioCapabilitiesDTO, String> {
+    let drivers = crate::audio::asio::drivers_snapshot();
     #[cfg(windows)]
-    let excl = {
+    let (exclusive_mode_supported, dop_rates) = {
         use crate::audio::wasapi::{FormatNegotiator, WasapiDeviceManager};
-        let _ = &state;
-        let mgr = WasapiDeviceManager::new();
-        match mgr.get_active_device() {
-            Ok(device) => FormatNegotiator::exclusive_supported(&device),
-            Err(_) => false,
+        let mut manager = WasapiDeviceManager::new();
+        if let Some(id) = state.player.current_output_device_id() {
+            manager.select_device(Some(id));
+        }
+        match manager.get_active_device() {
+            Ok(device) => (
+                FormatNegotiator::exclusive_supported(&device),
+                FormatNegotiator::probe_dop_rates(&device),
+            ),
+            Err(_) => (false, Vec::new()),
         }
     };
     #[cfg(not(windows))]
-    let excl = crate::sync_util::recover_mutex(&state.exclusive_adapter).is_supported();
-    let smtc = false; // Fallback adapter reports honest capability (no fake SMTC)
-    Ok(AudioCapabilitiesDTO {
-        exclusive_mode_supported: excl,
-        media_controls_supported: smtc,
-        gapless_supported: true,
-        replay_gain_supported: true,
-        equalizer_supported: true,
-    })
+    let (exclusive_mode_supported, dop_rates) = {
+        let _ = &state;
+        (
+            crate::sync_util::recover_mutex(&state.exclusive_adapter).is_supported(),
+            Vec::new(),
+        )
+    };
+    Ok(build_audio_capabilities(
+        exclusive_mode_supported,
+        &drivers,
+        dop_rates,
+    ))
 }
 
 // ---------------- DSP Settings ----------------
@@ -534,7 +643,7 @@ pub async fn open_files_dialog() -> Result<Option<Vec<String>>, String> {
         .add_filter(
             "Audio Files",
             &[
-                "mp3", "flac", "wav", "ogg", "m4a", "aac", "alac", "opus", "aiff",
+                "mp3", "flac", "wav", "ogg", "m4a", "aac", "alac", "opus", "aiff", "dsf", "dff",
             ],
         )
         .pick_files();
@@ -701,4 +810,38 @@ pub async fn scan_directory(
 
     let conn = state.db.lock();
     db_get_tracks_summary(&conn, None).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_without_asio_drivers_disable_native_dsd() {
+        let caps = build_audio_capabilities(true, &[], vec![DsdRate::Dsd64]);
+        assert!(caps.exclusive_mode_supported);
+        assert!(!caps.asio_supported);
+        assert!(!caps.asio_drivers_present);
+        assert!(!caps.native_dsd_supported);
+        assert!(caps.dsd_rates.is_empty());
+        assert!(caps.dop_supported);
+        assert_eq!(caps.dop_rates, vec![DsdRate::Dsd64]);
+    }
+
+    #[test]
+    fn capabilities_with_probed_asio_driver_expose_real_rates() {
+        let drivers = vec![AsioDriverDTO {
+            id: "driver-1".into(),
+            name: "Test DAC".into(),
+            native_dsd_supported: true,
+            dsd_rates: vec![DsdRate::Dsd64, DsdRate::Dsd128],
+        }];
+        let caps = build_audio_capabilities(true, &drivers, Vec::new());
+        assert!(caps.asio_supported);
+        assert!(caps.asio_drivers_present);
+        assert!(caps.native_dsd_supported);
+        assert_eq!(caps.dsd_rates, vec![DsdRate::Dsd64, DsdRate::Dsd128]);
+        assert!(!caps.dop_supported);
+        assert!(caps.dop_rates.is_empty());
+    }
 }

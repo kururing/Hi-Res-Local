@@ -33,7 +33,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
     toggleFavoriteTrack,
   } = useLibrary();
 
-  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
+  const { playTrack, playQueue, playRandomQueue, status } = usePlayer();
   const { settings } = useSettings();
   const [activeTab, setActiveTab] = useState<FavTab>('tracks');
 
@@ -77,10 +77,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
               variant="secondary"
               size="md"
               icon={<Shuffle className="w-4 h-4" />}
-              onClick={() => {
-                if (!status.shuffle) void toggleShuffle();
-                playQueue(favTracks, 0);
-              }}
+              onClick={() => void playRandomQueue(favTracks)}
             >
               {t('tracks_shuffle_all', settings.language)}
             </Button>
@@ -157,7 +154,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                       />
                     </div>
 
-                    <div className="min-w-0 truncate font-semibold">{tr.title}</div>
+                    <div className="min-w-0 max-w-full truncate font-semibold" title={tr.title}>{tr.title}</div>
 
                     <div className="hidden min-w-0 sm:block truncate text-brand-muted">
                       <button type="button" className="max-w-full truncate text-left hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}>{tr.artist}</button>
@@ -213,15 +210,15 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                 role="button"
                 tabIndex={0}
                 aria-label={t('home_open_album', settings.language, { name: al.name, artist: al.artist })}
-                className="group p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                className="group min-w-0 p-3.5 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               >
                 <div className="relative aspect-square rounded-xl bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border/60 mb-3 flex items-center justify-center overflow-hidden">
                   <Disc className="w-14 h-14 text-brand-accent/40" />
                 </div>
-                <span className="font-semibold text-xs text-brand-foreground truncate">
+                <span className="block min-w-0 max-w-full truncate font-semibold text-xs text-brand-foreground" title={al.name}>
                   {al.name}
                 </span>
-                <span className="text-xs text-brand-muted truncate">{al.artist}</span>
+                <span className="block min-w-0 max-w-full truncate text-xs text-brand-muted" title={al.artist}>{al.artist}</span>
               </div>
             ))
           )}
@@ -243,12 +240,12 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                 role="button"
                 tabIndex={0}
                 aria-label={t('favorite_artist_open', settings.language, { name: ar.name })}
-                className="group p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                className="group min-w-0 p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               >
                 <div className="relative w-24 h-24 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border border-brand-border mb-3 flex items-center justify-center">
                   <User className="w-10 h-10 text-brand-accent/60" />
                 </div>
-                <span className="font-semibold text-xs text-brand-foreground truncate w-full">
+                <span className="block min-w-0 w-full max-w-full truncate font-semibold text-xs text-brand-foreground" title={ar.name}>
                   {ar.name}
                 </span>
                 <span className="text-[11px] text-brand-muted mt-0.5">

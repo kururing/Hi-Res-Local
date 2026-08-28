@@ -1,17 +1,17 @@
 # Nghe Nhạc Pro Max 🎵
 
-Trình phát nhạc desktop hiệu năng cao, ưu tiên dữ liệu cục bộ và chất lượng âm thanh. Ứng dụng được xây dựng bằng **Tauri 2**, **Rust**, **React 19**, **TypeScript** và **Tailwind CSS**.
+Trình phát nhạc desktop local-first dành cho thư viện nhạc cá nhân, tập trung vào chất lượng âm thanh và khả năng kiểm soát đường xuất trên Windows. Ứng dụng được xây dựng bằng **Tauri 2**, **Rust**, **React 19**, **TypeScript** và **Tailwind CSS**.
 
 ## Tính năng chính
 
 ### Phát nhạc chất lượng cao
 
 - Giải mã âm thanh native bằng FFmpeg; trên Windows phát qua **WASAPI Shared**, **WASAPI Exclusive (bit-perfect)** hoặc **ASIO** (Native DSD).
-- Hỗ trợ các định dạng: MP3, FLAC, WAV, OGG, AAC, ALAC, M4A, AIFF, OPUS, WMA, APE, MPC, DSF và DFF.
+- Hỗ trợ các định dạng: MP3, FLAC, WAV, OGG/OGA, AAC, ALAC, M4A, AIFF/AIF, OPUS, WMA, APE, MPC, MKA, DSF và DFF.
 - DSF raw, DFF raw DSD và DFF chứa DST được nhận diện với metadata kỹ thuật riêng; DFF/DST được giải mã qua decoder DSD/DST của FFmpeg khi chọn DSD → PCM.
 - Bốn **chế độ phát nhạc**: Tự động, Chất lượng cao (WASAPI Exclusive bit-perfect), Đa nhiệm (WASAPI Shared), và Nâng cao (tùy chọn backend/DSD thủ công).
 - Chọn thiết bị đầu ra âm thanh; chuyển nhanh thiết bị và chế độ phát từ thanh trình phát.
-- Phát liền mạch (gapless), chuyển bài crossfade và hàng đợi phát.
+- Phát liền mạch (gapless), chuyển bài crossfade, hàng đợi phát và ghi nhận thời lượng nghe thực tế vào lịch sử.
 - Equalizer đồ họa 10 băng tần với preset và cấu hình tùy chỉnh.
 - ReplayGain theo track/album, preamp và chống clipping.
 - Các chế độ phát tuần tự, lặp lại và phát ngẫu nhiên.
@@ -27,7 +27,7 @@ Trình phát nhạc desktop hiệu năng cao, ưu tiên dữ liệu cục bộ v
 - Phát hiện bài trùng lặp khi quét thư viện (backend gán nhóm trùng lặp theo tiêu đề/nghệ sĩ).
 - Yêu thích bài hát, album và nghệ sĩ.
 - Lịch sử nghe nhạc.
-- Playlist thường, smart playlist và nhập/xuất M3U.
+- Playlist thường, smart playlist, phát ngẫu nhiên theo ngữ cảnh và nhập/xuất M3U.
 - Lưu dữ liệu thư viện trong SQLite với migration tự động.
 - Xuất/khôi phục bản sao lưu JSON (cài đặt, yêu thích, playlist, lịch sử, preset EQ).
 
@@ -49,7 +49,7 @@ Trình phát nhạc desktop hiệu năng cao, ưu tiên dữ liệu cục bộ v
 
 ### DSD, DoP và ASIO
 
-- Ba chế độ DSD trong **Nâng cao**: `Native DSD` (ASIO), `DoP` (WASAPI Exclusive) và `DSD → PCM`; PCM là lựa chọn thủ công, không phải fallback tự động.
+- Ba đường phát DSD trong **Nâng cao**: `Native DSD` (ASIO), `DoP` (WASAPI Exclusive) và `DSD → PCM`; PCM là lựa chọn thủ công, không phải fallback ngầm khi Native DSD hoặc DoP thất bại.
 - Chế độ Tự động / Chất lượng cao / Đa nhiệm luôn dùng DSD → PCM an toàn; chỉ chế độ Nâng cao mở toàn bộ tùy chọn DSD.
 - Native DSD chỉ dành cho Windows. Cầu nối ASIO GPLv3 được biên dịch từ SDK đã được cung cấp trong `src-tauri/vendor/asio-sdk`; ASIO driver tương thích của DAC phải được cài riêng. Ứng dụng không đóng gói driver DAC.
 - DoP yêu cầu WASAPI Exclusive và thiết bị/DAC hỗ trợ mức DSD tương ứng; EQ, ReplayGain và crossfade bị tắt tạm thời.
@@ -93,6 +93,7 @@ nghenhacpromax/
 │   │   └── types/       # Kiểu dữ liệu TypeScript
 │   └── package.json
 ├── scripts/             # Script chạy Tauri và chuẩn bị FFmpeg trên Windows
+├── LICENSE              # GNU General Public License v3.0
 ├── package.json         # Lệnh phát triển ở thư mục gốc
 └── README.md
 ```
@@ -107,16 +108,19 @@ nghenhacpromax/
 Native DSD/ASIO hiện chỉ được build và sử dụng trên Windows. DAC cần có ASIO
 driver riêng do nhà sản xuất cung cấp; driver không được phân phối cùng ứng dụng.
 
-Trên Windows, dự án cần FFmpeg shared build trong `src-tauri/vendor/ffmpeg`. Repository hiện đã có cấu trúc vendor; nếu thiếu các thư mục `include`, `lib` hoặc `bin`, chạy:
+Trên Windows, dự án cần FFmpeg 9 shared build trong `src-tauri/vendor/ffmpeg`. Các thư mục nhị phân `include`, `lib` và `bin` không được commit; chạy script sau để tải đúng bản GPL shared mà dự án đang dùng:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg-windows.ps1
 ```
 
 SDK Steinberg ASIO được đặt trong `src-tauri/vendor/asio-sdk/ASIOSDK` và được
-biên dịch cùng cầu nối Native DSD khi build Windows. Nếu thư mục SDK chưa có,
-giải nén gói `src-tauri/vendor/asio-sdk.zip` vào `src-tauri/vendor/asio-sdk/`.
-Không cần cài ASIO SDK toàn hệ thống.
+biên dịch cùng cầu nối Native DSD khi build Windows. Mã nguồn SDK cần thiết được
+vendor trực tiếp trong repository; file ZIP tải về không được commit. Nếu thư mục
+SDK bị thiếu, khôi phục từ repository hoặc tải ASIO SDK từ trang nhà phát triển
+[chính thức của Steinberg](https://www.steinberg.net/developers/) rồi đặt đúng
+cấu trúc trên. Không cần cài ASIO SDK toàn hệ thống và dự án không phân phối
+driver ASIO của DAC.
 
 ## Cài đặt
 
@@ -166,8 +170,8 @@ Backend Rust:
 ```bash
 cd src-tauri
 cargo fmt --check
-cargo check
 cargo test
+cargo clippy --all-targets -- -D warnings
 ```
 
 Các test cần FFmpeg shared build và một số test âm thanh/ASIO chỉ có thể chạy
@@ -196,10 +200,13 @@ Bật **Hiển thị hoạt động trên Discord** trong phần cài đặt c�
 
 ## License và dependency bên thứ ba
 
-- Mã nguồn ứng dụng chưa gắn một license riêng trong repository này.
-- Cầu nối Native DSD sử dụng Steinberg ASIO SDK theo lựa chọn cấp phép GPLv3;
-  thông báo và license đầy đủ nằm trong `src-tauri/vendor/asio-sdk/ASIOSDK`.
-- FFmpeg được cung cấp dưới dạng shared build trong `src-tauri/vendor/ffmpeg`;
-  xem license đi kèm bản build đó.
+- Nghe Nhạc Pro Max được phát hành theo **GNU General Public License v3.0 only
+  (GPL-3.0-only)**. Xem toàn văn tại [`LICENSE`](LICENSE).
+- Bản Windows hiện dùng FFmpeg 9 GPL shared được tải bởi
+  `scripts/fetch-ffmpeg-windows.ps1` và liên kết với ứng dụng khi build.
+- Cầu nối Native DSD biên dịch Steinberg ASIO SDK theo lựa chọn GPLv3; thông báo
+  và license của SDK nằm trong `src-tauri/vendor/asio-sdk/ASIOSDK`.
+- Các dependency và thành phần bên thứ ba vẫn giữ nguyên license, thông báo bản
+  quyền và điều khoản riêng của chúng.
 - Danh sách ghi chú bên thứ ba nằm trong
   [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

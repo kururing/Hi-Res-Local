@@ -29,7 +29,7 @@ export const GenreDetailView: React.FC<GenreDetailViewProps> = ({
   onOpenDetails,
 }) => {
   const { tracks, albums, artists } = useLibrary();
-  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
+  const { playTrack, playQueue, playRandomQueue, status } = usePlayer();
   const { settings } = useSettings();
 
   const genreTracks = React.useMemo(() => {
@@ -72,10 +72,7 @@ export const GenreDetailView: React.FC<GenreDetailViewProps> = ({
             variant="secondary"
             size="md"
             icon={<Shuffle className="w-4 h-4" />}
-            onClick={() => {
-              if (!status.shuffle) void toggleShuffle();
-              playQueue(genreTracks, 0);
-            }}
+            onClick={() => void playRandomQueue(genreTracks)}
           >
             Shuffle
           </Button>
@@ -102,7 +99,7 @@ export const GenreDetailView: React.FC<GenreDetailViewProps> = ({
                 />
               </div>
 
-              <div className="min-w-0 truncate font-semibold">{tr.title}</div>
+              <div className="min-w-0 max-w-full truncate font-semibold" title={tr.title}>{tr.title}</div>
 
               <div className="hidden min-w-0 sm:block truncate text-brand-muted">
                 <button type="button" className="max-w-full truncate text-left hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}>{tr.artist}</button>

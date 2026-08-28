@@ -3,6 +3,7 @@ name = "nghenhacpromax-tauri"
 version = "2.0.0"
 description = "Nghe Nhac Pro Max - Tauri 2 Local Music Player"
 edition = "2021"
+license = "GPL-3.0-only"
 
 [lib]
 name = "nghenhacpromax_lib"
@@ -10,6 +11,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cc = "1.2"
 
 [dependencies]
 # Tauri Framework
@@ -38,6 +40,7 @@ ffmpeg-next = { version = "9.0", default-features = false, features = [
 ] }
 cpal = "0.15"
 ringbuf = "0.4"
+dst-decoder = "0.1.2"
 
 # Search & Utilities
 fuzzy-matcher = "0.3"
@@ -47,7 +50,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
 directories = "5.0"
 regex = "1.10"
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 sha2 = "0.10"
 base64 = "0.22"
 unicode-normalization = "0.1"
@@ -80,6 +83,7 @@ tauri-plugin-autostart = "2.5.1"
 
 # WASAPI Exclusive output (Windows only). Features also documented in src/audio/wasapi/mod.rs.
 [target.'cfg(windows)'.dependencies]
+winreg = "0.55"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Media_Audio",

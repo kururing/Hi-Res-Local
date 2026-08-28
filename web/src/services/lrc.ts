@@ -60,6 +60,7 @@ export function normalizeLyricsData(raw: any): LyricData | null {
     lines,
     is_synced: raw.is_synced ?? lines.length > 0,
     plain_text: raw.plain_text,
+    source: String(raw.source ?? '').toLowerCase() === 'lrclib' ? 'lrclib' : 'local',
     romanized,
   };
 }

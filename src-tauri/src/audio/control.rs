@@ -121,6 +121,49 @@ mod imp {
             }
         }
 
+        /// Enable Exclusive if needed, then configure it for `source` in one
+        /// call. Lets per-track fallback plans (Auto/HighQuality) switch from
+        /// Shared to Exclusive without a separate mode toggle; on failure the
+        /// Shared plane is restored and the exclusive flag stays off.
+        pub fn enable_exclusive_for(
+            &self,
+            source: AudioFormat,
+            bit_perfect: bool,
+        ) -> AudioResult<ConfigureResult> {
+            if self.exclusive_enabled.load(Ordering::SeqCst) {
+                return self.configure_exclusive(source, bit_perfect);
+            }
+            self.shared.set_enabled(false)?;
+            if self.shared.is_active() {
+                let _ = self.shared.set_enabled(true);
+                return Err(AudioError::Playback(
+                    "Failed to stop Shared stream before Exclusive open".into(),
+                ));
+            }
+            match self.exclusive.configure_exclusive(source, bit_perfect) {
+                Ok(cfg) => {
+                    self.exclusive_enabled.store(true, Ordering::SeqCst);
+                    tracing::info!(
+                        target: "wasapi",
+                        endpoint = %cfg.device.id,
+                        bit_perfect,
+                        "exclusive mode enabled for track"
+                    );
+                    Ok(cfg)
+                }
+                Err(err) => {
+                    let _ = self.exclusive.disable();
+                    let _ = self.shared.set_enabled(true);
+                    self.exclusive_enabled.store(false, Ordering::SeqCst);
+                    Err(err)
+                }
+            }
+        }
+
+        pub fn exclusive_enabled(&self) -> bool {
+            self.exclusive_enabled.load(Ordering::SeqCst)
+        }
+
         pub fn configure_exclusive(
             &self,
             source: AudioFormat,
@@ -146,9 +189,43 @@ mod imp {
             }
         }
 
+        /// Stop every WASAPI stream before ASIO is opened. ASIO drivers often
+        /// claim the endpoint exclusively, so merely pausing the WASAPI path
+        /// is not sufficient.
+        pub fn disable_for_asio(&self) -> AudioResult<()> {
+            self.shared.set_enabled(false)?;
+            if self.shared.is_active() {
+                let _ = self.shared.set_enabled(true);
+                return Err(AudioError::Playback(
+                    "Failed to stop WASAPI Shared before ASIO open".into(),
+                ));
+            }
+            if self.exclusive_enabled.load(Ordering::SeqCst) {
+                self.exclusive.disable()?;
+                self.exclusive_enabled.store(false, Ordering::SeqCst);
+            }
+            if self.exclusive.is_active() {
+                let _ = self.shared.set_enabled(true);
+                return Err(AudioError::Playback(
+                    "Failed to stop WASAPI Exclusive before ASIO open".into(),
+                ));
+            }
+            Ok(())
+        }
+
+        /// Restore the normal Shared plane after an ASIO session closes.
+        pub fn restore_after_asio(&self) -> AudioResult<()> {
+            self.shared.set_enabled(true)?;
+            self.shared.ensure_stream()
+        }
+
         pub fn enumerate_devices(&self) -> AudioResult<Vec<AudioDeviceDTO>> {
             // Prefer WASAPI endpoint IDs as the stable device identity.
             self.exclusive.enumerate_devices()
+        }
+
+        pub fn selected_device_id(&self) -> Option<String> {
+            recover_mutex(&self.selected_device).clone()
         }
 
         pub fn endpoint_audio_state(&self) -> AudioResult<(f32, bool)> {

@@ -20,6 +20,7 @@ import { Button } from '../common/Button';
 import { t } from '../../i18n';
 import { activateOnKeyboard } from '../../services/keyboard';
 import { AlbumArtwork } from '../common/AlbumArtwork';
+import { PlaylistArtwork } from '../common/PlaylistArtwork';
 import { TrackArtwork } from '../common/TrackArtwork';
 
 function formatDurationSecs(totalSecs: number): string {
@@ -35,8 +36,8 @@ interface HomeViewProps {
 
 export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
   const { tracks, albums, artists, stats, scanDirectory } = useLibrary();
-  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
-  const { playlists } = usePlaylists();
+  const { playTrack, playQueue, playRandomQueue, status } = usePlayer();
+  const { playlists, getPlaylistTracks } = usePlaylists();
   const { settings } = useSettings();
 
   // Dynamic greeting based on time of day
@@ -86,11 +87,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
             variant="secondary"
             size="md"
             icon={<Shuffle className="w-4 h-4" />}
-            onClick={() => {
-              if (tracks.length === 0) return;
-              if (!status.shuffle) void toggleShuffle();
-              playQueue(tracks, 0);
-            }}
+            onClick={() => void playRandomQueue(tracks)}
             disabled={tracks.length === 0}
           >
             {t('tracks_shuffle_all', settings.language)}
@@ -178,10 +175,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
               <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-accent">
                 {t('home_continue_listening', settings.language)}
               </span>
-              <span className="text-base font-semibold text-brand-foreground truncate">
+              <span className="block min-w-0 max-w-full truncate text-base font-semibold text-brand-foreground" title={status.current_track.title}>
                 {status.current_track.title}
               </span>
-              <span className="text-xs text-brand-muted truncate">
+              <span className="block min-w-0 max-w-full truncate text-xs text-brand-muted" title={`${status.current_track.artist} • ${status.current_track.album}`}>
                 {status.current_track.artist} • {status.current_track.album}
               </span>
             </div>
@@ -231,13 +228,13 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                   iconClassName="w-5 h-5 text-brand-muted group-hover:text-brand-accent transition-colors"
                 />
                 <div className="flex flex-col min-w-0">
-                  <span className="text-xs font-semibold text-brand-foreground truncate group-hover:text-brand-accent transition-colors">
+                  <span className="block min-w-0 max-w-full truncate text-xs font-semibold text-brand-foreground group-hover:text-brand-accent transition-colors" title={tr.title}>
                     {tr.title}
                   </span>
                   <div className="flex min-w-0 items-center gap-1 text-[11px] text-brand-muted truncate">
-                    <button type="button" className="truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}>{tr.artist}</button>
+                    <button type="button" className="min-w-0 max-w-full truncate hover:text-brand-accent" title={tr.artist} onClick={e => { e.stopPropagation(); const target = artists.find(item => item.name === tr.artist); if (target) onNavigate('artist_detail', target); }}>{tr.artist}</button>
                     <span>•</span>
-                    <button type="button" className="truncate hover:text-brand-accent" onClick={e => { e.stopPropagation(); const target = albums.find(item => item.name === tr.album && item.artist === tr.artist); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
+                    <button type="button" className="min-w-0 max-w-full truncate hover:text-brand-accent" title={tr.album} onClick={e => { e.stopPropagation(); const target = albums.find(item => item.name === tr.album && item.artist === tr.artist); if (target) onNavigate('album_detail', target); }}>{tr.album}</button>
                   </div>
                 </div>
               </div>
@@ -266,7 +263,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           {albums.slice(0, 6).map(al => (
             <div
               key={al.id}
-              className="group relative p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col"
+              className="group relative min-w-0 p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col"
             >
               <button
                 type="button"
@@ -290,10 +287,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                   </button>
                 </div>
               </div>
-              <span className="text-xs font-semibold text-brand-foreground truncate group-hover:text-brand-accent transition-colors">
+              <span className="block min-w-0 max-w-full truncate text-xs font-semibold text-brand-foreground group-hover:text-brand-accent transition-colors" title={al.name}>
                 {al.name}
               </span>
-              <span className="text-[11px] text-brand-muted truncate">{al.artist}</span>
+              <span className="block min-w-0 max-w-full truncate text-[11px] text-brand-muted" title={al.artist}>{al.artist}</span>
             </div>
           ))}
         </div>
@@ -324,20 +321,30 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                 role="button"
                 tabIndex={0}
                 aria-label={t('home_open_playlist', settings.language, { name: pl.name })}
-                className="p-4 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col justify-between h-32 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                className="group flex h-32 cursor-pointer items-center gap-3 overflow-hidden rounded-xl border border-brand-border/60 bg-oled-card p-3 transition-all hover:border-brand-border hover:bg-oled-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
               >
-                <div>
+                <div className="h-24 w-24 shrink-0 overflow-hidden rounded-lg border border-brand-border/60 bg-brand-primary/80 shadow-sm">
+                  <PlaylistArtwork
+                    playlist={pl}
+                    tracks={getPlaylistTracks(pl)}
+                    className="motion-safe:transition-transform motion-safe:duration-200 group-hover:scale-105"
+                  />
+                </div>
+
+                <div className="flex h-full min-w-0 flex-1 flex-col justify-between py-1">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-semibold text-brand-foreground truncate">
+                    <span className="block min-w-0 max-w-full truncate text-xs font-semibold text-brand-foreground transition-colors group-hover:text-brand-accent" title={pl.name}>
                       {pl.name}
                     </span>
-                    {pl.is_smart && <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
+                    {pl.is_smart && <Sparkles className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />}
                   </div>
-                  <p className="text-[11px] text-brand-muted line-clamp-2">{pl.description}</p>
+                  <p className="line-clamp-2 text-[11px] leading-relaxed text-brand-muted">
+                    {pl.description || t('no_description', settings.language)}
+                  </p>
+                  <span className="mt-auto text-[10px] font-mono text-brand-muted">
+                    {t('home_playlist_track_count', settings.language, { count: pl.track_ids.length })}
+                  </span>
                 </div>
-                <span className="text-[10px] text-brand-muted font-mono">
-                  {t('home_playlist_track_count', settings.language, { count: pl.track_ids.length })}
-                </span>
               </div>
             ))}
           </div>

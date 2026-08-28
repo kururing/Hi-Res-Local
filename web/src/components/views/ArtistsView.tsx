@@ -44,7 +44,7 @@ export const ArtistsView: React.FC<ArtistsViewProps> = ({ onNavigate }) => {
               role="button"
               tabIndex={0}
               aria-label={t('favorite_artist_open', settings.language, { name: artist.name })}
-              className="group p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center shadow-card-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+              className="group min-w-0 p-4 rounded-2xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex flex-col items-center text-center shadow-card-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
             >
               {/* Circle Avatar */}
               <div className="relative w-28 h-28 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border-2 border-brand-border/80 mb-3 flex items-center justify-center overflow-hidden group-hover:scale-105 group-hover:border-brand-accent transition-all duration-300 shadow-md">
@@ -52,7 +52,7 @@ export const ArtistsView: React.FC<ArtistsViewProps> = ({ onNavigate }) => {
               </div>
 
               {/* Name & Counts */}
-              <span className="font-semibold text-sm text-brand-foreground truncate w-full group-hover:text-brand-accent transition-colors">
+              <span className="block min-w-0 w-full max-w-full truncate font-semibold text-sm text-brand-foreground group-hover:text-brand-accent transition-colors" title={artist.name}>
                 {artist.name}
               </span>
               <span className="text-xs text-brand-muted mt-1 font-mono">

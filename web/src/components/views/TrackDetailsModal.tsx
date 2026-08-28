@@ -42,8 +42,8 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
             <FileAudio className="w-6 h-6" />
           </div>
           <div className="flex flex-col min-w-0">
-            <span className="font-bold text-base text-brand-foreground truncate">{track.title}</span>
-            <span className="text-xs text-brand-muted truncate">
+            <span className="block min-w-0 max-w-full truncate font-bold text-base text-brand-foreground" title={track.title}>{track.title}</span>
+            <span className="block min-w-0 max-w-full truncate text-xs text-brand-muted" title={`${track.artist} • ${track.album}`}>
               {track.artist} • {track.album}
             </span>
           </div>

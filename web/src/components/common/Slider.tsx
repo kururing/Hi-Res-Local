@@ -6,6 +6,7 @@ interface SliderProps {
   max: number;
   step?: number;
   onChange: (value: number) => void;
+  onChangeEnd?: (value: number) => void;
   ariaLabel?: string;
   className?: string;
   showTooltip?: boolean;
@@ -20,6 +21,7 @@ export const Slider: React.FC<SliderProps> = ({
   max,
   step = 1,
   onChange,
+  onChangeEnd,
   ariaLabel = 'Seek Slider',
   className = '',
   compact = false,
@@ -36,22 +38,51 @@ export const Slider: React.FC<SliderProps> = ({
       const ratio = rect.width > 0 ? offsetX / rect.width : 0;
       const rawVal = min + ratio * (max - min);
       const steppedVal = Math.round(rawVal / step) * step;
-      onChange(Math.min(max, Math.max(min, steppedVal)));
+      return Math.min(max, Math.max(min, steppedVal));
     };
 
-    calculateValue(e.clientX);
+    let latestValue = calculateValue(e.clientX);
+    let lastEmittedValue = latestValue;
+    let animationFrame: number | null = null;
+    onChange(latestValue);
 
     const onPointerMove = (moveEvt: PointerEvent) => {
-      calculateValue(moveEvt.clientX);
+      latestValue = calculateValue(moveEvt.clientX);
+      if (animationFrame !== null) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        lastEmittedValue = latestValue;
+        onChange(latestValue);
+      });
+    };
+
+    const removePointerListeners = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
     };
 
     const onPointerUp = () => {
-      window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointerup', onPointerUp);
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+        animationFrame = null;
+      }
+      if (latestValue !== lastEmittedValue) onChange(latestValue);
+      onChangeEnd?.(latestValue);
+      removePointerListeners();
+    };
+
+    const onPointerCancel = () => {
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+        animationFrame = null;
+      }
+      removePointerListeners();
     };
 
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -86,17 +117,17 @@ export const Slider: React.FC<SliderProps> = ({
       className={`group relative ${compact ? 'min-h-9' : 'min-h-[44px]'} flex items-center ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'} touch-none select-none rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/70 ${className}`}
     >
       {/* Background Track */}
-      <div className="w-full h-1.5 bg-oled-base/80 border border-brand-border/50 rounded-full relative overflow-hidden transition-all duration-150 group-hover:h-2">
+      <div className="w-full h-1.5 bg-oled-base/80 border border-brand-border/50 rounded-full relative overflow-hidden transition-[height,background-color,border-color] duration-150 group-hover:h-2">
         {/* Filled Progress */}
         <div
-          className="absolute left-0 top-0 bottom-0 bg-brand-accent rounded-full transition-[width] duration-75 group-hover:bg-brand-accentHover"
+          className="absolute left-0 top-0 bottom-0 bg-brand-accent rounded-full transition-colors duration-150 group-hover:bg-brand-accentHover"
           style={{ width: `${percentage}%` }}
         />
       </div>
 
       {/* Thumb Handle */}
       <div
-        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-brand-accent rounded-full shadow-glow-accent opacity-0 scale-75 group-hover:opacity-100 group-hover:scale-110 group-focus-visible:opacity-100 group-focus-visible:scale-125 transition-all duration-150 pointer-events-none"
+        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-brand-accent rounded-full shadow-glow-accent opacity-0 scale-75 group-hover:opacity-100 group-hover:scale-110 group-focus-visible:opacity-100 group-focus-visible:scale-125 transition-[opacity,transform,background-color,box-shadow] duration-150 pointer-events-none"
         style={{ left: `${percentage}%` }}
       />
     </div>

@@ -2,6 +2,11 @@ import { Track } from './library';
 
 export type PlaybackState = 'stopped' | 'playing' | 'paused' | 'loading';
 export type LoopMode = 'off' | 'track' | 'playlist';
+export type PlaybackMode = 'auto' | 'high_quality' | 'multitask' | 'advanced';
+export type DsdOutputMode = 'native_dsd' | 'dop' | 'pcm';
+export type AudioBackend = 'shared' | 'wasapi_exclusive' | 'asio';
+export type DsdRate = 'dsd64' | 'dsd128' | 'dsd256' | 'dsd512';
+export type VolumeControlKind = 'windows_endpoint' | 'software';
 
 export interface PlaybackStatus {
   state: PlaybackState;
@@ -19,6 +24,19 @@ export interface AudioOutputDevice {
   name: string;
   is_default: boolean;
   sample_rates?: number[];
+  bit_depths?: number[];
+  channels?: number[];
+  backend?: AudioBackend;
+  asio_driver_id?: string | null;
+  native_dsd_supported?: boolean;
+  dsd_rates?: DsdRate[];
+}
+
+export interface AsioDriver {
+  id: string;
+  name: string;
+  native_dsd_supported: boolean;
+  dsd_rates: DsdRate[];
 }
 
 export interface AudioCapabilities {
@@ -27,6 +45,13 @@ export interface AudioCapabilities {
   gapless_supported: boolean;
   replay_gain_supported: boolean;
   equalizer_supported: boolean;
+  asio_supported: boolean;
+  native_dsd_supported: boolean;
+  /** Truly probed by the backend; may be empty when nothing can be verified. */
+  dsd_rates: DsdRate[];
+  dop_supported: boolean;
+  dop_rates: DsdRate[];
+  asio_drivers_present: boolean;
 }
 
 /** Live exclusive-engine status from the Rust WASAPI path. */
@@ -37,6 +62,23 @@ export interface EngineStatus {
   output_sample_rate: number;
   output_bit_depth: number;
   source_label: string;
+  backend?: AudioBackend;
+  dsd_output_mode?: DsdOutputMode;
+  dsd_rate?: DsdRate | null;
+  native_dsd_error?: string | null;
+  /** e.g. "DSD128" or "FLAC 24-bit / 96 kHz" */
+  source_format: string;
+  source_sample_rate: number;
+  /** 1 for DSD sources. */
+  source_bit_depth: number;
+  /** Set only when the current source is DSD. */
+  dsd_transport?: DsdOutputMode | null;
+  /** e.g. "PCM 24-bit / 352.8 kHz (DoP)", "DSD 5.6 MHz (Native)" */
+  output_format: string;
+  volume: number;
+  volume_control_kind: VolumeControlKind;
+  /** Set when Auto/HQ fell back from a better path. */
+  fallback_reason?: string | null;
 }
 
 export interface SystemAudioState {

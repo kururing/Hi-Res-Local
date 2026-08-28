@@ -37,7 +37,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
   onOpenDetails,
 }) => {
   const { toggleFavoriteTrack, favoriteTrackIds, toggleFavoriteAlbum, favoriteAlbumKeys } = useLibrary();
-  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
+  const { playTrack, playQueue, playRandomQueue, status } = usePlayer();
   const { settings } = useSettings();
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -140,10 +140,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
               variant="secondary"
               size="md"
               icon={<Shuffle className="w-4 h-4" />}
-              onClick={() => {
-                if (!status.shuffle) void toggleShuffle();
-                playQueue(album.tracks, 0);
-              }}
+              onClick={() => void playRandomQueue(album.tracks)}
             >
               {t('detail_shuffle', settings.language)}
             </Button>
@@ -200,17 +197,17 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                     </div>
 
                     <div className="min-w-0 pr-2">
-                      <span className="min-w-0 flex-1 truncate font-semibold group-hover:text-brand-accent transition-colors">
+                      <span className="block min-w-0 max-w-full truncate font-semibold group-hover:text-brand-accent transition-colors" title={tr.title}>
                         {tr.title}
                       </span>
                     </div>
 
                     <div className="hidden min-w-0 sm:block truncate text-brand-muted">
-                      <span title={album.artist}>{album.artist}</span>
+                      <span className="block min-w-0 max-w-full truncate" title={album.artist}>{album.artist}</span>
                     </div>
 
                     <div className="hidden min-w-0 md:block truncate text-brand-muted">
-                      <span title={album.name}>{album.name}</span>
+                      <span className="block min-w-0 max-w-full truncate" title={album.name}>{album.name}</span>
                     </div>
 
                     <div className="hidden min-w-0 min-[1180px]:flex items-center">

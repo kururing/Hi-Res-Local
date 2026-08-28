@@ -12,6 +12,7 @@ export const QueueDrawer: React.FC = () => {
   const {
     queue,
     queueIndex,
+    activePlaylistId,
     status,
     toggleShuffle,
     playQueue,
@@ -171,7 +172,7 @@ export const QueueDrawer: React.FC = () => {
                 >
                   <button
                     type="button"
-                    onClick={() => void playQueue(queue, originalIndex)}
+                    onClick={() => void playQueue(queue, originalIndex, activePlaylistId)}
                     className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer pr-2 text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                     aria-label={`Play ${track.title} by ${track.artist}`}
                   >
@@ -192,15 +193,16 @@ export const QueueDrawer: React.FC = () => {
                         </span>
                       )}
                     </div>
-                    <div className="flex flex-col min-w-0">
+                    <div className="flex min-w-0 max-w-full flex-col">
                       <span
-                        className={`text-sm font-medium truncate ${
+                        className={`block min-w-0 max-w-full truncate text-sm font-medium ${
                           isPlaying ? 'text-brand-accent' : 'text-brand-foreground'
                         }`}
+                        title={track.title}
                       >
                         {track.title}
                       </span>
-                      <span className="text-xs text-brand-muted truncate">{track.artist}</span>
+                      <span className="block min-w-0 max-w-full truncate text-xs text-brand-muted" title={track.artist}>{track.artist}</span>
                     </div>
                   </button>
                   <div className="flex shrink-0 items-center">

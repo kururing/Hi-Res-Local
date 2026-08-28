@@ -369,9 +369,9 @@ export const MOCK_PLAYLISTS: Playlist[] = [
 ];
 
 export const MOCK_OUTPUT_DEVICES: AudioOutputDevice[] = [
-  { id: 'default', name: 'Windows Default Audio Endpoint (WASAPI Shared)', is_default: true, sample_rates: [44100, 48000, 96000, 192000] },
-  { id: 'dac-usb', name: 'Topping DX3 Pro+ High-Res DAC (WASAPI Exclusive)', is_default: false, sample_rates: [44100, 48000, 88200, 96000, 176400, 192000, 384000, 768000] },
-  { id: 'headphones', name: 'Realtek High Definition Audio (Headphones)', is_default: false, sample_rates: [44100, 48000] },
+  { id: 'default', name: 'Windows Default Audio Endpoint (WASAPI Shared)', is_default: true, sample_rates: [44100, 48000, 96000, 192000], bit_depths: [16, 24, 32], channels: [2] },
+  { id: 'dac-usb', name: 'Topping DX3 Pro+ High-Res DAC (WASAPI Exclusive)', is_default: false, sample_rates: [44100, 48000, 88200, 96000, 176400, 192000, 384000, 768000], bit_depths: [16, 24, 32], channels: [2] },
+  { id: 'headphones', name: 'Realtek High Definition Audio (Headphones)', is_default: false, sample_rates: [44100, 48000], bit_depths: [16, 24], channels: [2] },
 ];
 
 export function getMockStats(tracks: Track[]): LibraryStats {

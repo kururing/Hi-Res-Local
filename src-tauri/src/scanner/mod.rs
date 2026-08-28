@@ -90,8 +90,7 @@ pub fn scan_library_roots(
             .collect()
     };
 
-    // Stream metadata extraction and SQLite writes in bounded batches. We retain
-    // one Track per file only because duplicate detection needs a library-wide view.
+    // Stream metadata extraction and SQLite writes in bounded batches.
     const SCAN_BATCH_SIZE: usize = 500;
     let mut tracks: Vec<Track> = Vec::with_capacity(total);
     let progress_counter = AtomicUsize::new(0);
@@ -126,28 +125,10 @@ pub fn scan_library_roots(
         }
     }
 
-    // Run duplicate detection across all tracks (reused + freshly extracted)
-    detect_and_assign_duplicates(&mut tracks);
-
-    // Batch upsert into database
+    // Finish database cleanup, then rebuild duplicate groups from the complete
+    // library rather than only the root(s) included in this scan.
     {
         let mut conn = db.lock();
-
-        // Update duplicate status for every track in one transaction.
-        {
-            let tx = conn.transaction()?;
-            for track in &tracks {
-                if let Err(err) = update_duplicate_status(
-                    &tx,
-                    &track.id,
-                    track.duplicate_group_id.as_deref(),
-                    track.is_primary,
-                ) {
-                    tracing::warn!("Failed to update duplicate status for {}: {err}", track.id);
-                }
-            }
-            tx.commit()?;
-        }
 
         // Clean up deleted files belonging to these roots. Entries left in
         // existing_by_path were not discovered by this scan.
@@ -165,6 +146,19 @@ pub fn scan_library_roots(
                 tracing::warn!("Failed to remove deleted tracks from library: {err}");
             }
         }
+
+        let mut library_tracks = get_tracks_summary(&conn, None)?;
+        detect_and_assign_duplicates(&mut library_tracks);
+        let tx = conn.transaction()?;
+        for track in &library_tracks {
+            update_duplicate_status(
+                &tx,
+                &track.id,
+                track.duplicate_group_id.as_deref(),
+                track.is_primary,
+            )?;
+        }
+        tx.commit()?;
 
         // Update last scanned timestamp for roots
         for root in roots {

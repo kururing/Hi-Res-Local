@@ -22,5 +22,6 @@ pub struct LyricsData {
 pub enum LyricsSource {
     Embedded,
     LrcFile,
+    Lrclib,
     None,
 }

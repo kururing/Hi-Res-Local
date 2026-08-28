@@ -2,6 +2,7 @@
   "name": "nghe-nhac-pro-max",
   "version": "2.0.0",
   "private": true,
+  "license": "GPL-3.0-only",
   "scripts": {
     "tauri": "node scripts/run-tauri.mjs",
     "tauri:dev": "node scripts/run-tauri.mjs dev",

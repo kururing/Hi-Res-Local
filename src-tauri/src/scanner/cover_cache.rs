@@ -156,6 +156,33 @@ pub fn extract_and_cache_cover(
     None
 }
 
+/// Cache an image extracted from a container-specific metadata block (for
+/// example ID3/APIC inside DSF or DSDIFF), then use the normal folder-art
+/// fallback when the embedded payload is absent or invalid.
+pub fn extract_and_cache_cover_bytes(data: Option<&[u8]>, audio_path: &Path) -> Option<String> {
+    if let Some(data) = data.filter(|bytes| !bytes.is_empty()) {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let hash = format!("{:x}", hasher.finalize());
+        let ext = image::guess_format(data)
+            .ok()
+            .and_then(|format| match format {
+                image::ImageFormat::Jpeg => Some("jpg"),
+                image::ImageFormat::Png => Some("png"),
+                image::ImageFormat::WebP => Some("webp"),
+                _ => None,
+            })
+            .unwrap_or("jpg");
+        if let Ok(cache_dir) = get_cover_cache_dir() {
+            let target = cache_dir.join(format!("{hash}.{ext}"));
+            if target.exists() || write_cover_resized(data, &target) {
+                return Some(target.to_string_lossy().to_string());
+            }
+        }
+    }
+    extract_and_cache_cover(None, audio_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

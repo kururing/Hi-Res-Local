@@ -1,3 +1,5 @@
+#![allow(clippy::chunks_exact_to_as_chunks)] // `as_chunks` is newer than the Rust 1.80 MSRV.
+
 use chrono::{DateTime, Utc};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
@@ -6,9 +8,10 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
+use crate::audio::dsd::probe_path;
 use crate::lyrics::lrc_parser::load_lyrics_for_track;
 use crate::models::track::Track;
-use crate::scanner::cover_cache::extract_and_cache_cover;
+use crate::scanner::cover_cache::{extract_and_cache_cover, extract_and_cache_cover_bytes};
 
 /// Generates a deterministic stable UUID string from normalized path.
 pub fn generate_track_id(path: &Path) -> String {
@@ -152,6 +155,18 @@ pub fn extract_metadata(path: &Path) -> Track {
     let (file_size, file_modified_at) = file_identity(path);
     let now_str = Utc::now().to_rfc3339();
 
+    if matches!(format.as_str(), "dsf" | "dff") {
+        return extract_dsd_metadata(
+            path,
+            id,
+            path_str,
+            format,
+            file_size,
+            file_modified_at,
+            now_str,
+        );
+    }
+
     let probe_res = Probe::open(path)
         .map_err(|e| e.to_string())
         .and_then(|p| p.read().map_err(|e| e.to_string()));
@@ -266,4 +281,289 @@ pub fn extract_metadata(path: &Path) -> Track {
         duplicate_group_id: None,
         is_primary: true,
     }
+}
+
+#[derive(Default)]
+struct DsdId3Tag {
+    title: Option<String>,
+    artist: Option<String>,
+    album_artist: Option<String>,
+    album: Option<String>,
+    genre: Option<String>,
+    year: Option<u32>,
+    track_number: Option<u32>,
+    disc_number: Option<u32>,
+    lyrics: Option<String>,
+    picture: Option<Vec<u8>>,
+}
+
+fn extract_dsd_metadata(
+    path: &Path,
+    id: String,
+    path_str: String,
+    format: String,
+    file_size: u64,
+    file_modified_at: String,
+    now_str: String,
+) -> Track {
+    let parsed = match probe_path(path) {
+        Ok(value) => value,
+        Err(err) => {
+            return corrupt_track(path, format!("Failed to parse DSD headers: {err}"));
+        }
+    };
+    let tag = parsed.id3.as_deref().map(parse_id3v2).unwrap_or_default();
+    let title = tag
+        .title
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| clean_filename_fallback(path));
+    let artist = tag
+        .artist
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| parent_name(path))
+        .unwrap_or_else(|| "Unknown Artist".into());
+    let album = tag
+        .album
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| parent_name(path))
+        .unwrap_or_else(|| "Unknown Album".into());
+    let lyrics_info = load_lyrics_for_track(tag.lyrics.as_deref(), path);
+    let (lyrics, has_synced_lyrics) = match lyrics_info {
+        Some(info) => (Some(info.plain_text), info.is_synced),
+        None => (tag.lyrics.clone(), false),
+    };
+    let cover_art_path = extract_and_cache_cover_bytes(tag.picture.as_deref(), path);
+
+    Track {
+        id,
+        path: path_str,
+        title,
+        artist,
+        album_artist: tag.album_artist,
+        album,
+        genre: tag.genre,
+        year: tag.year,
+        track_number: tag.track_number,
+        disc_number: tag.disc_number,
+        duration_ms: parsed.duration_ms,
+        bitrate: Some(
+            ((u64::from(parsed.dsd_sample_rate) * u64::from(parsed.channels)) / 1000)
+                .min(u64::from(u32::MAX)) as u32,
+        ),
+        sample_rate: Some(parsed.dsd_sample_rate),
+        channels: Some(parsed.channels),
+        bit_depth: Some(1),
+        format,
+        file_size,
+        file_modified_at,
+        date_added: now_str,
+        is_favorite: false,
+        rating: 0,
+        play_count: 0,
+        skip_count: 0,
+        last_played_at: None,
+        cover_art_path,
+        lyrics,
+        has_synced_lyrics,
+        is_corrupt: false,
+        corrupt_reason: None,
+        duplicate_group_id: None,
+        is_primary: true,
+    }
+}
+
+fn parent_name(path: &Path) -> Option<String> {
+    path.parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .filter(|name| !name.trim().is_empty())
+}
+
+fn parse_id3v2(data: &[u8]) -> DsdId3Tag {
+    let mut tag = DsdId3Tag::default();
+    if data.len() < 10 || &data[0..3] != b"ID3" {
+        return tag;
+    }
+    let version = data[3];
+    let flags = data[5];
+    let declared = synchsafe(&data[6..10]) as usize;
+    let end = 10usize.saturating_add(declared).min(data.len());
+    let mut pos = 10usize;
+    let unsynchronised = flags & 0x80 != 0;
+    while pos + 10 <= end {
+        if data[pos..pos + 4].iter().all(|byte| *byte == 0) {
+            break;
+        }
+        let id = &data[pos..pos + 4];
+        let raw_size = &data[pos + 4..pos + 8];
+        let size = if version >= 4 {
+            synchsafe(raw_size) as usize
+        } else {
+            u32::from_be_bytes(raw_size.try_into().unwrap()) as usize
+        };
+        pos += 10;
+        let frame_end = pos.saturating_add(size).min(end);
+        if frame_end <= pos {
+            break;
+        }
+        let mut payload = data[pos..frame_end].to_vec();
+        if unsynchronised {
+            payload = remove_unsynchronisation(&payload);
+        }
+        match id {
+            b"TIT2" => tag.title = decode_id3_text(&payload),
+            b"TPE1" => tag.artist = decode_id3_text(&payload),
+            b"TPE2" => tag.album_artist = decode_id3_text(&payload),
+            b"TALB" => tag.album = decode_id3_text(&payload),
+            b"TCON" => tag.genre = decode_id3_text(&payload),
+            b"TDRC" | b"TYER" => {
+                tag.year = decode_id3_text(&payload).and_then(|value| {
+                    value
+                        .chars()
+                        .take(4)
+                        .collect::<String>()
+                        .parse::<u32>()
+                        .ok()
+                });
+            }
+            b"TRCK" => tag.track_number = parse_number_frame(&payload),
+            b"TPOS" => tag.disc_number = parse_number_frame(&payload),
+            b"USLT" => tag.lyrics = decode_unsynchronised_lyrics(&payload),
+            b"APIC" => tag.picture = parse_apic(&payload),
+            _ => {}
+        }
+        pos = pos.saturating_add(size);
+    }
+    tag
+}
+
+fn synchsafe(bytes: &[u8]) -> u32 {
+    if bytes.len() < 4 {
+        return 0;
+    }
+    (u32::from(bytes[0] & 0x7f) << 21)
+        | (u32::from(bytes[1] & 0x7f) << 14)
+        | (u32::from(bytes[2] & 0x7f) << 7)
+        | u32::from(bytes[3] & 0x7f)
+}
+
+fn remove_unsynchronisation(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut previous_ff = false;
+    for &byte in bytes {
+        if previous_ff && byte == 0 {
+            previous_ff = false;
+            continue;
+        }
+        previous_ff = byte == 0xff;
+        out.push(byte);
+    }
+    out
+}
+
+fn decode_id3_text(payload: &[u8]) -> Option<String> {
+    let encoding = *payload.first()?;
+    let bytes = &payload[1..];
+    let text = match encoding {
+        0 => String::from_utf8_lossy(bytes).to_string(),
+        1 => decode_utf16(bytes, true),
+        2 => decode_utf16(bytes, false),
+        3 => String::from_utf8_lossy(bytes).to_string(),
+        _ => return None,
+    };
+    let cleaned = text.trim_matches('\0').trim().to_string();
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+fn decode_utf16(bytes: &[u8], has_bom: bool) -> String {
+    let mut data = bytes;
+    let little_endian = if has_bom && bytes.len() >= 2 {
+        match bytes[..2] {
+            [0xff, 0xfe] => {
+                data = &bytes[2..];
+                true
+            }
+            [0xfe, 0xff] => {
+                data = &bytes[2..];
+                false
+            }
+            _ => true,
+        }
+    } else {
+        false
+    };
+    let units = data
+        .chunks_exact(2)
+        .map(|pair| {
+            if little_endian {
+                u16::from_le_bytes([pair[0], pair[1]])
+            } else {
+                u16::from_be_bytes([pair[0], pair[1]])
+            }
+        })
+        .collect::<Vec<_>>();
+    String::from_utf16_lossy(&units)
+}
+
+fn parse_number_frame(payload: &[u8]) -> Option<u32> {
+    decode_id3_text(payload)?
+        .split('/')
+        .next()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn decode_unsynchronised_lyrics(payload: &[u8]) -> Option<String> {
+    if payload.len() < 5 {
+        return None;
+    }
+    let encoding = payload[0];
+    let mut pos = 4usize;
+    let delimiter = if encoding == 1 || encoding == 2 { 2 } else { 1 };
+    while pos + delimiter <= payload.len() {
+        let zero = if delimiter == 1 {
+            payload[pos] == 0
+        } else {
+            payload[pos] == 0 && payload[pos + 1] == 0
+        };
+        if zero {
+            pos += delimiter;
+            break;
+        }
+        pos += 1;
+    }
+    decode_id3_text(
+        &[encoding]
+            .into_iter()
+            .chain(payload[pos..].iter().copied())
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn parse_apic(payload: &[u8]) -> Option<Vec<u8>> {
+    let encoding = *payload.first()?;
+    let mut pos = 1usize;
+    while pos < payload.len() && payload[pos] != 0 {
+        pos += 1;
+    }
+    pos = pos.saturating_add(1).saturating_add(1);
+    let delimiter = if encoding == 1 || encoding == 2 { 2 } else { 1 };
+    while pos + delimiter <= payload.len() {
+        let done = if delimiter == 1 {
+            payload[pos] == 0
+        } else {
+            payload[pos] == 0 && payload[pos + 1] == 0
+        };
+        if done {
+            pos += delimiter;
+            return (pos < payload.len()).then(|| payload[pos..].to_vec());
+        }
+        pos += 1;
+    }
+    None
 }

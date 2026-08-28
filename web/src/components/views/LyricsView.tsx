@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { FileText, Heart, Music2, RefreshCw } from 'lucide-react';
+import { FileText, Heart, Minus, Music2, Plus, RefreshCw, RotateCcw } from 'lucide-react';
 import { usePlayer, usePlaybackProgress } from '../../context/PlayerContext';
 import { useLibrary } from '../../context/LibraryContext';
 import { useSettings } from '../../context/SettingsContext';
@@ -37,10 +37,41 @@ export const LyricsView: React.FC = () => {
   const [preferredMode, setPreferredMode] = useState<LyricsMode>(() => Storage.getLyricsMode());
   const [loading, setLoading] = useState<boolean>(false);
   const [isFollowingLyrics, setIsFollowingLyrics] = useState(true);
+  const [lyricsOffsetMs, setLyricsOffsetMs] = useState(0);
+  const [isLyricsOffsetOpen, setIsLyricsOffsetOpen] = useState(false);
 
   const selectLyricsMode = (mode: LyricsMode) => {
     setPreferredMode(mode);
     Storage.saveLyricsMode(mode);
+  };
+
+  useEffect(() => {
+    setIsLyricsOffsetOpen(false);
+    if (!track?.id) {
+      setLyricsOffsetMs(0);
+      return;
+    }
+
+    const key = `nghenhac_lyrics_offset:${track.id}`;
+    try {
+      const stored = Number(localStorage.getItem(key));
+      setLyricsOffsetMs(Number.isFinite(stored) ? Math.max(-60000, Math.min(60000, stored)) : 0);
+    } catch {
+      setLyricsOffsetMs(0);
+    }
+  }, [track?.id]);
+
+  const changeLyricsOffset = (deltaMs: number) => {
+    if (!track?.id) return;
+    const next = Math.max(-60000, Math.min(60000, lyricsOffsetMs + deltaMs));
+    setLyricsOffsetMs(next);
+    const key = `nghenhac_lyrics_offset:${track.id}`;
+    try {
+      if (next === 0) localStorage.removeItem(key);
+      else localStorage.setItem(key, String(next));
+    } catch {
+      // The adjustment remains active for this session even if storage is unavailable.
+    }
   };
 
   // Fetch track lyrics via IPC with stale request cancellation
@@ -53,6 +84,33 @@ export const LyricsView: React.FC = () => {
     let isCurrent = true;
     setLoading(true);
 
+    const fetchRemoteLyrics = async (): Promise<LyricData | null> => {
+      const cacheKey = `nghenhac_lrclib_lyrics:${track.id}:${track.title}:${track.artist}:${track.album}`;
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = normalizeLyricsData(JSON.parse(cached));
+          if (parsed) return parsed;
+        }
+      } catch {
+        // Ignore malformed or unavailable local cache and query LRCLIB.
+      }
+
+      try {
+        const remote = await IpcService.invoke('fetch_lrclib_lyrics', { trackId: track.id });
+        if (!remote) return null;
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(remote));
+        } catch {
+          // Caching is optional; lyrics can still be displayed this time.
+        }
+        return normalizeLyricsData(remote);
+      } catch (error) {
+        console.warn('Failed to load lyrics from LRCLIB', error);
+        return null;
+      }
+    };
+
     IpcService.invoke('get_track_lyrics', { trackId: track.id })
       .then(async res => {
         if (!isCurrent) return;
@@ -62,6 +120,9 @@ export const LyricsView: React.FC = () => {
           hydrated = normalized ? await hydrateRomanizedLyrics(track.id, normalized) : null;
         } else if (track.lyrics) {
           hydrated = await hydrateRomanizedLyrics(track.id, parseLrc(track.lyrics));
+        } else {
+          const normalizedRemote = await fetchRemoteLyrics();
+          hydrated = normalizedRemote ? await hydrateRomanizedLyrics(track.id, normalizedRemote) : null;
         }
         if (isCurrent) setLyricsData(hydrated);
       })
@@ -72,7 +133,8 @@ export const LyricsView: React.FC = () => {
           const hydrated = await hydrateRomanizedLyrics(track.id, parseLrc(track.lyrics));
           if (isCurrent) setLyricsData(hydrated);
         } else {
-          setLyricsData(null);
+          const normalizedRemote = await fetchRemoteLyrics();
+          if (isCurrent) setLyricsData(normalizedRemote ? await hydrateRomanizedLyrics(track.id, normalizedRemote) : null);
         }
       })
       .finally(() => {
@@ -129,6 +191,17 @@ export const LyricsView: React.FC = () => {
     return lyricsData.lines;
   }, [lyricsData, lyricsMode]);
 
+  const timedDisplayLines: LyricLine[] = useMemo(
+    () => {
+      const appliedOffsetMs = lyricsData?.source === 'lrclib' ? lyricsOffsetMs : 0;
+      return displayLines.map(line => ({
+        ...line,
+        timestamp: Math.max(0, line.timestamp + appliedOffsetMs / 1000),
+      }));
+    },
+    [displayLines, lyricsData?.source, lyricsOffsetMs]
+  );
+
   const isSynced = useMemo(() => {
     if (!lyricsData) return false;
     if (lyricsMode === 'romanized' && lyricsData.romanized) {
@@ -139,8 +212,8 @@ export const LyricsView: React.FC = () => {
 
   const activeLyricIndex = useMemo(() => {
     if (!isSynced || displayLines.length === 0) return -1;
-    return findActiveLyricIndex(displayLines, position);
-  }, [isSynced, displayLines, position]);
+    return findActiveLyricIndex(timedDisplayLines, position);
+  }, [isSynced, timedDisplayLines, position]);
 
   // Auto-scroll active line into view smoothly
   useEffect(() => {
@@ -158,7 +231,9 @@ export const LyricsView: React.FC = () => {
     }
   }, [activeLyricIndex, isFollowingLyrics]);
 
-  useEffect(() => setIsFollowingLyrics(true), [track?.id]);
+  useEffect(() => {
+    setIsFollowingLyrics(true);
+  }, [track?.id]);
 
   return (
     <div className="mx-auto flex h-full min-h-0 min-w-0 w-full max-w-7xl gap-6 overflow-x-hidden px-5 pt-4 select-none md:px-7 xl:gap-10">
@@ -241,6 +316,65 @@ export const LyricsView: React.FC = () => {
                 </button>
               </div>
             )}
+            {lyricsData?.source === 'lrclib' && (
+              <button
+                type="button"
+                aria-expanded={isLyricsOffsetOpen}
+                aria-controls="lyrics-offset-controls"
+                onClick={() => setIsLyricsOffsetOpen(open => !open)}
+                className={`min-h-[44px] rounded-full border px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent ${
+                  isLyricsOffsetOpen
+                    ? 'border-brand-accent/60 bg-brand-accent/15 text-brand-foreground'
+                    : 'border-brand-border/60 bg-oled-card/35 text-brand-muted hover:bg-oled-hover hover:text-brand-foreground'
+                }`}
+              >
+                {t('lyrics_source_lrclib', settings.language)}
+              </button>
+            )}
+            {lyricsData?.source === 'lrclib' && isLyricsOffsetOpen && isSynced && timedDisplayLines.length > 0 && (
+              <div
+                id="lyrics-offset-controls"
+                role="group"
+                aria-label={t('lyrics_offset_label', settings.language)}
+                className="flex items-center gap-1 rounded-xl border border-brand-border/50 bg-oled-card/35 p-1 shadow-sm backdrop-blur-xl"
+              >
+                <span className="px-2 text-xs font-semibold text-brand-muted" aria-live="polite">
+                  {t('lyrics_offset_current', settings.language, {
+                    value: `${lyricsOffsetMs > 0 ? '+' : ''}${(lyricsOffsetMs / 1000).toFixed(1)}s`,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => changeLyricsOffset(-500)}
+                  aria-label={t('lyrics_offset_earlier', settings.language)}
+                  title={t('lyrics_offset_earlier', settings.language)}
+                  className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 rounded-lg px-2 text-xs font-semibold text-brand-foreground/80 transition-colors hover:bg-oled-hover hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                >
+                  <Minus className="h-3.5 w-3.5" aria-hidden="true" />
+                  0.5s
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeLyricsOffset(500)}
+                  aria-label={t('lyrics_offset_later', settings.language)}
+                  title={t('lyrics_offset_later', settings.language)}
+                  className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 rounded-lg px-2 text-xs font-semibold text-brand-foreground/80 transition-colors hover:bg-oled-hover hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                >
+                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  0.5s
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeLyricsOffset(-lyricsOffsetMs)}
+                  disabled={lyricsOffsetMs === 0}
+                  aria-label={t('lyrics_offset_reset', settings.language)}
+                  title={t('lyrics_offset_reset', settings.language)}
+                  className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-brand-muted transition-colors hover:bg-oled-hover hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:cursor-default disabled:opacity-40"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            )}
 
         </div>
 
@@ -250,8 +384,8 @@ export const LyricsView: React.FC = () => {
           onWheel={() => setIsFollowingLyrics(false)}
           onTouchStart={() => setIsFollowingLyrics(false)}
           onPointerDown={() => setIsFollowingLyrics(false)}
-          className={`relative min-h-0 min-w-0 flex-1 space-y-2 overflow-x-hidden overflow-y-auto overscroll-contain py-8 pr-0.5 text-left scroll-smooth ${
-            isSynced && displayLines.length <= 8 ? 'flex min-h-full flex-col justify-center' : ''
+          className={`relative min-h-0 min-w-0 flex-1 space-y-2 overflow-x-hidden overflow-y-auto overscroll-contain py-8 pr-0.5 text-left ${
+            isSynced && timedDisplayLines.length <= 8 ? 'flex min-h-full flex-col justify-center' : ''
           }`}
         >
           {loading ? (
@@ -259,7 +393,7 @@ export const LyricsView: React.FC = () => {
               {t('lyrics_title', settings.language)}...
             </div>
           ) : isSynced && displayLines.length > 0 ? (
-            displayLines.map((line, idx) => {
+            timedDisplayLines.map((line, idx) => {
               const isActive = idx === activeLyricIndex;
               const hasSub =
                 lyricsMode === 'both' &&
@@ -275,32 +409,35 @@ export const LyricsView: React.FC = () => {
                 <button
                   key={idx}
                   type="button"
-                  onClick={() => seek(line.timestamp)}
+                  onClick={() => {
+                    void seek(line.timestamp);
+                    setIsFollowingLyrics(true);
+                  }}
                   aria-label={isBlank ? `Seek to ${line.timestamp.toFixed(1)} seconds` : capitalizeFirstLetter(line.text)}
                   className="group mx-auto flex min-h-[52px] w-full max-w-5xl cursor-pointer items-center justify-start px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                 >
                   <span
-                    className={`inline-flex max-w-full flex-col items-start gap-1 rounded-[1.6rem] px-5 py-3 text-left transition-[color,background-color,box-shadow,transform] duration-300 sm:px-8 ${
+                    className={`inline-flex max-w-full flex-col items-start gap-1 rounded-[1.6rem] px-5 py-3 text-left transition-[color,background-color,box-shadow] duration-200 sm:px-8 ${
                       isActive
-                        ? 'scale-[1.015] bg-gradient-to-r from-transparent via-brand-accent/15 to-transparent shadow-[0_10px_30px_rgba(0,0,0,0.12)]'
+                        ? 'bg-gradient-to-r from-transparent via-brand-accent/15 to-transparent shadow-[0_10px_30px_rgba(0,0,0,0.12)]'
                         : 'group-hover:bg-oled-hover/35'
                     }`}
                   >
                     {isBlank ? (
                       <Music2
                         aria-hidden="true"
-                        className={`font-bold transition-colors duration-200 ${
+                        className={`h-7 w-7 font-bold transition-colors duration-200 sm:h-8 sm:w-8 ${
                           isActive
-                            ? 'h-7 w-7 text-brand-accent sm:h-8 sm:w-8'
-                            : 'h-5 w-5 text-brand-foreground/45 group-hover:text-brand-foreground/70 sm:h-6 sm:w-6'
+                            ? 'text-brand-accent'
+                            : 'text-brand-foreground/45 group-hover:text-brand-foreground/70'
                         }`}
                       />
                     ) : (
                       <span
-                        className={`font-bold transition-colors duration-200 ${
+                        className={`text-2xl font-bold transition-colors duration-200 sm:text-3xl ${
                           isActive
-                            ? 'text-3xl font-bold text-brand-foreground sm:text-4xl'
-                            : 'text-xl text-brand-foreground/72 group-hover:text-brand-foreground sm:text-2xl'
+                            ? 'text-brand-foreground'
+                            : 'text-brand-foreground/72 group-hover:text-brand-foreground'
                         }`}
                       >
                         {capitalizeFirstLetter(line.text)}
@@ -308,10 +445,10 @@ export const LyricsView: React.FC = () => {
                     )}
                     {hasSub && (
                       <span
-                        className={`transition-colors duration-200 ${
+                        className={`text-base font-semibold transition-colors duration-200 sm:text-lg ${
                           isActive
-                            ? 'text-lg font-semibold text-brand-foreground/85 sm:text-xl'
-                            : 'text-base text-brand-foreground/60 sm:text-lg'
+                            ? 'text-brand-foreground/85'
+                            : 'text-brand-foreground/60'
                         }`}
                       >
                         {capitalizeFirstLetter(line.romanized ?? '')}

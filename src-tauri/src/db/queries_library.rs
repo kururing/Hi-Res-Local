@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use chrono::Utc;
 use rusqlite::{params, Connection};
 
@@ -66,6 +68,31 @@ pub fn get_library_roots(conn: &Connection) -> AppResult<Vec<LibraryRoot>> {
 pub fn remove_library_root(conn: &Connection, id: &str) -> AppResult<bool> {
     let rows = conn.execute("DELETE FROM library_roots WHERE id = ?1", params![id])?;
     Ok(rows > 0)
+}
+
+/// Remove a library root and every track contained by that root atomically.
+/// Path component comparison avoids treating sibling names such as `Music2`
+/// as children of `Music`.
+pub fn remove_library_root_with_tracks(
+    conn: &mut Connection,
+    id: &str,
+    root_path: &str,
+) -> AppResult<bool> {
+    let paths = {
+        let mut stmt = conn.prepare("SELECT path FROM tracks")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.filter_map(Result::ok)
+            .filter(|path| Path::new(path).starts_with(Path::new(root_path)))
+            .collect::<Vec<_>>()
+    };
+
+    let tx = conn.transaction()?;
+    for path in paths {
+        tx.execute("DELETE FROM tracks WHERE path = ?1", params![path])?;
+    }
+    let removed = tx.execute("DELETE FROM library_roots WHERE id = ?1", params![id])? > 0;
+    tx.commit()?;
+    Ok(removed)
 }
 
 pub fn update_root_scanned_at(conn: &Connection, path: &str) -> AppResult<()> {

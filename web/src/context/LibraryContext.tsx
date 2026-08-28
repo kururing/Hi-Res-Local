@@ -19,6 +19,7 @@ interface LibraryContextType {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   scanDirectory: (path?: string) => Promise<void>;
+  rescanLibrary: () => Promise<void>;
   reloadLibrary: () => Promise<void>;
   toggleFavoriteTrack: (trackId: string) => boolean;
   toggleFavoriteAlbum: (albumKey: string) => boolean;
@@ -81,7 +82,6 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
   /** One-time push of legacy localStorage favorites into SQLite. */
   const migrateLocalFavorites = useCallback(async (loadedTracks: Track[]) => {
     if (!useBackendFavorites || localStorage.getItem(FAVORITES_MIGRATED_KEY)) return;
-    localStorage.setItem(FAVORITES_MIGRATED_KEY, '1');
 
     const trackIds = Storage.getFavoriteTrackIds();
     const albumKeys = Storage.getFavoriteAlbums();
@@ -101,6 +101,9 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       for (const name of artistNames) {
         await IpcService.invoke('set_artist_favorite', { artistName: name, isFavorite: true });
       }
+      // Mark the migration only after every backend write succeeds. A partial
+      // failure remains retryable on the next launch; all writes are idempotent.
+      localStorage.setItem(FAVORITES_MIGRATED_KEY, '1');
     } catch (err) {
       console.warn('Favorites migration failed', err);
     }
@@ -293,6 +296,28 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [addMusicFolder, settings.language, showToast]);
 
+  const rescanLibrary = useCallback(async () => {
+    if (settings.music_folders.length === 0) return;
+
+    setScanProgress({
+      total_files: 0,
+      scanned_files: 0,
+      current_path: '',
+      is_scanning: true,
+    });
+
+    try {
+      await IpcService.invoke('scan_library');
+      await reloadLibrary();
+      showToast(t('settings_btn_rescan', settings.language), 'success');
+    } catch (e) {
+      console.error('Library rescan error', e);
+      showToast('Scan failed', 'error');
+    } finally {
+      setScanProgress(null);
+    }
+  }, [reloadLibrary, settings.language, settings.music_folders.length, showToast]);
+
   const toggleFavoriteTrack = useCallback((trackId: string): boolean => {
     let isFav: boolean;
     if (useBackendFavorites) {
@@ -374,6 +399,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       searchQuery,
       setSearchQuery,
       scanDirectory,
+      rescanLibrary,
       reloadLibrary,
       toggleFavoriteTrack,
       toggleFavoriteAlbum,
@@ -393,6 +419,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       isLoading,
       searchQuery,
       scanDirectory,
+      rescanLibrary,
       reloadLibrary,
       toggleFavoriteTrack,
       toggleFavoriteAlbum,

@@ -34,7 +34,7 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
   onOpenDetails,
 }) => {
   const { tracks, toggleFavoriteArtist, favoriteArtistNames } = useLibrary();
-  const { playTrack, playQueue, toggleShuffle, status } = usePlayer();
+  const { playTrack, playQueue, playRandomQueue, status } = usePlayer();
   const { settings } = useSettings();
   const [showAllTracks, setShowAllTracks] = React.useState(false);
 
@@ -105,10 +105,7 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
               variant="secondary"
               size="md"
               icon={<Shuffle className="w-4 h-4" />}
-              onClick={() => {
-                if (!status.shuffle) void toggleShuffle();
-                playQueue(artistTracks, 0);
-              }}
+              onClick={() => void playRandomQueue(artistTracks)}
               disabled={artistTracks.length === 0}
             >
               {t('tracks_shuffle_all', settings.language)}
@@ -181,10 +178,10 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
                   />
                 </div>
 
-                <div className="min-w-0 truncate font-semibold">{tr.title}</div>
+                <div className="min-w-0 max-w-full truncate font-semibold" title={tr.title}>{tr.title}</div>
 
                 <div className="hidden min-w-0 sm:block truncate text-brand-muted">
-                  <span title={artist.name}>{artist.name}</span>
+                  <span className="block min-w-0 max-w-full truncate" title={artist.name}>{artist.name}</span>
                 </div>
 
                 <div className="hidden min-w-0 md:block truncate text-brand-muted">
@@ -244,7 +241,7 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
                   </button>
                 </div>
               </div>
-              <span className="font-semibold text-xs text-brand-foreground truncate group-hover:text-brand-accent transition-colors">
+              <span className="block min-w-0 max-w-full truncate font-semibold text-xs text-brand-foreground group-hover:text-brand-accent transition-colors" title={album.name}>
                 {album.name}
               </span>
               <span className="text-[11px] text-brand-muted font-mono mt-1">
