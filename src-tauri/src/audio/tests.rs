@@ -406,6 +406,35 @@ fn apply_playback_mode_multitask_succeeds() {
 }
 
 #[test]
+fn queue_resume_position_is_visible_before_async_decoder_open() {
+    let player = AudioPlayer::new();
+    let track = AudioTrack {
+        id: "resume-track".into(),
+        path: "missing-resume-fixture.wav".into(),
+        title: "Resume Track".into(),
+        artist: "Artist".into(),
+        album: "Album".into(),
+        duration_ms: 240_000,
+        track_number: None,
+        year: None,
+        genre: None,
+        replay_gain: None,
+    };
+
+    player
+        .play_queue_at(vec![track], 0, 73_500)
+        .expect("queue should accept a restored start position");
+
+    let snapshot = player.get_snapshot();
+    assert_eq!(snapshot.progress.position_ms, 73_500);
+    assert_eq!(
+        snapshot.current_track.as_ref().map(|t| t.id.as_str()),
+        Some("resume-track")
+    );
+    let _ = player.stop();
+}
+
+#[test]
 fn software_volume_survives_unity_gain_and_system_state_read() {
     let player = AudioPlayer::new();
     player.set_volume(0.25).expect("set software volume");

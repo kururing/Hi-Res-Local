@@ -85,7 +85,8 @@ export const LyricsView: React.FC = () => {
     setLoading(true);
 
     const fetchRemoteLyrics = async (): Promise<LyricData | null> => {
-      const cacheKey = `nghenhac_lrclib_lyrics:${track.id}:${track.title}:${track.artist}:${track.album}`;
+      // v2 invalidates results chosen by the old single-result LRCLIB lookup.
+      const cacheKey = `nghenhac_lrclib_lyrics:v2:${track.id}:${track.title}:${track.artist}:${track.album}`;
       try {
         const cached = localStorage.getItem(cacheKey);
         if (cached) {
@@ -144,7 +145,7 @@ export const LyricsView: React.FC = () => {
     return () => {
       isCurrent = false;
     };
-  }, [track?.id, track?.lyrics]);
+  }, [track?.id, track?.lyrics, track?.title, track?.artist, track?.album]);
 
   // Coerce lyrics mode safely based on actual data
   const lyricsMode = useMemo(

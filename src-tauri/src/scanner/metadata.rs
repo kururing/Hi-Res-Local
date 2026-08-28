@@ -1,14 +1,18 @@
 #![allow(clippy::chunks_exact_to_as_chunks)] // `as_chunks` is newer than the Rust 1.80 MSRV.
 
 use chrono::{DateTime, Utc};
+use ffmpeg_next as ffmpeg;
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::{Accessor, ItemKey};
+use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use uuid::Uuid;
 
 use crate::audio::dsd::probe_path;
+use crate::audio::AudioDecoder;
 use crate::lyrics::lrc_parser::load_lyrics_for_track;
 use crate::models::track::Track;
 use crate::scanner::cover_cache::{extract_and_cache_cover, extract_and_cache_cover_bytes};
@@ -174,6 +178,30 @@ pub fn extract_metadata(path: &Path) -> Track {
     let tagged_file = match probe_res {
         Ok(tf) => tf,
         Err(err) => {
+            if format == "wav" {
+                tracing::warn!(
+                    "Lofty failed to parse WAV metadata for {}; falling back to FFmpeg: {}",
+                    path.display(),
+                    err
+                );
+                return extract_wav_metadata_with_ffmpeg(
+                    path,
+                    id,
+                    path_str,
+                    format,
+                    file_size,
+                    file_modified_at,
+                    now_str,
+                )
+                .unwrap_or_else(|fallback_err| {
+                    corrupt_track(
+                        path,
+                        format!(
+                            "Failed to parse audio file tags/headers: {err}; FFmpeg fallback failed: {fallback_err}"
+                        ),
+                    )
+                });
+            }
             return corrupt_track(
                 path,
                 format!("Failed to parse audio file tags/headers: {}", err),
@@ -283,6 +311,138 @@ pub fn extract_metadata(path: &Path) -> Track {
     }
 }
 
+fn extract_wav_metadata_with_ffmpeg(
+    path: &Path,
+    id: String,
+    path_str: String,
+    format: String,
+    file_size: u64,
+    file_modified_at: String,
+    now_str: String,
+) -> Result<Track, String> {
+    // AudioDecoder owns the canonical FFmpeg initialization and source-format
+    // probing used by playback. Reusing it here keeps library metadata in sync
+    // with what the player will actually decode.
+    let decoder = AudioDecoder::open(path).map_err(|err| err.to_string())?;
+    let quality = decoder.quality_badge().clone();
+
+    // AudioDecoder::open has initialized FFmpeg (including packaged DLL lookup
+    // on Windows), so this second lightweight input context can safely collect
+    // tags that Lofty rejected without duplicating initialization code.
+    let input = ffmpeg::format::input(path).map_err(|err| err.to_string())?;
+    let tags = collect_ffmpeg_tags(&input);
+    let id3 = read_wav_id3_tag(path).unwrap_or_default();
+
+    let title = ffmpeg_tag(&tags, &["title"])
+        .or(id3.title.clone())
+        .unwrap_or_else(|| clean_filename_fallback(path));
+    let artist = ffmpeg_tag(&tags, &["artist"])
+        .or(id3.artist.clone())
+        .or_else(|| parent_name(path))
+        .unwrap_or_else(|| "Unknown Artist".to_string());
+    let album_artist = ffmpeg_tag(&tags, &["album_artist", "albumartist", "album artist"])
+        .or(id3.album_artist.clone());
+    let album = ffmpeg_tag(&tags, &["album"])
+        .or(id3.album.clone())
+        .or_else(|| parent_name(path))
+        .unwrap_or_else(|| "Unknown Album".to_string());
+    let genre = ffmpeg_tag(&tags, &["genre"]).or(id3.genre.clone());
+    let year = parse_ffmpeg_year(ffmpeg_tag(&tags, &["date", "year"])).or(id3.year);
+    let track_number =
+        parse_ffmpeg_number(ffmpeg_tag(&tags, &["track", "tracknumber", "track_number"]))
+            .or(id3.track_number);
+    let disc_number =
+        parse_ffmpeg_number(ffmpeg_tag(&tags, &["disc", "discnumber", "disc_number"]))
+            .or(id3.disc_number);
+    let embedded_lyrics =
+        ffmpeg_tag(&tags, &["lyrics", "unsyncedlyrics", "unsynced_lyrics"]).or(id3.lyrics.clone());
+    let lyrics_info = load_lyrics_for_track(embedded_lyrics.as_deref(), path);
+    let (lyrics, has_synced_lyrics) = match lyrics_info {
+        Some(info) => (Some(info.plain_text), info.is_synced),
+        None => (embedded_lyrics, false),
+    };
+    let cover_art_path = extract_and_cache_cover_bytes(id3.picture.as_deref(), path);
+
+    Ok(Track {
+        id,
+        path: path_str,
+        title,
+        artist,
+        album_artist,
+        album,
+        genre,
+        year,
+        track_number,
+        disc_number,
+        duration_ms: decoder.duration_ms(),
+        bitrate: quality.bitrate_kbps,
+        sample_rate: Some(decoder.sample_rate()).filter(|rate| *rate > 0),
+        channels: Some(decoder.channels()).filter(|channels| *channels > 0),
+        bit_depth: u8::try_from(decoder.bit_depth())
+            .ok()
+            .filter(|depth| *depth > 0),
+        format,
+        file_size,
+        file_modified_at,
+        date_added: now_str,
+        is_favorite: false,
+        rating: 0,
+        play_count: 0,
+        skip_count: 0,
+        last_played_at: None,
+        cover_art_path,
+        lyrics,
+        has_synced_lyrics,
+        is_corrupt: false,
+        corrupt_reason: None,
+        duplicate_group_id: None,
+        is_primary: true,
+    })
+}
+
+fn collect_ffmpeg_tags(input: &ffmpeg::format::context::Input) -> HashMap<String, String> {
+    let mut tags = HashMap::new();
+
+    if let Some(stream) = input.streams().best(ffmpeg::media::Type::Audio) {
+        for (key, value) in stream.metadata().iter() {
+            insert_ffmpeg_tag(&mut tags, key, value);
+        }
+    }
+    // Container tags are the canonical source for RIFF INFO and ID3-in-WAV;
+    // insert them last so they win over stream-level defaults.
+    for (key, value) in input.metadata().iter() {
+        insert_ffmpeg_tag(&mut tags, key, value);
+    }
+
+    tags
+}
+
+fn insert_ffmpeg_tag(tags: &mut HashMap<String, String>, key: &str, value: &str) {
+    let value = value.trim_matches(['\0', ' ', '\r', '\n']);
+    if !value.is_empty() {
+        tags.insert(key.trim().to_ascii_lowercase(), value.to_string());
+    }
+}
+
+fn ffmpeg_tag(tags: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| tags.get(*key))
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn parse_ffmpeg_number(value: Option<String>) -> Option<u32> {
+    value?.split('/').next()?.trim().parse::<u32>().ok()
+}
+
+fn parse_ffmpeg_year(value: Option<String>) -> Option<u32> {
+    value?
+        .split(|ch: char| !ch.is_ascii_digit())
+        .find(|part| part.len() == 4)?
+        .parse::<u32>()
+        .ok()
+}
+
 #[derive(Default)]
 struct DsdId3Tag {
     title: Option<String>,
@@ -295,6 +455,37 @@ struct DsdId3Tag {
     disc_number: Option<u32>,
     lyrics: Option<String>,
     picture: Option<Vec<u8>>,
+}
+
+fn read_wav_id3_tag(path: &Path) -> Option<DsdId3Tag> {
+    const MAX_ID3_CHUNK_BYTES: u32 = 32 * 1024 * 1024;
+
+    let mut file = fs::File::open(path).ok()?;
+    let mut riff_header = [0u8; 12];
+    file.read_exact(&mut riff_header).ok()?;
+    if !matches!(&riff_header[0..4], b"RIFF" | b"RF64") || &riff_header[8..12] != b"WAVE" {
+        return None;
+    }
+
+    loop {
+        let mut chunk_header = [0u8; 8];
+        if file.read_exact(&mut chunk_header).is_err() {
+            return None;
+        }
+        let chunk_size = u32::from_le_bytes(chunk_header[4..8].try_into().ok()?);
+        if matches!(&chunk_header[0..4], b"id3 " | b"ID3 ") {
+            if chunk_size == 0 || chunk_size > MAX_ID3_CHUNK_BYTES {
+                return None;
+            }
+            let mut data = vec![0u8; chunk_size as usize];
+            file.read_exact(&mut data).ok()?;
+            return Some(parse_id3v2(&data));
+        }
+
+        let padded_size = u64::from(chunk_size) + u64::from(chunk_size & 1);
+        let offset = i64::try_from(padded_size).ok()?;
+        file.seek(SeekFrom::Current(offset)).ok()?;
+    }
 }
 
 fn extract_dsd_metadata(
@@ -566,4 +757,75 @@ fn parse_apic(payload: &[u8]) -> Option<Vec<u8>> {
         pos += 1;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn append_riff_chunk(buffer: &mut Vec<u8>, id: &[u8; 4], payload: &[u8]) {
+        buffer.extend_from_slice(id);
+        buffer.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(payload);
+        if payload.len() % 2 != 0 {
+            buffer.push(0);
+        }
+    }
+
+    fn write_wav_with_lowercase_info_key(path: &Path) {
+        let mut info = b"INFO".to_vec();
+        append_riff_chunk(&mut info, b"IART", b"Fallback Artist\0");
+        append_riff_chunk(&mut info, b"INAM", b"Fallback Title\0");
+        append_riff_chunk(&mut info, b"IPRD", b"Fallback Album\0");
+        append_riff_chunk(&mut info, b"IGNR", b"Pop\0");
+        append_riff_chunk(&mut info, b"ICRD", b"2017\0");
+        // Lowercase RIFF INFO keys occur in real files exported by AudioGate.
+        // Lofty rejects this key, while FFmpeg safely ignores/normalizes it.
+        append_riff_chunk(&mut info, b"itrk", b"03\0");
+
+        let channels = 2u16;
+        let sample_rate = 96_000u32;
+        let bits_per_sample = 24u16;
+        let block_align = channels * (bits_per_sample / 8);
+        let byte_rate = sample_rate * u32::from(block_align);
+        let mut fmt = Vec::with_capacity(16);
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&channels.to_le_bytes());
+        fmt.extend_from_slice(&sample_rate.to_le_bytes());
+        fmt.extend_from_slice(&byte_rate.to_le_bytes());
+        fmt.extend_from_slice(&block_align.to_le_bytes());
+        fmt.extend_from_slice(&bits_per_sample.to_le_bytes());
+
+        let pcm = vec![0u8; usize::from(block_align) * 960];
+        let mut wav = b"RIFF\0\0\0\0WAVE".to_vec();
+        append_riff_chunk(&mut wav, b"fmt ", &fmt);
+        append_riff_chunk(&mut wav, b"data", &pcm);
+        append_riff_chunk(&mut wav, b"LIST", &info);
+        let riff_size = (wav.len() - 8) as u32;
+        wav[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        fs::write(path, wav).unwrap();
+    }
+
+    #[test]
+    fn malformed_wav_info_uses_ffmpeg_fallback_without_marking_audio_corrupt() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("malformed-info.wav");
+        write_wav_with_lowercase_info_key(&path);
+
+        let lofty_result = Probe::open(&path).unwrap().read();
+        assert!(lofty_result.is_err(), "fixture must exercise the fallback");
+
+        let track = extract_metadata(&path);
+        assert!(!track.is_corrupt, "{:?}", track.corrupt_reason);
+        assert_eq!(track.title, "Fallback Title");
+        assert_eq!(track.artist, "Fallback Artist");
+        assert_eq!(track.album, "Fallback Album");
+        assert_eq!(track.genre.as_deref(), Some("Pop"));
+        assert_eq!(track.year, Some(2017));
+        assert_eq!(track.track_number, Some(3));
+        assert_eq!(track.sample_rate, Some(96_000));
+        assert_eq!(track.channels, Some(2));
+        assert_eq!(track.bit_depth, Some(24));
+        assert!(track.duration_ms > 0);
+    }
 }

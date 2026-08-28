@@ -24,4 +24,12 @@ describe('saved audio state', () => {
     Storage.saveAudioState(0.37, true);
     expect(Storage.getAudioState()).toEqual({ volume: 0.37, isMuted: true });
   });
+
+  it('sanitizes the local playback fallback', () => {
+    Storage.saveLastPlayback('track-1', Number.NaN);
+    expect(Storage.getLastPlayback()).toEqual({ trackId: 'track-1', position: 0 });
+
+    Storage.saveLastPlayback('track-1', 42.75);
+    expect(Storage.getLastPlayback()).toEqual({ trackId: 'track-1', position: 42.75 });
+  });
 });

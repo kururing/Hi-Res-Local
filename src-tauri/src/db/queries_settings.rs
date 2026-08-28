@@ -1,9 +1,18 @@
 use chrono::Utc;
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 
 use crate::db::queries_library::get_library_roots;
 use crate::error::AppResult;
 use crate::models::settings::AppSettings;
+
+const LAST_PLAYBACK_STATE_KEY: &str = "last_playback_state_v3";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SavedPlaybackState {
+    pub track_id: String,
+    pub position_ms: u64,
+}
 
 pub fn get_setting(conn: &Connection, key: &str) -> AppResult<Option<String>> {
     let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key = ?1")?;
@@ -26,6 +35,20 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
         params![key, value, now],
     )?;
     Ok(())
+}
+
+pub fn get_saved_playback_state(conn: &Connection) -> AppResult<Option<SavedPlaybackState>> {
+    get_setting(conn, LAST_PLAYBACK_STATE_KEY)?
+        .map(|value| serde_json::from_str(&value).map_err(Into::into))
+        .transpose()
+}
+
+pub fn save_playback_state(conn: &Connection, track_id: &str, position_ms: u64) -> AppResult<()> {
+    let value = serde_json::to_string(&SavedPlaybackState {
+        track_id: track_id.to_string(),
+        position_ms,
+    })?;
+    set_setting(conn, LAST_PLAYBACK_STATE_KEY, &value)
 }
 
 pub fn get_app_settings(conn: &Connection) -> AppResult<AppSettings> {
@@ -115,4 +138,28 @@ pub fn save_app_settings(conn: &Connection, settings: &AppSettings) -> AppResult
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_playback_round_trips_as_one_atomic_setting() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);",
+        )
+        .expect("settings table");
+
+        save_playback_state(&conn, "track-42", 73_500).expect("save playback state");
+
+        assert_eq!(
+            get_saved_playback_state(&conn).expect("load playback state"),
+            Some(SavedPlaybackState {
+                track_id: "track-42".to_string(),
+                position_ms: 73_500,
+            })
+        );
+    }
 }

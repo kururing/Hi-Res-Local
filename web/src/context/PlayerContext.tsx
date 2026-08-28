@@ -17,9 +17,12 @@ import { localizeAudioError, t } from '../i18n';
 import { useSettings } from './SettingsContext';
 import { useLibrary } from './LibraryContext';
 import {
+  BEFORE_APP_QUIT_EVENT,
+  backendPlaybackToLastPlayback,
   clampPlaybackPosition,
   normalizePlaybackProgress,
   restoreLastPlayback,
+  shouldIgnoreEarlyResumePosition,
 } from '../services/playbackState';
 
 /** Baseline for synthesizing an EngineStatus before the engine reports one. */
@@ -127,6 +130,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const progressRef = useRef<PlaybackProgressValue>({ position: 0, duration: 0 });
   const setProgressRef = useRef<(value: PlaybackProgressValue) => void>(() => {});
   const hasRestoredPlaybackRef = useRef(false);
+  const pendingStartPositionRef = useRef<{
+    trackId: string;
+    path: string;
+    position: number;
+    startedAt: number;
+  } | null>(null);
   // The queue array reference last pushed to the backend. When the user plays
   // another track from the same (unchanged) queue we only jump the index
   // instead of re-sending the whole track list over IPC.
@@ -259,30 +268,63 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
     window.addEventListener('beforeunload', saveBeforeClose);
     window.addEventListener('pagehide', saveBeforeClose);
+    window.addEventListener(BEFORE_APP_QUIT_EVENT, saveBeforeClose);
     return () => {
       window.removeEventListener('beforeunload', saveBeforeClose);
       window.removeEventListener('pagehide', saveBeforeClose);
+      window.removeEventListener(BEFORE_APP_QUIT_EVENT, saveBeforeClose);
     };
   }, [finalizeHistorySession]);
 
   useEffect(() => {
-    if (hasRestoredPlaybackRef.current || isLibraryLoading) return;
-    hasRestoredPlaybackRef.current = true;
+    if (
+      hasRestoredPlaybackRef.current ||
+      isLibraryLoading ||
+      tracks.length === 0
+    ) return;
 
-    const restored = restoreLastPlayback(tracks, Storage.getLastPlayback());
-    if (!restored) return;
+    let cancelled = false;
+    void (async () => {
+      let saved = Storage.getLastPlayback();
+      if (isTauri()) {
+        try {
+          const backendSaved = backendPlaybackToLastPlayback(
+            await IpcService.invoke('get_saved_playback_state', {})
+          );
+          if (backendSaved) saved = backendSaved;
+        } catch (error) {
+          console.warn('Failed to load SQLite playback position; using local fallback', error);
+        }
+      }
 
-    baseQueueRef.current = [...tracks];
-    setQueue(tracks);
-    setQueueIndex(restored.queueIndex);
-    setStatus(prev => ({
-      ...prev,
-      state: 'stopped',
-      current_track: restored.track,
-      duration: restored.track.duration || 0,
-      position: restored.position,
-    }));
-    setProgressRef.current({ position: restored.position, duration: restored.track.duration || 0 });
+      if (cancelled) return;
+      hasRestoredPlaybackRef.current = true;
+      const restored = restoreLastPlayback(tracks, saved);
+      if (!restored) return;
+
+      Storage.saveLastPlayback(restored.track.id, restored.position);
+      baseQueueRef.current = [...tracks];
+      queueRef.current = tracks;
+      queueIndexRef.current = restored.queueIndex;
+      setQueue(tracks);
+      setQueueIndex(restored.queueIndex);
+      setStatus(prev => ({
+        ...prev,
+        state: 'stopped',
+        current_track: restored.track,
+        duration: restored.track.duration || 0,
+        position: restored.position,
+      }));
+      progressRef.current = {
+        position: restored.position,
+        duration: restored.track.duration || 0,
+      };
+      setProgressRef.current(progressRef.current);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [isLibraryLoading, tracks]);
 
   useEffect(() => {
@@ -305,6 +347,21 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           duration_secs,
           statusRef.current.duration || progressRef.current.duration
         );
+        const pendingStart = pendingStartPositionRef.current;
+        if (
+          pendingStart &&
+          (pendingStart.trackId === statusRef.current.current_track?.id ||
+            pendingStart.path === statusRef.current.current_track?.path)
+        ) {
+          if (shouldIgnoreEarlyResumePosition(
+            progressValue.position,
+            pendingStart.position,
+            Date.now() - pendingStart.startedAt
+          )) {
+            return;
+          }
+          pendingStartPositionRef.current = null;
+        }
         progressRef.current = progressValue;
         const session = historySessionRef.current;
         if (session && session.trackId === statusRef.current.current_track?.id && !session.finalized) {
@@ -375,10 +432,16 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           queueIndexRef.current = nextIndex;
           setQueueIndex(nextIndex);
         }
-        // Replaying a restored track emits track_changed from the backend
-        // even though it is still the same track. Keep the saved position;
-        // genuinely new tracks must start at zero.
-        const retainedPosition = changedTrack ? 0 : progressRef.current.position;
+        // Keep the restored position visible while the decoder opens directly
+        // at that offset. Early 0-second ticks are filtered above.
+        const pendingStart = pendingStartPositionRef.current;
+        const shouldApplyPendingStart = Boolean(
+          pendingStart &&
+          (pendingStart.trackId === nextTrack.id || pendingStart.path === nextTrack.path)
+        );
+        const retainedPosition = shouldApplyPendingStart
+          ? clampPlaybackPosition(pendingStart?.position ?? 0, duration)
+          : changedTrack ? 0 : progressRef.current.position;
         progressRef.current = { position: retainedPosition, duration };
         setProgressRef.current({ position: retainedPosition, duration });
         setStatus(prev => ({
@@ -601,6 +664,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     const idx = activeQueue.findIndex(t => t.id === track.id);
     const targetPosition = clampPlaybackPosition(startPosition, track.duration || 180);
+    pendingStartPositionRef.current = targetPosition > 0
+      ? { trackId: track.id, path: track.path, position: targetPosition, startedAt: Date.now() }
+      : null;
 
     finalizeHistorySession(false);
     beginHistorySession(track, targetPosition);
@@ -623,15 +689,16 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await IpcService.invoke('play_queue', {
           tracks: activeQueue,
           startIndex: idx !== -1 ? idx : 0,
+          startPositionSecs: targetPosition,
         });
         lastSyncedQueueRef.current = activeQueue;
       }
     } else {
-      await IpcService.invoke('play_track', { track });
-    }
-    if (requestId !== playRequestIdRef.current) return;
-    if (targetPosition > 0) {
-      await IpcService.invoke('seek_playback', { positionSecs: targetPosition });
+      await IpcService.invoke('play_track', { track, startPositionSecs: targetPosition });
+      if (targetPosition > 0) {
+        await IpcService.invoke('seek_playback', { positionSecs: targetPosition });
+        pendingStartPositionRef.current = null;
+      }
     }
     if (requestId !== playRequestIdRef.current) return;
     persistLastPlayback(track.id, targetPosition, true);

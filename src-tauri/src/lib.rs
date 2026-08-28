@@ -22,7 +22,7 @@ use tauri::{
 
 use crate::audio::dto::AudioEvent;
 use crate::commands::*;
-use crate::db::queries_settings::get_app_settings;
+use crate::db::queries_settings::{get_app_settings, save_playback_state};
 use crate::db::Database;
 use crate::scanner::watcher::LibraryWatcher;
 use crate::state::AppState;
@@ -247,10 +247,12 @@ pub fn run() {
 
             // ~10 Hz progress ticks from atomics only (no queue clone, no audio-thread emit).
             let player_ticker = Arc::clone(&app_state.player);
+            let db_ticker = Arc::clone(&db);
             let app_handle_ticker = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
                 let mut tick_count = 0u32;
+                let mut persistence_tick_count = 0u32;
                 let mut last_underrun_count = 0u64;
                 loop {
                     interval.tick().await;
@@ -275,6 +277,16 @@ pub fn run() {
                                 "duration_secs": (duration_ms as f64) / 1000.0
                             }),
                         );
+                        persistence_tick_count += 1;
+                        if persistence_tick_count >= 20 {
+                            persistence_tick_count = 0;
+                            if let Some(track_id) = player_ticker.current_track_id() {
+                                let conn = db_ticker.lock();
+                                if let Err(err) = save_playback_state(&conn, &track_id, position_ms) {
+                                    tracing::warn!("Failed to persist playback position: {err}");
+                                }
+                            }
+                        }
                     }
                     tick_count += 1;
                     if tick_count >= 10 {
@@ -440,6 +452,7 @@ pub fn run() {
             // Settings
             get_settings,
             update_settings,
+            get_saved_playback_state,
             quit_app,
             set_discord_presence,
             // Backup & Restore

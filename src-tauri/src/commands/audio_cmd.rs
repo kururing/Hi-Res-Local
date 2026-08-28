@@ -9,6 +9,7 @@ use crate::audio::dto::{
     DsdOutputMode, DsdRate, EngineStatus, EqConfig, EqPreset, PlaybackMode, PlayerSnapshot,
     RepeatMode, ReplayGainConfig, ReplayGainMode, SystemAudioState,
 };
+use crate::db::queries_settings::save_playback_state;
 use crate::db::queries_tracks::{
     get_track_by_id as db_get_track_by_id, get_tracks_summary as db_get_tracks_summary,
 };
@@ -131,11 +132,25 @@ pub struct LibraryStatsDTO {
 
 // ---------------- Playback Commands ----------------
 
+fn persist_player_position(state: &AppState, position_override_ms: Option<u64>) {
+    let snapshot = state.player.get_snapshot();
+    let Some(track) = snapshot.current_track else {
+        return;
+    };
+    let position_ms = position_override_ms.unwrap_or(snapshot.progress.position_ms);
+    let conn = state.db.lock();
+    if let Err(err) = save_playback_state(&conn, &track.id, position_ms) {
+        tracing::warn!("Failed to persist playback position: {err}");
+    }
+}
+
 #[tauri::command]
 pub async fn play_track(
     track: Option<AudioTrackInput>,
     track_id: Option<String>,
     path: Option<String>,
+    start_position_secs: Option<f64>,
+    start_position_ms: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let audio_track = if let Some(input) = track {
@@ -179,24 +194,31 @@ pub async fn play_track(
         return state.player.play_current().map_err(|e| e.to_string());
     };
 
+    let start_position_ms = start_position_ms
+        .unwrap_or_else(|| (start_position_secs.unwrap_or(0.0).max(0.0) * 1000.0) as u64);
     state
         .player
-        .play_track(audio_track)
+        .play_track_at(audio_track, start_position_ms)
         .map_err(|e| e.to_string())
 }
 
-/// Replace the backend queue with `tracks` and start playing at `start_index`.
+/// Replace the backend queue with `tracks` and start playing at `start_index`
+/// from the requested resume position.
 /// Keeps queue/shuffle/gapless ownership in the backend.
 #[tauri::command]
 pub async fn play_queue(
     tracks: Vec<AudioTrackInput>,
     start_index: Option<usize>,
+    start_position_secs: Option<f64>,
+    start_position_ms: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let audio_tracks: Vec<AudioTrack> = tracks.into_iter().map(|t| t.into_audio_track()).collect();
+    let start_position_ms = start_position_ms
+        .unwrap_or_else(|| (start_position_secs.unwrap_or(0.0).max(0.0) * 1000.0) as u64);
     state
         .player
-        .play_queue(audio_tracks, start_index.unwrap_or(0))
+        .play_queue_at(audio_tracks, start_index.unwrap_or(0), start_position_ms)
         .map_err(|e| e.to_string())
 }
 
@@ -221,7 +243,9 @@ pub async fn play_current(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn pause_playback(state: State<'_, AppState>) -> Result<(), String> {
-    state.player.pause().map_err(|e| e.to_string())
+    state.player.pause().map_err(|e| e.to_string())?;
+    persist_player_position(&state, None);
+    Ok(())
 }
 
 #[tauri::command]
@@ -246,7 +270,9 @@ pub async fn seek_playback(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let pos = position_ms.unwrap_or_else(|| (position_secs.unwrap_or(0.0) * 1000.0) as u64);
-    state.player.seek(pos).map_err(|e| e.to_string())
+    state.player.seek(pos).map_err(|e| e.to_string())?;
+    persist_player_position(&state, Some(pos));
+    Ok(())
 }
 
 #[tauri::command]

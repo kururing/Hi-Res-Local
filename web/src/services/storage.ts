@@ -188,16 +188,26 @@ export const Storage = {
   },
 
   getLastPlayback(): { trackId: string | null; position: number } {
-    return {
-      trackId: localStorage.getItem(STORAGE_KEYS.LAST_PLAYED_TRACK),
-      position: parseFloat(localStorage.getItem(STORAGE_KEYS.LAST_PLAYED_POSITION) || '0'),
-    };
+    try {
+      const position = Number(localStorage.getItem(STORAGE_KEYS.LAST_PLAYED_POSITION) || '0');
+      return {
+        trackId: localStorage.getItem(STORAGE_KEYS.LAST_PLAYED_TRACK),
+        position: Number.isFinite(position) && position >= 0 ? position : 0,
+      };
+    } catch {
+      return { trackId: null, position: 0 };
+    }
   },
 
   saveLastPlayback(trackId: string | null, position: number): void {
-    if (trackId) {
-      localStorage.setItem(STORAGE_KEYS.LAST_PLAYED_TRACK, trackId);
-      localStorage.setItem(STORAGE_KEYS.LAST_PLAYED_POSITION, position.toString());
+    try {
+      if (trackId) {
+        const safePosition = Number.isFinite(position) ? Math.max(0, position) : 0;
+        localStorage.setItem(STORAGE_KEYS.LAST_PLAYED_TRACK, trackId);
+        localStorage.setItem(STORAGE_KEYS.LAST_PLAYED_POSITION, safePosition.toString());
+      }
+    } catch (error) {
+      console.warn('Failed to save local playback fallback', error);
     }
   },
 

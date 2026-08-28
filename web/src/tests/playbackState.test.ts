@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  backendPlaybackToLastPlayback,
   clampPlaybackPosition,
   normalizePlaybackProgress,
   restoreLastPlayback,
+  shouldIgnoreEarlyResumePosition,
 } from '../services/playbackState';
 import { Track } from '../types/library';
 
@@ -17,6 +19,20 @@ const makeTrack = (id: string, duration: number): Track => ({
 });
 
 describe('playback state restoration', () => {
+  it('converts the SQLite millisecond snapshot into frontend seconds', () => {
+    expect(backendPlaybackToLastPlayback({ track_id: 'last', position_ms: 73_500 })).toEqual({
+      trackId: 'last',
+      position: 73.5,
+    });
+    expect(backendPlaybackToLastPlayback({ track_id: '', position_ms: 10 })).toBeNull();
+  });
+
+  it('suppresses the transient zero tick while a resumed decoder opens', () => {
+    expect(shouldIgnoreEarlyResumePosition(0, 73.5, 100)).toBe(true);
+    expect(shouldIgnoreEarlyResumePosition(72.8, 73.5, 100)).toBe(false);
+    expect(shouldIgnoreEarlyResumePosition(0, 73.5, 3000)).toBe(false);
+  });
+
   it('restores the last track, queue index and saved position', () => {
     const tracks = [makeTrack('first', 180), makeTrack('last', 240)];
 

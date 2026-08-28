@@ -29,6 +29,11 @@ export interface LibraryRoot {
   last_scanned_at?: string | null; created_at: string;
 }
 
+export interface SavedPlaybackState {
+  track_id: string;
+  position_ms: number;
+}
+
 /**
  * Tauri IPC Command definitions.
  * This file acts as the explicit contract between Rust backend and TypeScript frontend.
@@ -90,8 +95,8 @@ export interface IpcCommands {
   'get_favorite_artists': { args: Record<string, never>; return: string[] };
 
   // Audio Playback Commands
-  'play_track': { args: { track: Track }; return: void };
-  'play_queue': { args: { tracks: Track[]; startIndex: number }; return: void };
+  'play_track': { args: { track: Track; startPositionSecs?: number }; return: void };
+  'play_queue': { args: { tracks: Track[]; startIndex: number; startPositionSecs?: number }; return: void };
   'queue_replace': { args: { tracks: Track[]; currentIndex: number }; return: void };
   'play_current': { args: Record<string, never>; return: void };
   'next_track': { args: Record<string, never>; return: void };
@@ -107,6 +112,7 @@ export interface IpcCommands {
   'set_loop_mode': { args: { mode: LoopMode }; return: void };
   'set_shuffle': { args: { shuffle: boolean }; return: void };
   'get_playback_status': { args: Record<string, never>; return: PlaybackStatus };
+  'get_saved_playback_state': { args: Record<string, never>; return: SavedPlaybackState | null };
 
   // Queue Commands (backend-owned queue)
   'queue_add': { args: { tracks: Track[] }; return: void };

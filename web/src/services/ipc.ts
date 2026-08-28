@@ -347,6 +347,13 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
       return browserAudioEngine.getStatus() as IpcCommands[K]['return'];
     }
 
+    case 'get_saved_playback_state': {
+      const saved = Storage.getLastPlayback();
+      return (saved.trackId
+        ? { track_id: saved.trackId, position_ms: Math.round(saved.position * 1000) }
+        : null) as IpcCommands[K]['return'];
+    }
+
     case 'get_audio_output_devices': {
       return MOCK_OUTPUT_DEVICES as IpcCommands[K]['return'];
     }

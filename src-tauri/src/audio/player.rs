@@ -211,6 +211,14 @@ impl AudioPlayer {
         ))
     }
 
+    /// Current track identity for low-frequency persistence without cloning the queue.
+    pub fn current_track_id(&self) -> Option<String> {
+        recover_rw_read(&self.inner)
+            .queue
+            .current_track()
+            .map(|track| track.id.clone())
+    }
+
     pub fn execute_command(&self, command: AudioCommand) -> AudioResult<()> {
         match command {
             AudioCommand::PlayTrack(track) => self.play_track(track),
@@ -244,19 +252,32 @@ impl AudioPlayer {
     }
 
     pub fn play_track(&self, track: AudioTrack) -> AudioResult<()> {
+        self.play_track_at(track, 0)
+    }
+
+    pub fn play_track_at(&self, track: AudioTrack, start_position_ms: u64) -> AudioResult<()> {
         {
             let mut inner = recover_rw_write(&self.inner);
             inner.queue.clear();
             inner.queue.add_track(track);
             self.emit_queue_updated(&inner);
         }
-        self.start_playback_for_current()
+        self.start_playback_for_current_at(start_position_ms)
     }
 
     /// Replace the whole queue and start playback at `start_index`.
     /// This is the primary entry point used by the UI so the backend queue owns
     /// next/previous, weighted shuffle and gapless preloading.
     pub fn play_queue(&self, tracks: Vec<AudioTrack>, start_index: usize) -> AudioResult<()> {
+        self.play_queue_at(tracks, start_index, 0)
+    }
+
+    pub fn play_queue_at(
+        &self,
+        tracks: Vec<AudioTrack>,
+        start_index: usize,
+        start_position_ms: u64,
+    ) -> AudioResult<()> {
         if tracks.is_empty() {
             return Err(AudioError::QueueEmpty);
         }
@@ -268,7 +289,7 @@ impl AudioPlayer {
             inner.queue.set_current_index(index)?;
             self.emit_queue_updated(&inner);
         }
-        self.start_playback_for_current()
+        self.start_playback_for_current_at(start_position_ms)
     }
 
     /// Replace queue order without restarting the currently playing track.
@@ -1461,11 +1482,20 @@ impl AudioPlayer {
     }
 
     fn start_playback_for_current(&self) -> AudioResult<()> {
+        self.start_playback_for_current_at(0)
+    }
+
+    fn start_playback_for_current_at(&self, start_position_ms: u64) -> AudioResult<()> {
         let track = recover_rw_read(&self.inner)
             .queue
             .current_track()
             .cloned()
             .ok_or(AudioError::QueueEmpty)?;
+        let start_position_ms = if track.duration_ms > 0 {
+            start_position_ms.min(track.duration_ms)
+        } else {
+            start_position_ms
+        };
 
         let generation = self.pipeline.next_generation();
         {
@@ -1483,12 +1513,14 @@ impl AudioPlayer {
             .native_dsd_playing
             .store(true, Ordering::SeqCst);
         self.audio_control.set_paused(false);
-        self.pipeline.position_ms.store(0, Ordering::SeqCst);
+        self.pipeline
+            .position_ms
+            .store(start_position_ms, Ordering::SeqCst);
         self.emit_event(AudioEvent::StateChanged(PlaybackState::Playing));
         self.send_decode(DecodeCommand::OpenTrack {
             track,
             generation,
-            start_position_ms: 0,
+            start_position_ms,
         });
         self.check_and_preload_next();
         #[cfg(not(windows))]
