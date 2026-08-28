@@ -127,10 +127,15 @@ export const AppShell: React.FC = () => {
   const currentEntry = navigation.entries[navigation.index] || { view: 'home' };
   const currentView = currentEntry.view;
   const currentPayload = currentEntry.payload;
+  const [hasVisitedSettings, setHasVisitedSettings] = useState(currentView === 'settings');
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => mainRef.current?.focus());
     return () => cancelAnimationFrame(frame);
+  }, [currentView]);
+
+  useEffect(() => {
+    if (currentView === 'settings') setHasVisitedSettings(true);
   }, [currentView]);
 
   const navigate = useCallback((view: string, payload?: unknown) => {
@@ -225,11 +230,17 @@ export const AppShell: React.FC = () => {
       case 'lyrics':
         return <LyricsView />;
       case 'settings':
-        return <SettingsView />;
+        return null;
       default:
         return <HomeView onNavigate={navigate} />;
     }
   };
+
+  const viewLoading = (
+    <div className="flex h-full items-center justify-center text-sm text-brand-muted" role="status" aria-live="polite">
+      Đang tải nội dung…
+    </div>
+  );
 
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-oled-base text-brand-foreground font-sans selection:bg-brand-secondary selection:text-white">
@@ -267,13 +278,20 @@ export const AppShell: React.FC = () => {
           tabIndex={-1}
           className="app-main min-h-0 flex-1 overflow-hidden focus:outline-none"
         >
-          <div key={currentView} className="view-stage">
-            <Suspense
-              fallback={null}
-            >
-              {renderCurrentView()}
-            </Suspense>
-          </div>
+          {currentView !== 'settings' && (
+            <div key={currentView} className="view-stage">
+              <Suspense fallback={viewLoading}>
+                {renderCurrentView()}
+              </Suspense>
+            </div>
+          )}
+          {(currentView === 'settings' || hasVisitedSettings) && (
+            <div className={currentView === 'settings' ? 'view-stage' : 'hidden'}>
+              <Suspense fallback={viewLoading}>
+                <SettingsView />
+              </Suspense>
+            </div>
+          )}
         </main>
 
         {/* Player owns its space so scrollable content can never run underneath it. */}

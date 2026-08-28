@@ -93,6 +93,10 @@ async function mockInvokeHandler<K extends keyof IpcCommands>(
       Storage.clearHistory();
       return count as IpcCommands[K]['return'];
     }
+    case 'export_database':
+      return [] as IpcCommands[K]['return'];
+    case 'import_database':
+      return undefined as IpcCommands[K]['return'];
     case 'get_all_tracks': {
       return mockTracks as IpcCommands[K]['return'];
     }

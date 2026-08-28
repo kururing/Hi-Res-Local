@@ -132,6 +132,8 @@ export interface IpcCommands {
     return: PlayHistoryEntry[];
   };
   'clear_play_history': { args: Record<string, never>; return: number };
+  'export_database': { args: Record<string, never>; return: number[] };
+  'import_database': { args: { data: number[] }; return: void };
 
   // Audio Output & Hardware
   'get_audio_output_devices': { args: Record<string, never>; return: AudioOutputDevice[] };
@@ -174,6 +176,7 @@ export interface IpcEvents {
   'audio://track_changed': Track | null;
   'audio://track_ended': Record<string, never>;
   'audio://error': { message: string };
+  'audio://device_lost': { error: string };
   'audio://underrun': { count: number; missing_samples: number };
   'audio://engine_status': EngineStatus;
   'audio://exclusive_mode': {
@@ -197,4 +200,6 @@ export interface IpcEvents {
   'audio://native_dsd_status': { active: boolean; dsd_rate?: string | null; error?: string | null };
   'library://scan_progress': ScanProgress;
   'library://scan_finished': { total: number; success: boolean };
+  'library:track_updated': Track;
+  'library:track_deleted': string;
 }

@@ -116,6 +116,7 @@ export const vi = {
   empty_favorites_desc: 'Chưa có mục nào được đánh dấu yêu thích. Nhấn vào biểu tượng trái tim để lưu lại.',
   history_subtitle: '{count} bài hát đã phát gần đây',
   history_clear: 'Xóa lịch sử',
+  history_clear_confirm: 'Bạn có chắc chắn muốn xóa toàn bộ lịch sử nghe không?',
   history_empty: 'Chưa có lịch sử nghe nào.',
 
   // Playlists
@@ -205,6 +206,8 @@ export const vi = {
 
   // Settings
   settings_title: 'Cài đặt hệ thống',
+  settings_subtitle: 'Cấu hình thư viện nhạc, engine âm thanh bit-perfect và tùy chọn người dùng',
+  settings_backup_description: 'Xuất bài hát yêu thích, playlist, preset EQ, lịch sử nghe và cài đặt thành file sao lưu JSON.',
   settings_library_section: 'Quản lý Thư viện Nhạc',
   settings_folders_list: 'Các thư mục được quét',
   settings_btn_rescan: 'Quét lại thư viện ngay',

@@ -74,6 +74,15 @@ impl AudioControlHandle {
         self.request(|reply| ControlCommand::SelectDevice(name, reply))
     }
 
+    /// Drop an invalid stream and reopen the system default endpoint.
+    #[cfg(not(windows))]
+    pub fn recover_from_device_loss(&self) -> AudioResult<()> {
+        self.set_enabled(false)?;
+        self.select_device(None)?;
+        self.set_enabled(true)?;
+        self.ensure_stream()
+    }
+
     #[allow(dead_code)]
     pub fn enumerate_devices(&self) -> AudioResult<Vec<AudioDeviceDTO>> {
         self.request(ControlCommand::EnumerateDevices)

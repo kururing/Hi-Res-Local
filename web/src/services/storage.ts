@@ -1,4 +1,5 @@
 import { AppSettings, DEFAULT_SETTINGS, normalizeAudioSettings } from '../types/settings';
+import { normalizeAppFont } from './fonts';
 import { Playlist } from '../types/playlist';
 import { EqualizerPreset } from '../types/audio';
 import { LyricsMode } from '../types/lyrics';
@@ -33,6 +34,7 @@ export const Storage = {
       const settings = normalizeAudioSettings({
         ...DEFAULT_SETTINGS,
         ...parsed,
+        font_family: normalizeAppFont(parsed.font_family),
         // Legacy payloads have no playback_mode; force the migration branch.
         playback_mode: (parsed.playback_mode ?? '') as AppSettings['playback_mode'],
       });
@@ -245,6 +247,12 @@ export const Storage = {
   importBackup(jsonString: string): boolean {
     try {
       const data = JSON.parse(jsonString);
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+      if (data.version !== '2.0.0') return false;
+      if (data.settings !== undefined && (typeof data.settings !== 'object' || Array.isArray(data.settings))) return false;
+      for (const key of ['favorite_tracks', 'favorite_albums', 'favorite_artists', 'playlists', 'history', 'eq_presets']) {
+        if (data[key] !== undefined && !Array.isArray(data[key])) return false;
+      }
       if (data.settings) this.saveSettings(data.settings);
       if (data.favorite_tracks) localStorage.setItem(STORAGE_KEYS.FAVORITES_TRACKS, JSON.stringify(data.favorite_tracks));
       if (data.favorite_albums) localStorage.setItem(STORAGE_KEYS.FAVORITES_ALBUMS, JSON.stringify(data.favorite_albums));

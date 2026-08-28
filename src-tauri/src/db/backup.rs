@@ -9,14 +9,14 @@ pub fn backup_database(conn: &Connection, dest_path: &Path) -> AppResult<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    if dest_path.exists() {
-        std::fs::remove_file(dest_path)?;
-    }
-
-    let mut dest_conn = Connection::open(dest_path)?;
+    let tmp_path = dest_path.with_extension("db.tmp");
+    let _ = std::fs::remove_file(&tmp_path);
+    let mut dest_conn = Connection::open(&tmp_path)?;
     let backup = rusqlite::backup::Backup::new(conn, &mut dest_conn)?;
     backup.run_to_completion(100, std::time::Duration::from_millis(50), None)?;
-
+    drop(backup);
+    drop(dest_conn);
+    std::fs::rename(&tmp_path, dest_path)?;
     Ok(())
 }
 
@@ -41,14 +41,23 @@ pub fn restore_database(target_conn: &mut Connection, backup_path: &Path) -> App
         )));
     }
 
-    // Restore into current connection using SQLite online backup
-    let backup = rusqlite::backup::Backup::new(&src_conn, target_conn)?;
-    backup.run_to_completion(100, std::time::Duration::from_millis(50), None)?;
-    drop(backup);
-    drop(src_conn);
+    // Keep an in-memory copy so a failed restore/migration can be rolled back.
+    let mut previous = Connection::open_in_memory()?;
+    {
+        let old_backup = rusqlite::backup::Backup::new(&*target_conn, &mut previous)?;
+        old_backup.run_to_completion(100, std::time::Duration::from_millis(50), None)?;
+    }
 
-    // Run migrations just in case the restored DB was an older version
-    run_migrations(target_conn)?;
-
-    Ok(())
+    let restore_result = (|| -> AppResult<()> {
+        let backup = rusqlite::backup::Backup::new(&src_conn, target_conn)?;
+        backup.run_to_completion(100, std::time::Duration::from_millis(50), None)?;
+        drop(backup);
+        run_migrations(target_conn)?;
+        Ok(())
+    })();
+    if restore_result.is_err() {
+        let rollback = rusqlite::backup::Backup::new(&previous, target_conn)?;
+        rollback.run_to_completion(100, std::time::Duration::from_millis(50), None)?;
+    }
+    restore_result
 }

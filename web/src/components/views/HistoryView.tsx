@@ -34,6 +34,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onNavigate }) => {
   }, [loadHistory]);
 
   const clearHistory = async () => {
+    if (!window.confirm(t('history_clear_confirm', settings.language))) return;
     await IpcService.invoke('clear_play_history');
     setHistoryItems([]);
   };

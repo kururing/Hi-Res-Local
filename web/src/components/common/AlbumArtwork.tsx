@@ -29,6 +29,15 @@ export const AlbumArtwork: React.FC<AlbumArtworkProps> = ({
         album={album.name}
         className={className}
         alt={alt ?? `${album.name} cover`}
+        fallback={(
+          <TrackArtwork
+            track={album.tracks.find(track => track.cover_art_path) ?? album.tracks[0] ?? null}
+            className="h-full w-full"
+            imageClassName={imageClassName}
+            iconClassName={iconClassName}
+            alt={alt ?? `${album.name} cover`}
+          />
+        )}
       />
     );
   }

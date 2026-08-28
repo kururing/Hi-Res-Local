@@ -214,19 +214,18 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           {recentlyAdded.map(tr => (
             <div
               key={tr.id}
-              onClick={() => playTrack(tr, recentlyAdded)}
-              onKeyDown={event => activateOnKeyboard(event, () => void playTrack(tr, recentlyAdded))}
-              role="button"
-              tabIndex={0}
-              aria-label={t('home_play_track', settings.language, { title: tr.title, artist: tr.artist })}
-              className="group p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border cursor-pointer transition-all flex items-center justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+              className="group p-3 rounded-xl bg-oled-card hover:bg-oled-hover border border-brand-border/60 hover:border-brand-border transition-all flex items-center justify-between gap-3"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <TrackArtwork
-                  track={tr}
-                  className="w-11 h-11 rounded-lg bg-brand-primary/90 border border-brand-border shrink-0 group-hover:scale-105 transition-transform"
-                  iconClassName="w-5 h-5 text-brand-muted group-hover:text-brand-accent transition-colors"
-                />
+                <button type="button" onClick={() => playTrack(tr, recentlyAdded)}
+                  aria-label={t('home_play_track', settings.language, { title: tr.title, artist: tr.artist })}
+                  className="rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent">
+                  <TrackArtwork
+                    track={tr}
+                    className="w-11 h-11 rounded-lg bg-brand-primary/90 border border-brand-border shrink-0 group-hover:scale-105 transition-transform"
+                    iconClassName="w-5 h-5 text-brand-muted group-hover:text-brand-accent transition-colors"
+                  />
+                </button>
                 <div className="flex flex-col min-w-0">
                   <span className="block min-w-0 max-w-full truncate text-xs font-semibold text-brand-foreground group-hover:text-brand-accent transition-colors" title={tr.title}>
                     {tr.title}

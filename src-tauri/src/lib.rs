@@ -123,7 +123,15 @@ pub fn run() {
             let mut rx = player.subscribe();
 
             tauri::async_runtime::spawn(async move {
-                while let Ok(event) = rx.recv().await {
+                loop {
+                    let event = match rx.recv().await {
+                        Ok(event) => event,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                            tracing::warn!("Audio event broadcaster lagged by {count} events");
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    };
                     match event {
                         AudioEvent::StateChanged(state) => {
                             let state_str = match state {
@@ -218,9 +226,7 @@ pub fn run() {
                             );
                         }
                         AudioEvent::DeviceLost(msg) => {
-                            if player.exclusive_mode() {
-                                player.force_disable_exclusive(Some(msg.clone()));
-                            }
+                            player.recover_from_device_loss(msg.clone());
                             let _ = app_handle
                                 .emit("audio://device_lost", serde_json::json!({ "error": msg }));
                         }
@@ -438,7 +444,9 @@ pub fn run() {
             set_discord_presence,
             // Backup & Restore
             backup_database,
-            restore_database
+            restore_database,
+            export_database,
+            import_database
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|err| {

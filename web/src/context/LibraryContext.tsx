@@ -160,6 +160,8 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     // Listen for scanning progress events
     let unlistenProgress: (() => void) | undefined;
     let unlistenFinished: (() => void) | undefined;
+    let unlistenTrackUpdated: (() => void) | undefined;
+    let unlistenTrackDeleted: (() => void) | undefined;
 
     (async () => {
       unlistenProgress = await IpcService.listen('library://scan_progress', (progress) => {
@@ -169,11 +171,15 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setScanProgress(null);
         reloadLibrary();
       });
+      unlistenTrackUpdated = await IpcService.listen('library:track_updated', () => { void reloadLibrary(); });
+      unlistenTrackDeleted = await IpcService.listen('library:track_deleted', () => { void reloadLibrary(); });
     })();
 
     return () => {
       if (unlistenProgress) unlistenProgress();
       if (unlistenFinished) unlistenFinished();
+      if (unlistenTrackUpdated) unlistenTrackUpdated();
+      if (unlistenTrackDeleted) unlistenTrackDeleted();
     };
   }, [reloadLibrary]);
 

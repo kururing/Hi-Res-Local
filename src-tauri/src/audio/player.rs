@@ -1326,6 +1326,62 @@ impl AudioPlayer {
         });
     }
 
+    /// Stop the failed route and rebuild Shared output on the system default
+    /// device. Keeping the errored CPAL/WASAPI stream alive can leave the
+    /// engine permanently wedged after a USB DAC or Bluetooth endpoint drops.
+    pub fn recover_from_device_loss(&self, error: String) {
+        let position_ms = self.pipeline.position_ms.load(Ordering::Relaxed);
+        let duration_ms = self.pipeline.duration_ms.load(Ordering::Relaxed);
+        let generation = self.pipeline.next_generation();
+        {
+            let mut inner = recover_rw_write(&self.inner);
+            inner.state = PlaybackState::Paused;
+            inner.engine_status = None;
+        }
+        self.pipeline.is_playing.store(false, Ordering::SeqCst);
+        #[cfg(windows)]
+        self.pipeline
+            .native_dsd_playing
+            .store(false, Ordering::SeqCst);
+        self.audio_control.set_paused(true);
+        self.send_decode(DecodeCommand::Stop { generation });
+
+        if let Err(recovery_error) = self.audio_control.recover_from_device_loss() {
+            self.emit_event(AudioEvent::ErrorOccurred(format!(
+                "{error}; audio recovery failed: {recovery_error}"
+            )));
+        }
+
+        {
+            let mut inner = recover_rw_write(&self.inner);
+            inner.active_device = None;
+            inner.exclusive_mode = false;
+            inner.bit_perfect = false;
+            inner.engine_status = None;
+        }
+        self.pipeline.exclusive_mode.store(false, Ordering::SeqCst);
+        self.pipeline.bit_perfect.store(false, Ordering::SeqCst);
+        self.pipeline
+            .position_ms
+            .store(position_ms, Ordering::SeqCst);
+        self.emit_event(AudioEvent::EngineStatusUpdated(EngineStatus::default()));
+        self.emit_event(AudioEvent::StateChanged(PlaybackState::Paused));
+        self.emit_event(AudioEvent::ProgressUpdated(PlaybackProgress {
+            position_ms,
+            duration_ms,
+            buffered_ms: position_ms,
+            percentage: if duration_ms > 0 {
+                (position_ms as f32 / duration_ms as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+        }));
+
+        // Reopen paused at the captured position. A later Resume therefore
+        // continues from the hot-unplug point instead of restarting the track.
+        let _ = self.reopen_current_preserving_position(false, position_ms);
+    }
+
     pub fn bit_perfect(&self) -> bool {
         recover_rw_read(&self.inner).bit_perfect
     }

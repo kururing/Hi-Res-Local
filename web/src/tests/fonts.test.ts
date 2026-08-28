@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { APP_FONT_OPTIONS, getAppFontOption } from '../services/fonts';
+import {
+  APP_FONT_OPTIONS,
+  getAppFontOption,
+  getAppFontStacks,
+  normalizeAppFont,
+} from '../services/fonts';
 import { DEFAULT_SETTINGS } from '../types/settings';
 
 describe('interface fonts', () => {
@@ -16,5 +21,18 @@ describe('interface fonts', () => {
 
   it('falls back safely for an invalid persisted value', () => {
     expect(getAppFontOption('missing' as never).id).toBe('poppins');
+    expect(normalizeAppFont('missing')).toBe('poppins');
+  });
+
+  it('keeps Segoe UI Variable Display in the display stack for sans choices', () => {
+    const stacks = getAppFontStacks('inter');
+    expect(stacks.ui).toContain("'Inter'");
+    expect(stacks.display).toContain("'Inter'");
+    expect(stacks.display).toContain("'Segoe UI Variable Display'");
+  });
+
+  it('uses the same stack for system and serif choices', () => {
+    expect(getAppFontStacks('system').ui).toBe(getAppFontStacks('system').display);
+    expect(getAppFontStacks('lora').ui).toBe(getAppFontStacks('lora').display);
   });
 });

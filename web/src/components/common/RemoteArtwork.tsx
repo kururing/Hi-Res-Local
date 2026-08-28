@@ -8,9 +8,17 @@ interface RemoteArtworkProps {
   album?: string;
   className?: string;
   alt: string;
+  fallback?: React.ReactNode;
 }
 
-export const RemoteArtwork: React.FC<RemoteArtworkProps> = ({ kind, artist, album, className = '', alt }) => {
+export const RemoteArtwork: React.FC<RemoteArtworkProps> = ({
+  kind,
+  artist,
+  album,
+  className = '',
+  alt,
+  fallback,
+}) => {
   const source = getCachedArtwork(kind, artist, album);
   const [failed, setFailed] = useState(false);
 
@@ -26,6 +34,8 @@ export const RemoteArtwork: React.FC<RemoteArtworkProps> = ({ kind, artist, albu
           onError={() => setFailed(true)}
           draggable={false}
         />
+      ) : fallback ? (
+        fallback
       ) : kind === 'artist' ? (
         <User className="h-12 w-12 text-brand-accent/60" aria-hidden="true" />
       ) : (

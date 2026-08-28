@@ -312,6 +312,20 @@ mod imp {
             Ok(())
         }
 
+        /// Tear down every invalid output and reopen WASAPI Shared on the
+        /// current Windows default endpoint after a hot-unplug.
+        pub fn recover_from_device_loss(&self) -> AudioResult<()> {
+            let _ = self.exclusive.disable();
+            self.exclusive_enabled.store(false, Ordering::SeqCst);
+
+            self.shared.set_enabled(false)?;
+            self.exclusive.select_device(None)?;
+            self.shared.select_device(None)?;
+            *recover_mutex(&self.selected_device) = None;
+            self.shared.set_enabled(true)?;
+            self.shared.ensure_stream()
+        }
+
         pub fn set_paused(&self, paused: bool) {
             self.shared.set_paused(paused);
             if self.exclusive_enabled.load(Ordering::SeqCst) {

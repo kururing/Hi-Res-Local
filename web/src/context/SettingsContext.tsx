@@ -3,7 +3,8 @@ import { AppSettings, DEFAULT_SETTINGS, AppLanguage, AppTheme, withWasapiExclusi
 import { Storage } from '../services/storage';
 import { IpcService, isTauri } from '../services/ipc';
 import { EqualizerPreset } from '../types/audio';
-import { getAppFontOption } from '../services/fonts';
+import { loadAppFont } from '../loadAppFonts';
+import { getAppFontStacks } from '../services/fonts';
 import { getImageThemeBorderColor } from '../services/imageTheme';
 
 export const DEFAULT_EQ_PRESETS: EqualizerPreset[] = [
@@ -100,9 +101,18 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Apply the persisted typography choice without requiring an app restart.
   useEffect(() => {
-    const selectedFont = getAppFontOption(settings.font_family);
-    document.documentElement.style.setProperty('--font-ui', selectedFont.stack);
-    document.documentElement.style.setProperty('--font-display', selectedFont.stack);
+    let cancelled = false;
+
+    void loadAppFont(settings.font_family).then(() => {
+      if (cancelled) return;
+      const stacks = getAppFontStacks(settings.font_family);
+      document.documentElement.style.setProperty('--font-ui', stacks.ui);
+      document.documentElement.style.setProperty('--font-display', stacks.display);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [settings.font_family]);
 
   // Keep the player running in the system tray when the user closes the window.

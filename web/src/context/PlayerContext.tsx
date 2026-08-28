@@ -294,6 +294,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let unlistenExclusive: (() => void) | undefined;
     let unlistenNativeDsd: (() => void) | undefined;
     let unlistenAudioError: (() => void) | undefined;
+    let unlistenDeviceLost: (() => void) | undefined;
     let unlistenVolume: (() => void) | undefined;
     let disposed = false;
 
@@ -367,20 +368,24 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           );
           beginHistorySession(nextTrack, 0);
         } else if (!historySessionRef.current) {
-          beginHistorySession(nextTrack, 0);
+          beginHistorySession(nextTrack, progressRef.current.position);
         }
 
         if (nextIndex >= 0) {
           queueIndexRef.current = nextIndex;
           setQueueIndex(nextIndex);
         }
-        progressRef.current = { position: 0, duration };
-        setProgressRef.current({ position: 0, duration });
+        // Replaying a restored track emits track_changed from the backend
+        // even though it is still the same track. Keep the saved position;
+        // genuinely new tracks must start at zero.
+        const retainedPosition = changedTrack ? 0 : progressRef.current.position;
+        progressRef.current = { position: retainedPosition, duration };
+        setProgressRef.current({ position: retainedPosition, duration });
         setStatus(prev => ({
           ...prev,
           state: 'playing',
           current_track: nextTrack,
-          position: 0,
+          position: retainedPosition,
           duration,
         }));
 
@@ -488,6 +493,20 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
       unlistenAudioError = disposeAudioError;
 
+      const disposeDeviceLost = await IpcService.listen('audio://device_lost', payload => {
+        setStatus(previous => ({ ...previous, state: 'paused' }));
+        setEngineStatus(null);
+        showToast(
+          localizeAudioError(payload?.error || 'Audio device unavailable or disconnected', settings.language),
+          'error'
+        );
+      });
+      if (disposed) {
+        disposeDeviceLost();
+        return;
+      }
+      unlistenDeviceLost = disposeDeviceLost;
+
       const disposeVolume = await IpcService.listen('audio://volume_changed', payload => {
         const volume = payload?.volume;
         const isMuted = payload?.is_muted;
@@ -516,6 +535,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (unlistenExclusive) unlistenExclusive();
       if (unlistenNativeDsd) unlistenNativeDsd();
       if (unlistenAudioError) unlistenAudioError();
+      if (unlistenDeviceLost) unlistenDeviceLost();
       if (unlistenVolume) unlistenVolume();
     };
   }, [beginHistorySession, finalizeHistorySession, persistLastPlayback, settings.language, showToast]);

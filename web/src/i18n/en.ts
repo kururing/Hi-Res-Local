@@ -118,6 +118,7 @@ export const en: typeof vi = {
   empty_favorites_desc: 'No items marked as favorite yet. Click the heart icon to save favorites.',
   history_subtitle: '{count} songs played recently',
   history_clear: 'Clear History',
+  history_clear_confirm: 'Are you sure you want to clear all listening history?',
   history_empty: 'No listening history recorded yet.',
 
   // Playlists
@@ -207,6 +208,8 @@ export const en: typeof vi = {
 
   // Settings
   settings_title: 'Settings',
+  settings_subtitle: 'Configure your music library, bit-perfect audio engine, and user preferences',
+  settings_backup_description: 'Export favorite tracks, playlists, EQ presets, listening history, and settings into a JSON backup file.',
   settings_library_section: 'Music Library Management',
   settings_folders_list: 'Monitored Folders',
   settings_btn_rescan: 'Rescan Library Now',

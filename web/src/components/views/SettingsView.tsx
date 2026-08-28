@@ -33,6 +33,15 @@ import { localizeAudioError, t } from '../../i18n';
 import { applyImageThemeAccent, createArtworkTheme, createImageTheme } from '../../services/imageTheme';
 import { AppSettings, AppTheme, normalizeAudioSettings } from '../../types/settings';
 import { engineSourceDisplay, engineTransportDisplay, getAdvancedOptionGating, coerceUnavailableAudioOptions, volumeControlLabel, isEqualizerAvailable } from '../../services/playbackDisplay';
+
+function bytesToBase64(bytes: number[]): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
 import { APP_FONT_OPTIONS } from '../../services/fonts';
 import { clearArtworkCache, downloadArtwork, getCachedArtwork } from '../../services/remoteArtwork';
 import { resolveTrackArtworkSource } from '../../services/trackArtwork';
@@ -905,8 +914,12 @@ export const SettingsView: React.FC = () => {
     );
   };
 
-  const handleExportBackup = () => {
-    const backupJson = Storage.exportBackup();
+  const handleExportBackup = async () => {
+    const database = await IpcService.invoke('export_database');
+    const backupJson = JSON.stringify({
+      ...JSON.parse(Storage.exportBackup()),
+      database_base64: bytesToBase64(database),
+    }, null, 2);
     const blob = new Blob([backupJson], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -924,13 +937,24 @@ export const SettingsView: React.FC = () => {
     reader.onload = evt => {
       const content = evt.target?.result as string;
       if (content) {
-        const success = Storage.importBackup(content);
-        if (success) {
-          showToast(t('toast_backup_imported', settings.language), 'success');
-          setTimeout(() => window.location.reload(), 1000);
-        } else {
-          showToast('Import failed: invalid JSON format', 'error');
-        }
+        let parsed: { database_base64?: string };
+        try { parsed = JSON.parse(content); } catch { parsed = {}; }
+        const databaseBytes = parsed.database_base64
+          ? Uint8Array.from(atob(parsed.database_base64), char => char.charCodeAt(0))
+          : null;
+        const restore = databaseBytes
+          ? IpcService.invoke('import_database', { data: [...databaseBytes] })
+          : Promise.resolve();
+        void restore.then(() => {
+          const success = Storage.importBackup(content);
+          if (success) {
+            showToast(t('toast_backup_imported', settings.language), 'success');
+            setTimeout(() => window.location.reload(), 1000);
+          } else showToast('Import failed: invalid JSON format', 'error');
+        }).catch(error => {
+          console.error('Database restore failed', error);
+          showToast('Import failed: database restore error', 'error');
+        });
       }
     };
     reader.readAsText(file);
@@ -944,7 +968,7 @@ export const SettingsView: React.FC = () => {
           {t('settings_title', settings.language)}
         </h1>
         <span className="text-xs text-brand-muted">
-          Configure music library paths, bit-perfect audio engine, and user preferences
+          {t('settings_subtitle', settings.language)}
         </span>
       </div>
 
@@ -1648,7 +1672,7 @@ export const SettingsView: React.FC = () => {
         </div>
 
         <p className="text-xs text-brand-muted">
-          Export your favorite tracks, custom playlists, EQ presets, listening history, and settings into a JSON backup file.
+          {t('settings_backup_description', settings.language)}
         </p>
 
         <div className="flex flex-wrap items-center gap-3 pt-2">

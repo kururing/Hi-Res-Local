@@ -19,6 +19,29 @@ export const APP_FONT_OPTIONS: readonly AppFontOption[] = [
   },
 ];
 
+const DISPLAY_FALLBACK_STACK = "'Segoe UI Variable Display', 'Segoe UI', sans-serif";
+
 export function getAppFontOption(font: AppFont): AppFontOption {
   return APP_FONT_OPTIONS.find(option => option.id === font) ?? APP_FONT_OPTIONS[0];
+}
+
+export function normalizeAppFont(font: string | undefined): AppFont {
+  if (font && APP_FONT_OPTIONS.some(option => option.id === font)) {
+    return font as AppFont;
+  }
+  return APP_FONT_OPTIONS[0].id;
+}
+
+/** UI body stack and heading display stack (display keeps Segoe UI Variable for sans choices). */
+export function getAppFontStacks(font: AppFont): { ui: string; display: string } {
+  const option = getAppFontOption(font);
+  if (option.id === 'system' || option.id === 'lora') {
+    return { ui: option.stack, display: option.stack };
+  }
+
+  const primaryFamily = option.stack.split(',')[0]?.trim() ?? "'Poppins'";
+  return {
+    ui: option.stack,
+    display: `${primaryFamily}, ${DISPLAY_FALLBACK_STACK}`,
+  };
 }
