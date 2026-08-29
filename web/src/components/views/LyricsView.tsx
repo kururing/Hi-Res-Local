@@ -85,8 +85,8 @@ export const LyricsView: React.FC = () => {
     setLoading(true);
 
     const fetchRemoteLyrics = async (): Promise<LyricData | null> => {
-      // v2 invalidates results chosen by the old single-result LRCLIB lookup.
-      const cacheKey = `nghenhac_lrclib_lyrics:v2:${track.id}:${track.title}:${track.artist}:${track.album}`;
+      // v3 invalidates remote results selected before script-aware matching.
+      const cacheKey = `nghenhac_lrclib_lyrics:v3:${track.id}:${track.title}:${track.artist}:${track.album}`;
       try {
         const cached = localStorage.getItem(cacheKey);
         if (cached) {

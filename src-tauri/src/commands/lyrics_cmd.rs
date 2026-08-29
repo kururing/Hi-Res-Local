@@ -92,22 +92,25 @@ fn version_markers(value: &str) -> Vec<&'static str> {
 enum LyricsScript {
     Hangul,
     Kana,
+    Han,
     Cyrillic,
     Arabic,
 }
 
 fn dominant_lyrics_script(value: &str) -> Option<LyricsScript> {
-    let mut counts = [0_u32; 4];
+    let mut counts = [0_u32; 5];
     for character in value.chars() {
         let code = character as u32;
         if (0xAC00..=0xD7AF).contains(&code) || (0x1100..=0x11FF).contains(&code) {
             counts[0] += 1;
         } else if (0x3040..=0x30FF).contains(&code) || (0x31F0..=0x31FF).contains(&code) {
             counts[1] += 1;
-        } else if (0x0400..=0x052F).contains(&code) {
+        } else if (0x3400..=0x4DBF).contains(&code) || (0x4E00..=0x9FFF).contains(&code) {
             counts[2] += 1;
-        } else if (0x0600..=0x06FF).contains(&code) {
+        } else if (0x0400..=0x052F).contains(&code) {
             counts[3] += 1;
+        } else if (0x0600..=0x06FF).contains(&code) {
+            counts[4] += 1;
         }
     }
     let (index, count) = counts
@@ -120,9 +123,42 @@ fn dominant_lyrics_script(value: &str) -> Option<LyricsScript> {
     Some(match index {
         0 => LyricsScript::Hangul,
         1 => LyricsScript::Kana,
-        2 => LyricsScript::Cyrillic,
+        2 => LyricsScript::Han,
+        3 => LyricsScript::Cyrillic,
         _ => LyricsScript::Arabic,
     })
+}
+
+fn expected_lyrics_script(
+    title: &str,
+    artist: &str,
+    album: &str,
+    genre: Option<&str>,
+) -> Option<LyricsScript> {
+    let metadata = format!("{title} {artist} {album}");
+    if let Some(script) = dominant_lyrics_script(&metadata) {
+        return Some(script);
+    }
+
+    let normalized_genre: String = genre
+        .unwrap_or_default()
+        .nfkc()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect();
+    if normalized_genre.contains("kpop") || normalized_genre.contains("korean") {
+        Some(LyricsScript::Hangul)
+    } else if normalized_genre.contains("jpop") || normalized_genre.contains("japanese") {
+        Some(LyricsScript::Kana)
+    } else if normalized_genre.contains("cpop")
+        || normalized_genre.contains("chinese")
+        || normalized_genre.contains("mandopop")
+        || normalized_genre.contains("cantopop")
+    {
+        Some(LyricsScript::Han)
+    } else {
+        None
+    }
 }
 
 fn candidate_lyrics_text(candidate: &LrclibResponse) -> &str {
@@ -138,6 +174,7 @@ fn lrclib_candidate_score(
     title: &str,
     artist: &str,
     album: &str,
+    genre: Option<&str>,
     duration_secs: f64,
 ) -> Option<i32> {
     let title_score = text_relation_score(&candidate.track_name, title, 50, 34);
@@ -187,7 +224,8 @@ fn lrclib_candidate_score(
         score -= 60;
     }
 
-    let metadata_script = dominant_lyrics_script(&candidate.track_name);
+    let metadata_script = expected_lyrics_script(title, artist, album, genre)
+        .or_else(|| dominant_lyrics_script(&candidate.track_name));
     let lyric_script = dominant_lyrics_script(candidate_lyrics_text(candidate));
     if let (Some(metadata_script), Some(lyric_script)) = (metadata_script, lyric_script) {
         score += if metadata_script == lyric_script {
@@ -212,19 +250,20 @@ fn select_best_lrclib_candidate(
     title: &str,
     artist: &str,
     album: &str,
+    genre: Option<&str>,
     duration_secs: f64,
 ) -> Option<LrclibResponse> {
     candidates
         .into_iter()
         .max_by_key(|candidate| {
             (
-                lrclib_candidate_score(candidate, title, artist, album, duration_secs)
+                lrclib_candidate_score(candidate, title, artist, album, genre, duration_secs)
                     .unwrap_or(i32::MIN),
                 std::cmp::Reverse(candidate.id),
             )
         })
         .filter(|candidate| {
-            lrclib_candidate_score(candidate, title, artist, album, duration_secs)
+            lrclib_candidate_score(candidate, title, artist, album, genre, duration_secs)
                 .is_some_and(|score| score >= 70)
         })
 }
@@ -294,6 +333,7 @@ pub async fn fetch_lrclib_lyrics(
         &track.title,
         &track.artist,
         &track.album,
+        track.genre.as_deref(),
         duration_secs,
     ) else {
         return Ok(None);
@@ -417,6 +457,7 @@ mod tests {
             "Go Go",
             "BTS",
             "Love Yourself 結 'Answer'",
+            None,
             235.0,
         )
         .expect("a matching Korean result");
@@ -448,6 +489,7 @@ mod tests {
             "고민보다 Go",
             "BTS",
             "LOVE YOURSELF 承 'Her'",
+            None,
             235.0,
         )
         .expect("a script-compatible result");
@@ -471,9 +513,42 @@ mod tests {
             "Go Go",
             "BTS",
             "LOVE YOURSELF 結 'Answer'",
+            None,
             235.0,
         )
         .is_none());
+    }
+
+    #[test]
+    fn lrclib_ranking_uses_genre_to_reject_wrong_lyrics_script() {
+        let chinese_cache_poison = candidate(
+            91,
+            "Boy In Luv",
+            "BTS",
+            "Proof",
+            231.0,
+            "放不下 誰在尷尬 而我自問自答 練習牽掛",
+        );
+        let korean_original = candidate(
+            92,
+            "Boy In Luv",
+            "BTS",
+            "Skool Luv Affair Special Addition",
+            231.0,
+            "되고파 너의 오빠 너의 사랑이 난 너무 고파",
+        );
+
+        let selected = select_best_lrclib_candidate(
+            vec![chinese_cache_poison, korean_original],
+            "Boy In Luv",
+            "BTS",
+            "Proof",
+            Some("K-Pop"),
+            231.0,
+        )
+        .expect("the original Korean lyrics");
+
+        assert_eq!(selected.id, 92);
     }
 
     #[test]
