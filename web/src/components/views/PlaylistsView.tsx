@@ -7,7 +7,6 @@ import { Modal } from '../common/Modal';
 import { t } from '../../i18n';
 import { activateOnKeyboard } from '../../services/keyboard';
 import { PlaylistArtwork } from '../common/PlaylistArtwork';
-import { IpcService } from '../../services/ipc';
 import { Playlist } from '../../types/playlist';
 
 interface PlaylistsViewProps {
@@ -15,7 +14,7 @@ interface PlaylistsViewProps {
 }
 
 export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
-  const { playlists, createPlaylist, importM3uFile, deletePlaylist, updatePlaylist, getPlaylistTracks } = usePlaylists();
+  const { playlists, createPlaylist, importM3uFile, deletePlaylist, updatePlaylist, changePlaylistCover, getPlaylistTracks } = usePlaylists();
   const { settings } = useSettings();
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -59,11 +58,7 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onNavigate }) => {
 
   const handleChangeCover = async (playlist: Playlist) => {
     setOpenMenuId(null);
-    const path = await IpcService.invoke('open_image_dialog');
-    if (path) {
-      const cachedPath = await IpcService.invoke('cache_playlist_cover', { sourcePath: path });
-      await updatePlaylist(playlist.id, { cover_url: cachedPath });
-    }
+    await changePlaylistCover(playlist.id);
   };
 
   return (

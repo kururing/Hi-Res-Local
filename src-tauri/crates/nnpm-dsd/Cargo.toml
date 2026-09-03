@@ -1,0 +1,12 @@
+[package]
+name = "nnpm-dsd"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "DSF/DFF header parse and DSD→PCM helpers shared with the web WASM decoder"
+
+[lib]
+name = "nnpm_dsd"
+
+[dependencies]
+nnpm-audio-core = { path = "../../../crates/nnpm-audio-core" }

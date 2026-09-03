@@ -1,29 +1,28 @@
 import React from 'react';
 import { Minus, Square, X } from 'lucide-react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { isTauri } from '../../services/ipc';
 import { BEFORE_APP_QUIT_EVENT } from '../../services/playbackState';
 import { useSettings } from '../../context/SettingsContext';
+import { usePlatform } from '../../platform';
 import { t } from '../../i18n';
-
-const runWindowAction = (
-  action: 'minimize' | 'maximize' | 'close',
-  closeToTray = false
-) => {
-  if (!isTauri()) return;
-
-  const appWindow = getCurrentWindow();
-  if (action === 'minimize') void appWindow.minimize();
-  else if (action === 'maximize') void appWindow.toggleMaximize();
-  else if (closeToTray) void appWindow.hide();
-  else {
-    window.dispatchEvent(new Event(BEFORE_APP_QUIT_EVENT));
-    void import('@tauri-apps/api/core').then(({ invoke }) => invoke('quit_app'));
-  }
-};
 
 export const WindowTitleBar: React.FC = () => {
   const { settings } = useSettings();
+  const { window: windowApi, capabilities } = usePlatform();
+
+  if (!capabilities.nativeWindowChrome) return null;
+
+  const runWindowAction = (
+    action: 'minimize' | 'maximize' | 'close',
+    closeToTray = false
+  ) => {
+    if (action === 'minimize') void windowApi.minimize();
+    else if (action === 'maximize') void windowApi.toggleMaximize();
+    else if (closeToTray) void windowApi.hide();
+    else {
+      window.dispatchEvent(new Event(BEFORE_APP_QUIT_EVENT));
+      void windowApi.quit();
+    }
+  };
 
   return (
     <div

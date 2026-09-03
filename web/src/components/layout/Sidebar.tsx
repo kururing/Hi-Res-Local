@@ -10,6 +10,7 @@ import {
   ListMusic,
   History,
   Settings,
+  Shield,
   Plus,
   Sparkles,
   Upload,
@@ -22,11 +23,11 @@ import { usePlaylists } from '../../context/PlaylistContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
 import { useLibrary } from '../../context/LibraryContext';
+import { useAdminCapabilities } from '../../context/AdminCapabilitiesContext';
 import { t } from '../../i18n';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import { PlaylistArtwork } from '../common/PlaylistArtwork';
-import { IpcService } from '../../services/ipc';
 
 interface SidebarProps {
   currentView: string;
@@ -34,10 +35,11 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => {
-  const { playlists, createPlaylist, importM3uFile, getPlaylistTracks, updatePlaylist, deletePlaylist } = usePlaylists();
+  const { playlists, createPlaylist, importM3uFile, getPlaylistTracks, updatePlaylist, deletePlaylist, changePlaylistCover: setPlaylistCover } = usePlaylists();
   const { status, activePlaylistId } = usePlayer();
   const { settings } = useSettings();
   const { stats } = useLibrary();
+  const { catalogAdmin } = useAdminCapabilities();
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
@@ -106,11 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
   const changePlaylistCover = async (playlist: typeof playlists[number]) => {
     setPlaylistMenuId(null);
     setPlaylistMenuPosition(null);
-    const path = await IpcService.invoke('open_image_dialog');
-    if (path) {
-      const cachedPath = await IpcService.invoke('cache_playlist_cover', { sourcePath: path });
-      await updatePlaylist(playlist.id, { cover_url: cachedPath });
-    }
+    await setPlaylistCover(playlist.id);
   };
 
   const navItems = [
@@ -350,6 +348,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
 
       {/* Bottom: Settings & Storage stats */}
       <div className={`flex flex-col gap-2 border-t border-brand-border/60 ${isCollapsed ? 'p-3' : 'p-4'}`}>
+        {catalogAdmin && (
+          <button
+            type="button"
+            onClick={() => onNavigate('admin')}
+            className={`flex min-h-[44px] items-center rounded-xl font-medium text-xs transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent sm:text-sm ${
+              isCollapsed ? 'justify-center px-0' : 'gap-3 px-3.5'
+            } ${
+              currentView === 'admin'
+                ? 'is-active bg-brand-secondary text-white shadow-soft-button'
+                : 'text-brand-muted hover:text-brand-foreground hover:bg-white/55'
+            }`}
+            aria-label={isCollapsed ? t('nav_admin', settings.language) : undefined}
+            title={isCollapsed ? t('nav_admin', settings.language) : undefined}
+          >
+            <Shield className="w-4 h-4" aria-hidden="true" />
+            {!isCollapsed && <span>{t('nav_admin', settings.language)}</span>}
+          </button>
+        )}
         <button
           onClick={() => onNavigate('settings')}
           className={`flex min-h-[44px] items-center rounded-xl font-medium text-xs transition-all focus-visible:outline-none sm:text-sm ${

@@ -70,4 +70,15 @@ describe('track presentation', () => {
       bit_depth: 1,
     })).toBe('DSD256 • DFF/DST');
   });
+
+  it('labels MQA separately from its FLAC container', () => {
+    expect(formatQualityLabel({
+      ...baseTrack,
+      duration: 183,
+      format: 'FLAC',
+      sample_rate: 48_000,
+      bit_depth: 24,
+      is_mqa: true,
+    })).toBe('MQA • 24-bit / 48 kHz (software upsample)');
+  });
 });

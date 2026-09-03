@@ -14,6 +14,8 @@ tauri-build = { version = "2", features = [] }
 cc = "1.2"
 
 [dependencies]
+nnpm-audio-core = { path = "../crates/nnpm-audio-core" }
+
 # Tauri Framework
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 
@@ -32,12 +34,6 @@ notify = "6.1"
 walkdir = "2.5"
 
 # Audio Engine / Playback dependencies
-# FFmpeg decode (vendored shared libs under vendor/ffmpeg — see build.rs)
-ffmpeg-next = { version = "9.0", default-features = false, features = [
-    "codec",
-    "format",
-    "software-resampling",
-] }
 cpal = "0.15"
 ringbuf = "0.4"
 dst-decoder = "0.1.2"
@@ -62,8 +58,7 @@ discord-rich-presence = "0.2"
 # Image processing for cover art cache
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
-# Async runtime & Logging (only the features actually used:
-# interval ticker, broadcast channel, spawn_blocking)
+# Async runtime & Logging
 tokio = { version = "1.40", features = ["rt", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -71,17 +66,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [dev-dependencies]
 tempfile = "3.10"
 
-# Keep decoding and DSP fast enough for realtime playback during `tauri dev`.
-[profile.dev]
-opt-level = 1
-
-[profile.dev.package."*"]
-opt-level = 2
-
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-autostart = "2.5.1"
 
-# WASAPI Exclusive output (Windows only). Features also documented in src/audio/wasapi/mod.rs.
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 windows = { version = "0.61", features = [

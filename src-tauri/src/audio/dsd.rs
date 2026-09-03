@@ -14,7 +14,7 @@ use thiserror::Error;
 
 use crate::audio::dto::{DsdOutputMode, DsdRate, QualityBadge};
 
-const MAX_DSD_RATE: u32 = 22_579_200;
+const MAX_DSD_RATE: u32 = 45_158_400;
 const MAX_CHANNELS: u16 = 32;
 const MAX_ID3_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -79,7 +79,7 @@ pub struct DsdFormat {
     pub encoding: DsdEncoding,
     /// The actual one-bit sample rate stored in the file (2.8224 MHz for DSD64).
     pub dsd_sample_rate: u32,
-    /// FFmpeg's DSD decoders emit one PCM sample for each group of eight DSD
+    /// DSD decoders emit one PCM sample for each group of eight DSD
     /// bits, so this is the rate exposed by the PCM decoder.
     pub pcm_sample_rate: u32,
     pub dsd_rate: DsdRate,
@@ -136,6 +136,7 @@ pub fn dsd_rate_from_sample_rate(sample_rate: u32) -> DsdResult<DsdRate> {
         (DsdRate::Dsd128, 128),
         (DsdRate::Dsd256, 256),
         (DsdRate::Dsd512, 512),
+        (DsdRate::Dsd1024, 1024),
     ];
     for (rate, multiplier) in candidates {
         if sample_rate == 44_100u32.saturating_mul(multiplier)
@@ -150,19 +151,19 @@ pub fn dsd_rate_from_sample_rate(sample_rate: u32) -> DsdResult<DsdRate> {
     })
 }
 
-/// PCM rate sent to a DAC after DSD → PCM.
+/// PCM rate after DSD → PCM.
 ///
-/// FFmpeg dsd2pcm emits `dsd_rate / 8` (352.8 kHz for DSD64). That stream
-/// still carries shaped ultrasonic noise; playing it analog-side on a PCM
-/// DAC sounds harsh / grainy. SACD-style conversion uses 88.2 kHz (DSD64)
-/// or 176.4 kHz (DSD128+).
-pub fn dsd_pcm_output_rate(pcm_equiv_rate: u32) -> u32 {
-    match pcm_equiv_rate {
-        rate if rate >= 705_600 => 176_400,
-        rate if rate >= 352_800 => 88_200,
-        rate if rate >= 176_400 => 88_200,
-        rate if rate >= 44_100 => rate,
-        _ => 44_100,
+/// A DSD bit clock (2.8224 / 3.072 MHz, …) maps through the shared FIR table
+/// (`dsd_pcm_output_rate_hz`). A value that is already a PCM rate is passed
+/// through so Exclusive / Gapless do not re-interpret 176.4 kHz as ultrasonic.
+pub fn dsd_pcm_output_rate(rate: u32) -> u32 {
+    if nnpm_audio_core::types::dsd_rate_from_sample_rate(rate).is_some() {
+        return nnpm_audio_core::decimator::dsd_pcm_output_rate_hz(rate);
+    }
+    if rate >= 44_100 {
+        rate
+    } else {
+        44_100
     }
 }
 
@@ -375,7 +376,7 @@ impl DsfReader {
         }
     }
 
-    /// One DSF physical block as channel-planar bytes for FFmpeg
+    /// One DSF physical block as channel-planar bytes for the decoder
     /// `DSD_LSBF_PLANAR` / `DSD_MSBF_PLANAR`. Matches `dsfdec`: each packet is
     /// `[ch0 block][ch1 block]` of equal valid length, never several blocks
     /// concatenated (that would be misread as two huge planes).
@@ -1172,10 +1173,15 @@ mod tests {
     }
 
     #[test]
-    fn dsd_pcm_output_rate_caps_ultrasonic_dsd2pcm_rate() {
-        assert_eq!(dsd_pcm_output_rate(352_800), 88_200);
-        assert_eq!(dsd_pcm_output_rate(705_600), 176_400);
-        assert_eq!(dsd_pcm_output_rate(1_411_200), 176_400);
+    fn dsd_pcm_output_rate_maps_dsd_clock_and_passthroughs_pcm() {
+        assert_eq!(dsd_pcm_output_rate(2_822_400), 176_400);
+        assert_eq!(dsd_pcm_output_rate(3_072_000), 192_000);
+        assert_eq!(dsd_pcm_output_rate(5_644_800), 352_800);
+        assert_eq!(dsd_pcm_output_rate(11_289_600), 352_800);
+        assert_eq!(dsd_pcm_output_rate(22_579_200), 352_800);
+        assert_eq!(dsd_pcm_output_rate(45_158_400), 352_800);
+        assert_eq!(dsd_pcm_output_rate(176_400), 176_400);
+        assert_eq!(dsd_pcm_output_rate(352_800), 352_800);
         assert_eq!(dsd_pcm_output_rate(48_000), 48_000);
     }
 

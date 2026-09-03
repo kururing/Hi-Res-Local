@@ -1,0 +1,307 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nghenhac
+          POSTGRES_PASSWORD: nghenhac
+          POSTGRES_DB: nghenhac
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U nghenhac -d nghenhac"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://nghenhac:nghenhac@127.0.0.1:5433/nghenhac
+      JWT_SECRET: ci-jwt-secret-value-32-chars-min
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_PUBLIC_ENDPOINT: http://127.0.0.1:9000
+      S3_ACCESS_KEY: ci-minio
+      S3_SECRET_KEY: ci-minio-secret
+      S3_BUCKET: nghenhacpromax
+      S3_ARTWORK_BUCKET: nghenhacpromax-artwork
+      PUBLIC_MEDIA_BASE_URL: http://127.0.0.1:9000/nghenhacpromax-artwork
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      COOKIE_SECURE: "false"
+      MEDIA_PROBE_MODE: nnpm
+      NNPM_PROBE_PATH: nnpm-probe
+      INTEGRATION_TESTS_REQUIRED: "true"
+      S3_INTEGRATION_REQUIRED: "true"
+      NNPM_PROBE_REQUIRED: "true"
+      METRICS_ENABLED: "true"
+      METRICS_TOKEN: ci-metrics-token
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+            server/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Test audio core and install nnpm-probe
+        run: |
+          set -euo pipefail
+          cargo test -p nnpm-audio-core
+          cargo build -p nnpm-audio-core --target wasm32-unknown-unknown --features wasm
+          cargo build -p nnpm-probe --release
+          sudo cp target/release/nnpm-probe /usr/local/bin/nnpm-probe
+          nnpm-probe --version
+
+      - name: Verify ffmpeg is not required
+        run: |
+          set -euo pipefail
+          if command -v ffprobe >/dev/null 2>&1; then
+            echo "ffprobe is present on the runner but CI must not depend on it"
+          fi
+          command -v nnpm-probe
+
+      - name: Start MinIO
+        run: |
+          set -euo pipefail
+          docker run -d --name ci-minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=ci-minio \
+            -e MINIO_ROOT_PASSWORD=ci-minio-secret \
+            minio/minio:latest server /data --console-address :9001
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              echo "MinIO is healthy"
+              exit 0
+            fi
+            if ! docker ps --filter name=ci-minio --filter status=running --quiet | grep -q .; then
+              echo "MinIO container exited before becoming healthy"
+              docker logs ci-minio || true
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "MinIO failed to become healthy"
+          docker logs ci-minio || true
+          exit 1
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix web
+          npm ci --prefix server
+
+      - name: Audit production dependencies
+        run: |
+          npm audit --omit=dev --audit-level=high
+          npm audit --prefix web --omit=dev --audit-level=high
+          npm audit --prefix server --omit=dev --audit-level=high
+
+      - name: Wait for PostgreSQL and MinIO
+        working-directory: server
+        run: npm run wait-infra
+
+      - name: Create buckets and CORS
+        working-directory: server
+        run: npm run ensure-storage
+
+      - name: Run migrations
+        working-directory: server
+        run: npm run migrate
+
+      - name: Server typecheck
+        run: npm run server:typecheck
+
+      - name: Server build
+        run: npm run server:build
+
+      - name: Server integration tests
+        working-directory: server
+        run: npm test -- --reporter=default --reporter=json --outputFile=vitest-report.json
+
+      - name: Assert integration coverage summary
+        working-directory: server
+        run: |
+          set -euo pipefail
+          test -f integration-summary.txt
+          cat integration-summary.txt
+          grep -Fx "PostgreSQL integration: PASS (15 suites)" integration-summary.txt
+          grep -Fx "S3 integration: PASS" integration-summary.txt
+          grep -Fx "nnpm-probe integration: PASS" integration-summary.txt
+
+      - name: Web typecheck
+        run: npm run typecheck
+
+      - name: Web tests
+        run: npm test -- --run
+
+      - name: Web build
+        run: npm run build
+
+      - name: Start API for smoke
+        working-directory: server
+        env:
+          NODE_ENV: production
+          HOST: 127.0.0.1
+          PORT: 3001
+          MEDIA_PROBE_MODE: nnpm
+        run: |
+          set -euo pipefail
+          nohup node dist/server.js > /tmp/nnpm-api.log 2>&1 &
+          echo $! > /tmp/nnpm-api.pid
+          for i in $(seq 1 45); do
+            if curl -sf http://127.0.0.1:3001/health/ready >/dev/null; then
+              echo "API ready"
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/nnpm-api.pid)" 2>/dev/null; then
+              echo "API process exited before ready"
+              sed -E 's/\?[^[:space:]"]+/?[Redacted]/g; s/Bearer [A-Za-z0-9._-]+/Bearer [Redacted]/g' /tmp/nnpm-api.log | tail -n 80
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "API did not become ready"
+          sed -E 's/\?[^[:space:]"]+/?[Redacted]/g; s/Bearer [A-Za-z0-9._-]+/Bearer [Redacted]/g' /tmp/nnpm-api.log | tail -n 80
+          exit 1
+
+      - name: API E2E smoke
+        env:
+          SMOKE_API_URL: http://127.0.0.1:3001
+          SMOKE_ORIGIN: http://localhost:5173
+          NODE_ENV: test
+          MEDIA_PROBE_MODE: nnpm
+        run: npm run server:smoke:e2e
+
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f /tmp/nnpm-api.pid ]; then kill "$(cat /tmp/nnpm-api.pid)" || true; fi
+
+      - name: Build server container
+        run: docker build -f server/Dockerfile -t nghenhac-server:ci .
+
+      - name: Build web container
+        run: docker build -f web/Dockerfile -t nghenhac-web:ci .
+
+      - name: Verify server image
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint id nghenhac-server:ci | grep 10001
+          docker run --rm --entrypoint nnpm-probe nghenhac-server:ci --version
+          docker run --rm --entrypoint sh nghenhac-server:ci -c '! command -v ffmpeg && ! command -v ffprobe'
+
+      - name: Container smoke
+        run: |
+          set -euo pipefail
+          docker network create nnpm-ci-smoke
+          docker run -d --name ci-api-smoke --network nnpm-ci-smoke \
+            --add-host=host.docker.internal:host-gateway \
+            -e JWT_SECRET=ci-jwt-secret-value-32-chars-min \
+            -e HOST=0.0.0.0 \
+            -e PORT=3001 \
+            -e NODE_ENV=production \
+            -e COOKIE_SECURE=false \
+            -e MEDIA_PROBE_MODE=nnpm \
+            -e DATABASE_URL=postgres://nghenhac:nghenhac@host.docker.internal:5433/nghenhac \
+            -e S3_ENDPOINT=http://host.docker.internal:9000 \
+            -e S3_PUBLIC_ENDPOINT=http://host.docker.internal:9000 \
+            -e S3_ACCESS_KEY=ci-minio \
+            -e S3_SECRET_KEY=ci-minio-secret \
+            -e CORS_ORIGINS=http://127.0.0.1:8088 \
+            -p 3011:3001 \
+            nghenhac-server:ci
+          docker run -d --name ci-web-smoke --network nnpm-ci-smoke \
+            -e API_UPSTREAM=http://ci-api-smoke:3001 \
+            -e ARTWORK_ORIGIN=http://127.0.0.1:9000 \
+            -e MEDIA_ORIGIN=http://127.0.0.1:9000 \
+            -p 8088:8080 \
+            nghenhac-web:ci
+          for i in $(seq 1 45); do
+            if curl -sf http://127.0.0.1:3011/health/ready >/dev/null \
+              && curl -sf http://127.0.0.1:8088/index.html | grep -qi '<html'; then
+              curl -sf http://127.0.0.1:8088/api/health/live | grep -q live
+              curl -sf http://127.0.0.1:8088/api/health/ready | grep -q ready
+              echo "Container smoke passed"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Container smoke failed"
+          docker logs ci-api-smoke 2>&1 | sed -E 's/\?[^[:space:]"]+/?[Redacted]/g; s/Bearer [A-Za-z0-9._-]+/Bearer [Redacted]/g' | tail -n 80
+          docker logs ci-web-smoke 2>&1 | tail -n 80
+          exit 1
+
+      - name: Stop container smoke
+        if: always()
+        run: |
+          docker rm -f ci-api-smoke ci-web-smoke || true
+          docker network rm nnpm-ci-smoke || true
+
+      - name: Redact API log for artifact
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path("/tmp/nnpm-api.log")
+          if not path.exists():
+              raise SystemExit(0)
+          text = path.read_text(encoding="utf-8", errors="replace")
+          text = re.sub(r"https?://[^\s\"']+\?[^\s\"']+", lambda m: m.group(0).split("?", 1)[0] + "?[Redacted]", text)
+          text = re.sub(r"Bearer\s+[A-Za-z0-9._-]+", "Bearer [Redacted]", text)
+          text = re.sub(r"(?i)(access_token|refresh_token|nnpm_refresh)[=:]\s*[^\s,;\"']+", r"\1=[Redacted]", text)
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-report
+          path: |
+            server/vitest-report.json
+            server/integration-summary.txt
+            /tmp/nnpm-api.log
+          if-no-files-found: ignore
+
+  rust-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Desktop and audio tests
+        run: |
+          cargo test -p nnpm-audio-core
+          cargo test -p nnpm-dsd
+          cargo test -p nghenhacpromax-tauri --lib

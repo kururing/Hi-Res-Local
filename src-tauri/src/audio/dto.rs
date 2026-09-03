@@ -111,6 +111,7 @@ pub enum DsdRate {
     Dsd128,
     Dsd256,
     Dsd512,
+    Dsd1024,
 }
 
 impl DsdRate {
@@ -120,6 +121,7 @@ impl DsdRate {
             Self::Dsd128 => "DSD128",
             Self::Dsd256 => "DSD256",
             Self::Dsd512 => "DSD512",
+            Self::Dsd1024 => "DSD1024",
         }
     }
 
@@ -129,6 +131,7 @@ impl DsdRate {
             Self::Dsd128 => 128,
             Self::Dsd256 => 256,
             Self::Dsd512 => 512,
+            Self::Dsd1024 => 1024,
         }
     }
 
@@ -163,11 +166,20 @@ impl DsdRate {
         [self.dop_pcm_rate(), self.dop_pcm_rate_48()]
     }
 
-    pub const ALL: [Self; 4] = [Self::Dsd64, Self::Dsd128, Self::Dsd256, Self::Dsd512];
+    pub const fn dop_supported(self) -> bool {
+        matches!(self, Self::Dsd64 | Self::Dsd128 | Self::Dsd256)
+    }
 
-    /// Rates advertised from a WASAPI Exclusive PCM probe. Each rate is only
-    /// exposed when the endpoint accepts the exact 24-bit DoP carrier rate.
-    pub const ADVERTISED_DOP: [Self; 4] = Self::ALL;
+    pub const ALL: [Self; 5] = [
+        Self::Dsd64,
+        Self::Dsd128,
+        Self::Dsd256,
+        Self::Dsd512,
+        Self::Dsd1024,
+    ];
+
+    /// DoP is not used for DSD512/1024 (PCM carrier rates are not practical).
+    pub const ADVERTISED_DOP: [Self; 3] = [Self::Dsd64, Self::Dsd128, Self::Dsd256];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -241,6 +253,19 @@ pub struct AudioTrack {
     pub year: Option<u32>,
     pub genre: Option<String>,
     pub replay_gain: Option<ReplayGainInfo>,
+    /// Signed HTTP(S) URL for cloud playback. Never persisted to SQLite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_expires_at: Option<String>,
+}
+
+impl AudioTrack {
+    pub fn is_http_stream(&self) -> bool {
+        self.stream_url
+            .as_deref()
+            .is_some_and(crate::audio::http_input::is_http_stream_url)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

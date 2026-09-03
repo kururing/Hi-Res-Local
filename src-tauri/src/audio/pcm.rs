@@ -68,8 +68,17 @@ impl AudioFormat {
 
     /// Bytes for one interleaved frame (all channels at one time step).
     pub fn bytes_per_frame(&self) -> usize {
-        self.bytes_per_sample()
-            .saturating_mul(usize::from(self.channels.max(1)))
+        self.bytes_per_frame_packed(false)
+    }
+
+    /// Frame size on the wire. Packed 24-bit is 3 bytes/sample.
+    pub fn bytes_per_frame_packed(&self, packed_s24: bool) -> usize {
+        let bps = if packed_s24 && self.sample_format == PcmSampleFormat::S24 {
+            3
+        } else {
+            self.bytes_per_sample()
+        };
+        bps.saturating_mul(usize::from(self.channels.max(1)))
     }
 
     /// Storage / container bytes per mono sample.
@@ -102,6 +111,13 @@ impl AudioFormat {
     }
 }
 
+/// Largest multiple of `bytes_per_frame` that does not exceed `len`.
+#[inline]
+pub fn frame_aligned_len(len: usize, bytes_per_frame: usize) -> usize {
+    let bpf = bytes_per_frame.max(1);
+    (len / bpf) * bpf
+}
+
 /// Human-readable rate: `44100` → `"44.1 kHz"`, `48000` → `"48 kHz"`.
 pub fn format_sample_rate_khz(sample_rate: u32) -> String {
     if sample_rate == 0 {
@@ -119,12 +135,29 @@ pub fn format_sample_rate_khz(sample_rate: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::format_sample_rate_khz;
+    use super::{format_sample_rate_khz, frame_aligned_len, AudioFormat};
 
     #[test]
     fn sample_rate_label_uses_one_decimal_for_44k() {
         assert_eq!(format_sample_rate_khz(44_100), "44.1 kHz");
         assert_eq!(format_sample_rate_khz(48_000), "48 kHz");
         assert_eq!(format_sample_rate_khz(88_200), "88.2 kHz");
+    }
+
+    #[test]
+    fn pcm16_stereo_frame_size() {
+        let fmt = AudioFormat::s16(44_100, 2);
+        assert_eq!(fmt.bytes_per_sample(), 2);
+        assert_eq!(fmt.bytes_per_frame(), 4);
+        assert_eq!(frame_aligned_len(6, 4), 4);
+        assert_eq!(frame_aligned_len(7, 4), 4);
+        assert_eq!(frame_aligned_len(8, 4), 8);
+    }
+
+    #[test]
+    fn packed_s24_stereo_frame_size() {
+        let fmt = AudioFormat::s24_in_32(48_000, 2);
+        assert_eq!(fmt.bytes_per_frame(), 8);
+        assert_eq!(fmt.bytes_per_frame_packed(true), 6);
     }
 }

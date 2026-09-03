@@ -21,6 +21,7 @@ import {
   Layers,
   SlidersHorizontal,
   Activity,
+  ShieldCheck,
 } from 'lucide-react';
 import { usePlayer, usePlaybackProgress } from '../../context/PlayerContext';
 import { useLibrary } from '../../context/LibraryContext';
@@ -29,6 +30,14 @@ import { Slider } from '../common/Slider';
 import { TrackArtwork } from '../common/TrackArtwork';
 import { t } from '../../i18n';
 import { Artist } from '../../types/library';
+import {
+  AsioDriver,
+  AudioBackend,
+  AudioCapabilities,
+  AudioOutputDevice,
+  DsdOutputMode,
+  PlaybackMode,
+} from '../../types/audio';
 import { formatQualityLabel } from '../../services/trackPresentation';
 import {
   coerceUnavailableAudioOptions,
@@ -38,17 +47,10 @@ import {
   isEqualizerAvailable,
   volumeControlLabel,
 } from '../../services/playbackDisplay';
-import { IpcService } from '../../services/ipc';
-import {
-  AsioDriver,
-  AudioBackend,
-  AudioCapabilities,
-  AudioOutputDevice,
-  DsdOutputMode,
-  PlaybackMode,
-} from '../../types/audio';
 import { useToast } from '../../context/ToastContext';
 import { AppSettings, normalizeAudioSettings } from '../../types/settings';
+import { usePlatform } from '../../platform';
+import { WEB_AUDIO_CAPABILITIES } from '../../platform/web/WebAudioConfigurationApi';
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -185,6 +187,10 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   const { toggleFavoriteTrack, favoriteTrackIds, artists } = useLibrary();
   const { settings, updateSettings } = useSettings();
   const { showToast } = useToast();
+  const { runtime, audioConfiguration } = usePlatform();
+  const canConfigureNativeAudio = runtime !== 'web';
+  const canSelectOutputDevice = canConfigureNativeAudio || runtime === 'web';
+  const showPlaybackStructure = canConfigureNativeAudio || runtime === 'web';
   const [isDevicePopupOpen, setIsDevicePopupOpen] = React.useState(false);
   const [outputDevices, setOutputDevices] = React.useState<AudioOutputDevice[]>([]);
   const [audioCapabilities, setAudioCapabilities] = React.useState<AudioCapabilities | null>(null);
@@ -199,7 +205,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   const pendingVolumeRef = React.useRef<number | null>(null);
   const volumeCommitTimerRef = React.useRef<number | null>(null);
   const volumeSyncBlockedUntilRef = React.useRef(0);
-  const eqAvailable = isEqualizerAvailable(engineStatus, settings);
+  const eqAvailable = runtime !== 'web' && isEqualizerAvailable(engineStatus, settings);
 
   React.useEffect(() => {
     if (
@@ -256,9 +262,9 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
     setIsLoadingDevices(true);
     try {
       const [devices, capabilities, drivers] = await Promise.all([
-        IpcService.invoke('get_audio_output_devices'),
-        IpcService.invoke('get_audio_capabilities'),
-        IpcService.invoke('get_asio_drivers'),
+        audioConfiguration.getOutputDevices(),
+        audioConfiguration.getCapabilities(),
+        audioConfiguration.getAsioDrivers(),
       ]);
       setAudioCapabilities(capabilities);
       setAsioDrivers(drivers);
@@ -278,7 +284,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
     } finally {
       setIsLoadingDevices(false);
     }
-  }, [settings.language, showToast]);
+  }, [audioConfiguration, settings.language, showToast]);
 
   React.useEffect(() => {
     if (!isDevicePopupOpen) return;
@@ -303,17 +309,33 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
     };
   }, [isDevicePopupOpen, loadOutputDevices]);
 
+  React.useEffect(() => {
+    if (runtime !== 'web') return;
+    void audioConfiguration.setOutputDevice(settings.output_device || 'default').catch(error => {
+      console.warn('Failed to restore browser audio output device', error);
+      if ((settings.output_device || 'default') !== 'default') {
+        updateSettings({ output_device: 'default' });
+      }
+    });
+  }, [audioConfiguration, runtime, settings.output_device, updateSettings]);
+
   const switchOutputDevice = async (deviceId: string) => {
+    if (!canSelectOutputDevice) return;
     if (deviceId === settings.output_device || isSwitchingDevice) return;
     setIsSwitchingDevice(true);
     let deviceSwitched = false;
     try {
-      await IpcService.invoke('set_audio_output_device', { deviceId });
+      await audioConfiguration.setOutputDevice(deviceId);
       deviceSwitched = true;
-      const capabilities = await IpcService.invoke('get_audio_capabilities');
+      if (runtime === 'web') {
+        updateSettings({ output_device: deviceId });
+        showToast(t('toast_audio_setting_applied', settings.language), 'success');
+        return;
+      }
+      const capabilities = await audioConfiguration.getCapabilities();
       setAudioCapabilities(capabilities);
       const next = coerceUnavailableAudioOptions({ ...settings, output_device: deviceId }, capabilities);
-      await IpcService.invoke('apply_playback_mode', {
+      await audioConfiguration.applyPlaybackMode({
         mode: next.playback_mode,
         deviceId,
         backend: next.playback_mode === 'advanced' ? next.audio_backend : null,
@@ -339,26 +361,65 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
     }
   };
 
+  const refreshOutputDevices = async () => {
+    if (runtime !== 'web' || !audioConfiguration.requestOutputDevice) {
+      await loadOutputDevices();
+      return;
+    }
+    setIsLoadingDevices(true);
+    try {
+      const selected = await audioConfiguration.requestOutputDevice();
+      if (selected) {
+        await audioConfiguration.setOutputDevice(selected.id);
+        updateSettings({ output_device: selected.id });
+      }
+      await loadOutputDevices();
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'NotAllowedError') return;
+      console.error('Failed to request quick audio output device', error);
+      showToast(t('toast_audio_setting_failed', settings.language), 'error');
+    } finally {
+      setIsLoadingDevices(false);
+    }
+  };
+
   const applyPlaybackSettings = async (next: AppSettings) => {
     if (isSwitchingDevice) return;
+    const coerced = coerceUnavailableAudioOptions(
+      next,
+      audioCapabilities ?? (runtime === 'web' ? WEB_AUDIO_CAPABILITIES : null),
+    );
+    if (!canConfigureNativeAudio) {
+      updateSettings({
+        playback_mode: coerced.playback_mode,
+        audio_backend: coerced.audio_backend,
+        dsd_output_mode: coerced.dsd_output_mode,
+        asio_driver_id: coerced.asio_driver_id,
+        wasapi_exclusive: coerced.wasapi_exclusive,
+        bit_perfect: coerced.bit_perfect,
+        mqa_passthrough: coerced.mqa_passthrough,
+      });
+      return;
+    }
     setIsSwitchingDevice(true);
     try {
-      await IpcService.invoke('apply_playback_mode', {
-        mode: next.playback_mode,
-        deviceId: next.output_device || 'default',
-        backend: next.playback_mode === 'advanced' ? next.audio_backend : null,
-        dsdTransport: next.playback_mode === 'advanced' ? next.dsd_output_mode : null,
-        asioDriverId: next.asio_driver_id,
+      await audioConfiguration.applyPlaybackMode({
+        mode: coerced.playback_mode,
+        deviceId: coerced.output_device || 'default',
+        backend: coerced.playback_mode === 'advanced' ? coerced.audio_backend : null,
+        dsdTransport: coerced.playback_mode === 'advanced' ? coerced.dsd_output_mode : null,
+        asioDriverId: coerced.asio_driver_id,
       });
       updateSettings({
-        playback_mode: next.playback_mode,
-        audio_backend: next.audio_backend,
-        dsd_output_mode: next.dsd_output_mode,
-        asio_driver_id: next.asio_driver_id,
-        wasapi_exclusive: next.wasapi_exclusive,
-        bit_perfect: next.bit_perfect,
+        playback_mode: coerced.playback_mode,
+        audio_backend: coerced.audio_backend,
+        dsd_output_mode: coerced.dsd_output_mode,
+        asio_driver_id: coerced.asio_driver_id,
+        wasapi_exclusive: coerced.wasapi_exclusive,
+        bit_perfect: coerced.bit_perfect,
+        mqa_passthrough: coerced.mqa_passthrough,
       });
-      setAudioCapabilities(await IpcService.invoke('get_audio_capabilities'));
+      setAudioCapabilities(await audioConfiguration.getCapabilities());
       showToast(t('toast_audio_setting_applied', settings.language), 'success');
     } catch (error) {
       console.error('Failed to apply quick playback settings', error);
@@ -370,7 +431,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
 
   const changePlaybackMode = (mode: PlaybackMode) => {
     if (mode === settings.playback_mode || isSwitchingDevice) return;
-    void applyPlaybackSettings(normalizeAudioSettings({ ...settings, playback_mode: mode }));
+    void applyPlaybackSettings(normalizeAudioSettings({ ...settings, playback_mode: mode, mqa_passthrough: false }));
   };
 
   const changeAdvancedOption = (
@@ -389,10 +450,22 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
       ...settings,
       ...coupled,
       playback_mode: 'advanced',
+      mqa_passthrough: false,
     }));
   };
 
-  const advancedGating = getAdvancedOptionGating(audioCapabilities);
+  const changeMqaPassthrough = (enabled: boolean) => {
+    if (isSwitchingDevice || !canConfigureNativeAudio) return;
+    void applyPlaybackSettings(normalizeAudioSettings({
+      ...settings,
+      playback_mode: 'advanced',
+      mqa_passthrough: enabled,
+    }));
+  };
+
+  const advancedGating = getAdvancedOptionGating(
+    audioCapabilities ?? (runtime === 'web' ? WEB_AUDIO_CAPABILITIES : null),
+  );
   const playbackModeOptions: Array<{
     id: PlaybackMode;
     icon: typeof Wand2;
@@ -589,9 +662,17 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
           <button
             onClick={togglePlayPause}
             className="w-11 h-11 min-h-[44px] min-w-[44px] rounded-full bg-brand-accent text-oled-base flex items-center justify-center shadow-glow-accent hover:scale-105 active:scale-95 transition-all focus-visible:outline-none"
-            aria-label={status.state === 'playing' ? t('player_pause', settings.language) : t('player_play', settings.language)}
+            aria-label={
+              status.state === 'loading'
+                ? t('player_loading', settings.language)
+                : status.state === 'playing'
+                  ? t('player_pause', settings.language)
+                  : t('player_play', settings.language)
+            }
           >
-            {status.state === 'playing' ? (
+            {status.state === 'loading' ? (
+              <LoaderCircle className="w-5 h-5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            ) : status.state === 'playing' ? (
               <Pause className="w-5 h-5 fill-oled-base" aria-hidden="true" />
             ) : (
               <Play className="w-5 h-5 fill-oled-base ml-0.5" aria-hidden="true" />
@@ -733,6 +814,8 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
         </div>
 
         {/* Quick Audio Device Settings */}
+        {showPlaybackStructure && (
+        <>
         <button
           ref={deviceButtonRef}
           type="button"
@@ -770,7 +853,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => void loadOutputDevices()}
+                onClick={() => void refreshOutputDevices()}
                 disabled={isLoadingDevices || isSwitchingDevice}
                 className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-brand-muted transition-colors hover:bg-oled-hover hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:cursor-wait disabled:opacity-50"
                 aria-label={t('player_device_settings_refresh', settings.language)}
@@ -795,7 +878,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
                   <span className="block">{t('settings_output_device', settings.language)}</span>
                   <select
                     value={settings.output_device || 'default'}
-                    disabled={isSwitchingDevice}
+                    disabled={!canSelectOutputDevice || isSwitchingDevice}
                     onChange={event => void switchOutputDevice(event.target.value)}
                     className="min-h-[44px] w-full rounded-xl border border-brand-border bg-oled-base px-3 text-sm font-medium normal-case tracking-normal text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:cursor-wait disabled:opacity-60"
                   >
@@ -807,6 +890,8 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               )}
             </div>
 
+            {canConfigureNativeAudio && (
+            <>
             <fieldset className="border-t border-brand-border/70 p-3" aria-busy={isSwitchingDevice}>
               <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-brand-muted">
                 {t('quick_playback_mode', settings.language)}
@@ -847,6 +932,29 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
 
             {settings.playback_mode === 'advanced' && (
               <div className="grid grid-cols-1 gap-3 border-t border-brand-border/70 bg-oled-base/25 p-3 sm:grid-cols-2">
+                <label className={`flex min-h-[52px] items-start gap-2.5 rounded-xl border p-2.5 transition-colors sm:col-span-2 ${
+                    settings.mqa_passthrough
+                      ? 'border-brand-accent bg-brand-accent/10'
+                      : 'border-brand-border bg-oled-base/70 hover:border-brand-accent/50'
+                  } ${advancedGating.exclusiveBackendDisabled || isSwitchingDevice ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                    <input
+                      type="checkbox"
+                      checked={settings.mqa_passthrough}
+                      disabled={advancedGating.exclusiveBackendDisabled || isSwitchingDevice}
+                      onChange={event => changeMqaPassthrough(event.target.checked)}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                    />
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-brand-accent" aria-hidden="true" />
+                    <span className="min-w-0">
+                      <span className="block text-xs font-semibold text-brand-foreground">MQA Passthrough</span>
+                      <span className="mt-0.5 block text-[10px] leading-snug text-brand-muted">
+                        {settings.language === 'vi'
+                          ? 'Xuất PCM nguyên bit qua WASAPI Exclusive; âm lượng số và DSP bị khóa.'
+                          : 'Preserves PCM over WASAPI Exclusive; digital volume and DSP are locked.'}
+                      </span>
+                    </span>
+                  </label>
+
                 <label className="block space-y-1.5 text-[11px] font-semibold uppercase tracking-wider text-brand-muted">
                   <span className="block">{t('quick_audio_backend', settings.language)}</span>
                   <select
@@ -887,8 +995,9 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
                     {asioDrivers.map(driver => <option key={driver.id} value={driver.id}>{driver.name}</option>)}
                   </select>
                 </label>
-
               </div>
+            )}
+            </>
             )}
 
             <div className="border-t border-brand-border/70 p-3" aria-live="polite">
@@ -912,6 +1021,8 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               </dl>
             </div>
           </div>
+        )}
+        </>
         )}
 
       </div>

@@ -267,6 +267,11 @@ fn configure_exclusive(
         let _ = out.stop();
     }
 
+    pipeline.clear_pcm_producer();
+    pipeline
+        .wire_logged
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+
     let device = manager.get_active_device()?;
     let endpoint = crate::audio::wasapi::device::device_id_string(&device)?;
     tracing::info!(
@@ -279,7 +284,7 @@ fn configure_exclusive(
 
     let negotiated = FormatNegotiator::negotiate(&device, &source, bit_perfect)?;
 
-    let ring = PcmRing::for_format_default(&negotiated.format);
+    let ring = PcmRing::for_wire(negotiated.format.sample_rate, negotiated.bytes_per_frame());
     let (producer, consumer) = ring.split();
     pipeline.set_pcm_producer(producer);
 

@@ -69,7 +69,7 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({
       {/* Artist Header Banner */}
       <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-2xl bg-gradient-to-r from-brand-primary via-brand-primary/60 to-oled-card border border-brand-border shadow-card-elevated">
         <div className="w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border-2 border-brand-border flex items-center justify-center shrink-0 shadow-2xl overflow-hidden">
-          <RemoteArtwork kind="artist" artist={artist.name} alt={`${artist.name} portrait`} />
+          <RemoteArtwork kind="artist" artist={artist.name} src={artist.image_url} alt={`${artist.name} portrait`} />
         </div>
 
         <div className="flex flex-col gap-2 min-w-0 text-center sm:text-left flex-1">

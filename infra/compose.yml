@@ -1,0 +1,93 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nghenhac
+      POSTGRES_PASSWORD: nghenhac
+      POSTGRES_DB: nghenhac
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - nghenhac_pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nghenhac -d nghenhac"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:1420,http://127.0.0.1:1420,http://localhost:5173,http://127.0.0.1:5173,http://tauri.localhost,https://tauri.localhost"
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - nghenhac_minio:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        i=0
+        until mc alias set local http://minio:9000 minioadmin minioadmin; do
+          i=$$((i+1))
+          if [ "$$i" -gt 30 ]; then
+            echo "MinIO did not become ready in time."
+            exit 1
+          fi
+          sleep 1
+        done
+        mc mb -p local/nghenhacpromax
+        mc mb -p local/nghenhacpromax-artwork
+        cat > /tmp/nghenhac-audio-cors.json << 'EOF'
+        {
+          "CORSRules": [
+            {
+              "AllowedOrigins": [
+                "http://localhost:1420",
+                "http://127.0.0.1:1420",
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://tauri.localhost",
+                "https://tauri.localhost"
+              ],
+              "AllowedMethods": ["GET", "HEAD", "PUT"],
+              "AllowedHeaders": ["Range", "Content-Type", "Content-Length", "x-amz-checksum-sha256", "x-amz-content-sha256"],
+              "ExposeHeaders": [
+                "Accept-Ranges",
+                "Content-Length",
+                "Content-Range",
+                "Content-Type",
+                "ETag",
+                "x-amz-checksum-sha256"
+              ],
+              "MaxAgeSeconds": 3600
+            }
+          ]
+        }
+        EOF
+        mc cors set local/nghenhacpromax /tmp/nghenhac-audio-cors.json || echo "Per-bucket CORS is unavailable; using MinIO global CORS."
+        mc cors set local/nghenhacpromax-artwork /tmp/nghenhac-audio-cors.json || echo "Per-bucket CORS is unavailable; using MinIO global CORS."
+        mc anonymous set download local/nghenhacpromax-artwork
+        echo "Private audio bucket nghenhacpromax and public artwork bucket nghenhacpromax-artwork are ready."
+
+volumes:
+  nghenhac_pgdata:
+  nghenhac_minio:

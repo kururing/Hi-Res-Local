@@ -16,6 +16,16 @@ export interface BackendPlaylist {
   updated_at: string;
 }
 
+export interface PlaylistDetails {
+  playlist: BackendPlaylist;
+  tracks: Track[];
+}
+
+export interface FavoriteAlbum {
+  album_title: string;
+  artist_name: string;
+}
+
 export interface PlayHistoryEntry {
   id: number;
   track_id: string;
@@ -73,7 +83,7 @@ export interface IpcCommands {
   // Playlist Commands (backend shapes: create/update take an `input` object,
   // membership commands operate on arrays of track ids)
   'get_playlists': { args: Record<string, never>; return: BackendPlaylist[] };
-  'get_playlist': { args: { id: string }; return: { playlist: BackendPlaylist; tracks: Track[] } };
+  'get_playlist': { args: { id: string }; return: PlaylistDetails };
   'create_playlist': {
     args: { input: { name: string; description?: string | null; is_smart?: boolean | null; rules_json?: string | null } };
     return: BackendPlaylist;
@@ -91,13 +101,17 @@ export interface IpcCommands {
   'set_track_favorite': { args: { id: string; isFavorite: boolean }; return: void };
   'set_album_favorite': { args: { albumTitle: string; artistName: string; isFavorite: boolean }; return: void };
   'set_artist_favorite': { args: { artistName: string; isFavorite: boolean }; return: void };
-  'get_favorite_albums': { args: Record<string, never>; return: { album_title: string; artist_name: string }[] };
+  'get_favorite_albums': { args: Record<string, never>; return: FavoriteAlbum[] };
   'get_favorite_artists': { args: Record<string, never>; return: string[] };
 
   // Audio Playback Commands
   'play_track': { args: { track: Track; startPositionSecs?: number }; return: void };
   'play_queue': { args: { tracks: Track[]; startIndex: number; startPositionSecs?: number }; return: void };
   'queue_replace': { args: { tracks: Track[]; currentIndex: number }; return: void };
+  'refresh_stream_url': {
+    args: { trackId: string; url: string; expiresAt: string; restartCurrent?: boolean };
+    return: void;
+  };
   'play_current': { args: Record<string, never>; return: void };
   'next_track': { args: Record<string, never>; return: void };
   'previous_track': { args: Record<string, never>; return: void };
@@ -113,6 +127,18 @@ export interface IpcCommands {
   'set_shuffle': { args: { shuffle: boolean }; return: void };
   'get_playback_status': { args: Record<string, never>; return: PlaybackStatus };
   'get_saved_playback_state': { args: Record<string, never>; return: SavedPlaybackState | null };
+  'get_audio_toml_patch': {
+    args: Record<string, never>;
+    return: {
+      audio_engine: string;
+      bit_perfect: boolean;
+      output_device: string;
+      wasapi_exclusive: boolean;
+      dsd_output_mode: string;
+      eq_enabled: boolean;
+      replay_gain_mode: string;
+    };
+  };
 
   // Queue Commands (backend-owned queue)
   'queue_add': { args: { tracks: Track[] }; return: void };
@@ -155,6 +181,7 @@ export interface IpcCommands {
       backend?: AudioBackend | null;
       dsdTransport?: DsdOutputMode | null;
       asioDriverId?: string | null;
+      mqaPassthrough?: boolean | null;
     };
     return: EngineStatus | null;
   };

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ListMusic, Sparkles } from 'lucide-react';
 import { Playlist } from '../../types/playlist';
 import { Track } from '../../types/library';
-import { isTauri } from '../../services/ipc';
+import { usePlatform } from '../../platform';
 import { TrackArtwork } from './TrackArtwork';
 
 interface PlaylistArtworkProps {
@@ -12,6 +12,7 @@ interface PlaylistArtworkProps {
 }
 
 export const PlaylistArtwork: React.FC<PlaylistArtworkProps> = ({ playlist, tracks, className = '' }) => {
+  const { artworkAssets } = usePlatform();
   const [coverSource, setCoverSource] = useState<string | null>(null);
 
   useEffect(() => {
@@ -19,23 +20,26 @@ export const PlaylistArtwork: React.FC<PlaylistArtworkProps> = ({ playlist, trac
     const cover = playlist.cover_url;
     if (!cover) {
       setCoverSource(null);
-    } else if (/^(data:|blob:|https?:\/\/)/i.test(cover)) {
-      setCoverSource(cover);
-    } else if (isTauri()) {
-      import('@tauri-apps/api/core').then(({ convertFileSrc }) => {
-        if (!cancelled) setCoverSource(convertFileSrc(cover));
-      });
-    } else {
-      setCoverSource(null);
+      return () => { cancelled = true; };
     }
+
+    void artworkAssets.resolveDisplaySource(cover)
+      .then(resolved => {
+        if (!cancelled) setCoverSource(resolved);
+      })
+      .catch(() => {
+        if (!cancelled) setCoverSource(null);
+      });
+
     return () => { cancelled = true; };
-  }, [playlist.cover_url]);
+  }, [artworkAssets, playlist.cover_url]);
 
   if (coverSource) {
     return (
       <img
         src={coverSource}
         alt={`${playlist.name} cover`}
+        referrerPolicy="no-referrer"
         className={`h-full w-full object-cover ${className}`}
         loading="lazy"
         decoding="async"

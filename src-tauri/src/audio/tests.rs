@@ -125,6 +125,8 @@ fn mock_track(id: &str, title: &str, duration_ms: u64) -> AudioTrack {
             album_gain_db: Some(-5.0),
             album_peak: Some(1.0),
         }),
+        stream_url: None,
+        stream_expires_at: None,
     }
 }
 
@@ -318,6 +320,7 @@ fn test_resampler() {
     let input = vec![0.5; 100];
     let mut output = Vec::new();
     resampler.resample(&input, &mut output);
+    resampler.flush(&mut output);
     assert!(!output.is_empty());
 }
 
@@ -382,6 +385,7 @@ fn apply_playback_mode_advanced_asio_without_drivers_fails() {
             Some(crate::audio::dto::AudioBackend::Asio),
             Some(crate::audio::dto::DsdOutputMode::NativeDsd),
             None,
+            None,
         )
         .expect_err("Advanced ASIO must fail when no driver is installed");
     let message = err.to_string().to_ascii_lowercase();
@@ -394,6 +398,7 @@ fn apply_playback_mode_multitask_succeeds() {
     let status = player
         .apply_playback_mode(
             crate::audio::dto::PlaybackMode::Multitask,
+            None,
             None,
             None,
             None,
@@ -419,6 +424,8 @@ fn queue_resume_position_is_visible_before_async_decoder_open() {
         year: None,
         genre: None,
         replay_gain: None,
+        stream_url: None,
+        stream_expires_at: None,
     };
 
     player

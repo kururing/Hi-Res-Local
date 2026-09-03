@@ -144,6 +144,7 @@ mod windows_impl {
                     DsdRate::Dsd128,
                     DsdRate::Dsd256,
                     DsdRate::Dsd512,
+                    DsdRate::Dsd1024,
                 ] {
                     if probe_native_driver(&description, rate).is_ok() {
                         dto.dsd_rates.push(rate);
@@ -284,7 +285,7 @@ mod windows_impl {
         };
         if read < required {
             scratch[read..required].fill(0x55);
-            if playing && read > 0 {
+            if playing {
                 state.underruns.fetch_add(1, Ordering::Relaxed);
             }
         }

@@ -1,4 +1,12 @@
 import { AudioBackend, DsdOutputMode, PlaybackMode, ReplayGainMode } from './audio';
+import {
+  DEFAULT_STREAM_QUALITY,
+  normalizeStreamingQuality,
+  type StreamQuality,
+} from '@nnpm/audio-contracts';
+
+export type { StreamQuality };
+export { normalizeStreamingQuality };
 
 export type AppTheme = 'oled' | 'midnight' | 'slate' | 'light' | 'custom';
 export type AppLanguage = 'vi' | 'en';
@@ -32,6 +40,8 @@ export interface AppSettings {
   output_device: string;
   wasapi_exclusive: boolean;
   bit_perfect: boolean;
+  /** Preserve the encoded PCM payload for an external MQA Full Decoder. */
+  mqa_passthrough: boolean;
   crossfade_duration: number; // 0 to 12 seconds
   replay_gain_mode: ReplayGainMode;
   replay_gain_preamp: number; // -12 to +12 dB
@@ -53,6 +63,7 @@ export interface AppSettings {
   audio_backend: AudioBackend;
   asio_driver_id: string | null;
   playback_mode: PlaybackMode;
+  streaming_quality: StreamQuality;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -61,6 +72,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   output_device: 'default',
   wasapi_exclusive: false,
   bit_perfect: false,
+  mqa_passthrough: false,
   crossfade_duration: 0,
   replay_gain_mode: 'off',
   replay_gain_preamp: 0,
@@ -82,6 +94,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   audio_backend: 'shared',
   asio_driver_id: null,
   playback_mode: 'auto',
+  streaming_quality: DEFAULT_STREAM_QUALITY,
 };
 
 /** User-facing Bit-Perfect mode requires both WASAPI Exclusive and native PCM. */
@@ -107,6 +120,22 @@ const AUDIO_BACKENDS: readonly AudioBackend[] = ['shared', 'wasapi_exclusive', '
  * legacy flags one-way from the chosen mode (the mode is the source of truth).
  */
 export function normalizeAudioSettings(settings: AppSettings): AppSettings {
+  // MQA passthrough is a protected PCM path: exact source format, unity gain,
+  // no DSP, and no Windows mixer. The Rust Exclusive bit-perfect wire already
+  // provides those guarantees, so keep this preset as a strict configuration.
+  if (settings.mqa_passthrough) {
+    return {
+      ...settings,
+      streaming_quality: normalizeStreamingQuality(settings.streaming_quality),
+      playback_mode: 'advanced',
+      audio_backend: 'wasapi_exclusive',
+      dsd_output_mode: 'pcm',
+      wasapi_exclusive: true,
+      bit_perfect: true,
+      mqa_passthrough: true,
+    };
+  }
+
   let mode: PlaybackMode;
   if (PLAYBACK_MODES.includes(settings.playback_mode)) {
     mode = settings.playback_mode;
@@ -126,11 +155,13 @@ export function normalizeAudioSettings(settings: AppSettings): AppSettings {
   if (mode === 'high_quality') {
     return {
       ...settings,
+      streaming_quality: normalizeStreamingQuality(settings.streaming_quality),
       playback_mode: mode,
       wasapi_exclusive: true,
       bit_perfect: true,
       audio_backend: 'wasapi_exclusive',
       dsd_output_mode: 'pcm',
+      mqa_passthrough: false,
     };
   }
 
@@ -151,20 +182,24 @@ export function normalizeAudioSettings(settings: AppSettings): AppSettings {
     const exclusive = resolvedBackend === 'wasapi_exclusive';
     return {
       ...settings,
+      streaming_quality: normalizeStreamingQuality(settings.streaming_quality),
       playback_mode: mode,
       audio_backend: resolvedBackend,
       dsd_output_mode: dsdOutputMode,
       wasapi_exclusive: exclusive,
       bit_perfect: exclusive,
+      mqa_passthrough: false,
     };
   }
 
   // 'auto' and 'multitask' share the same safe shared-mode legacy flags.
   return {
     ...settings,
+    streaming_quality: normalizeStreamingQuality(settings.streaming_quality),
     playback_mode: mode,
     wasapi_exclusive: false,
     bit_perfect: false,
+    mqa_passthrough: false,
     audio_backend: 'shared',
     dsd_output_mode: 'pcm',
   };

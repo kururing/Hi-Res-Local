@@ -70,17 +70,16 @@ export const Storage = {
     }
   },
 
-  toggleFavoriteTrack(trackId: string): boolean {
+  setFavoriteTrack(trackId: string, favorite: boolean): void {
     const favs = this.getFavoriteTrackIds();
-    let isFav = false;
-    if (favs.has(trackId)) {
-      favs.delete(trackId);
-      isFav = false;
-    } else {
-      favs.add(trackId);
-      isFav = true;
-    }
+    if (favorite) favs.add(trackId);
+    else favs.delete(trackId);
     localStorage.setItem(STORAGE_KEYS.FAVORITES_TRACKS, JSON.stringify([...favs]));
+  },
+
+  toggleFavoriteTrack(trackId: string): boolean {
+    const isFav = !this.getFavoriteTrackIds().has(trackId);
+    this.setFavoriteTrack(trackId, isFav);
     return isFav;
   },
 
@@ -93,12 +92,16 @@ export const Storage = {
     }
   },
 
-  toggleFavoriteAlbum(albumKey: string): boolean {
+  setFavoriteAlbum(albumKey: string, favorite: boolean): void {
     const favs = this.getFavoriteAlbums();
-    const isFav = !favs.has(albumKey);
-    if (favs.has(albumKey)) favs.delete(albumKey);
-    else favs.add(albumKey);
+    if (favorite) favs.add(albumKey);
+    else favs.delete(albumKey);
     localStorage.setItem(STORAGE_KEYS.FAVORITES_ALBUMS, JSON.stringify([...favs]));
+  },
+
+  toggleFavoriteAlbum(albumKey: string): boolean {
+    const isFav = !this.getFavoriteAlbums().has(albumKey);
+    this.setFavoriteAlbum(albumKey, isFav);
     return isFav;
   },
 
@@ -111,12 +114,16 @@ export const Storage = {
     }
   },
 
-  toggleFavoriteArtist(artistName: string): boolean {
+  setFavoriteArtist(artistName: string, favorite: boolean): void {
     const favs = this.getFavoriteArtists();
-    const isFav = !favs.has(artistName);
-    if (favs.has(artistName)) favs.delete(artistName);
-    else favs.add(artistName);
+    if (favorite) favs.add(artistName);
+    else favs.delete(artistName);
     localStorage.setItem(STORAGE_KEYS.FAVORITES_ARTISTS, JSON.stringify([...favs]));
+  },
+
+  toggleFavoriteArtist(artistName: string): boolean {
+    const isFav = !this.getFavoriteArtists().has(artistName);
+    this.setFavoriteArtist(artistName, isFav);
     return isFav;
   },
 

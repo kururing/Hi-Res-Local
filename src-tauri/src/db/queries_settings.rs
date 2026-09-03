@@ -2,6 +2,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::audio::toml_config::load_settings_patch;
 use crate::db::queries_library::get_library_roots;
 use crate::error::AppResult;
 use crate::models::settings::AppSettings;
@@ -52,10 +53,17 @@ pub fn save_playback_state(conn: &Connection, track_id: &str, position_ms: u64) 
 }
 
 pub fn get_app_settings(conn: &Connection) -> AppResult<AppSettings> {
+    let patch = load_settings_patch();
     let library_roots = get_library_roots(conn)?;
     let theme = get_setting(conn, "theme")?.unwrap_or_else(|| "system".to_string());
     let language = get_setting(conn, "language")?.unwrap_or_else(|| "vi".to_string());
-    let output_device = get_setting(conn, "output_device")?;
+    let output_device = get_setting(conn, "output_device")?.or_else(|| {
+        if patch.output_device != "default" {
+            Some(patch.output_device.clone())
+        } else {
+            None
+        }
+    });
     let auto_scan = get_setting(conn, "auto_scan_on_startup")?
         .map(|v| v == "true" || v == "1")
         .unwrap_or(true);
@@ -67,12 +75,12 @@ pub fn get_app_settings(conn: &Connection) -> AppResult<AppSettings> {
         .unwrap_or(0);
     let exclusive_audio = get_setting(conn, "exclusive_audio_mode")?
         .map(|v| v == "true" || v == "1")
-        .unwrap_or(false);
+        .unwrap_or(patch.wasapi_exclusive);
     let volume = get_setting(conn, "volume")?
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0);
     let dsd_output_mode =
-        get_setting(conn, "dsd_output_mode")?.unwrap_or_else(|| "native_dsd".into());
+        get_setting(conn, "dsd_output_mode")?.unwrap_or_else(|| patch.dsd_output_mode.clone());
     let audio_backend = get_setting(conn, "audio_backend")?.unwrap_or_else(|| "shared".into());
     let asio_driver_id = get_setting(conn, "asio_driver_id")?;
 

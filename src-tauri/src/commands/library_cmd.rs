@@ -22,6 +22,7 @@ pub async fn add_library_root(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<LibraryRoot, String> {
+    crate::fs_guard::assert_new_library_root(&path, &state.allowed_fs_paths)?;
     let root = {
         let conn = state.db.lock();
         db_add_root(&conn, &path, &name).map_err(|e| e.to_string())?

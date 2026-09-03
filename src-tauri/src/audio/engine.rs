@@ -1,13 +1,13 @@
 //! High-level audio engine facade.
 //!
 //! Concrete playback is owned by [`crate::audio::player::AudioPlayer`]:
-//! - Decode: [`crate::audio::decoder::AudioDecoder`] (FFmpeg)
+//! - Decode: [`crate::audio::decoder::AudioDecoder`] (nnpm-audio-core)
 //! - Ring: [`crate::audio::pcm_ring::PcmRing`]
 //! - Output (Windows): [`crate::audio::wasapi::WasapiExclusiveOutput`]
 //! - Devices / negotiate: [`crate::audio::wasapi::WasapiDeviceManager`] +
 //!   [`crate::audio::wasapi::FormatNegotiator`]
 
-/// Marker type documenting the FFmpeg → ring → WASAPI Exclusive pipeline.
+/// Marker type documenting the core → ring → WASAPI Exclusive pipeline.
 pub struct AudioEngine;
 
 impl AudioEngine {

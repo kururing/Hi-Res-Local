@@ -11,8 +11,26 @@ describe('Bit-Perfect WASAPI Exclusive mode', () => {
   it('defaults Exclusive and Bit-Perfect off with Auto playback mode', () => {
     expect(DEFAULT_SETTINGS.wasapi_exclusive).toBe(false);
     expect(DEFAULT_SETTINGS.bit_perfect).toBe(false);
+    expect(DEFAULT_SETTINGS.mqa_passthrough).toBe(false);
     expect(DEFAULT_SETTINGS.playback_mode).toBe('auto');
     expect(isWasapiExclusiveMode(DEFAULT_SETTINGS)).toBe(false);
+  });
+
+  it('maps MQA passthrough to the protected Exclusive PCM path', () => {
+    const normalized = normalizeAudioSettings({
+      ...DEFAULT_SETTINGS,
+      mqa_passthrough: true,
+      playback_mode: 'multitask',
+      audio_backend: 'shared',
+    });
+    expect(normalized).toMatchObject({
+      mqa_passthrough: true,
+      playback_mode: 'advanced',
+      audio_backend: 'wasapi_exclusive',
+      dsd_output_mode: 'pcm',
+      wasapi_exclusive: true,
+      bit_perfect: true,
+    });
   });
 
   it('uses a stable default device id sentinel', () => {

@@ -1,5 +1,5 @@
 use std::path::Path;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::db::queries_playlists::{
     add_tracks_to_playlist as db_add_tracks, create_playlist as db_create_playlist,
@@ -86,8 +86,10 @@ pub async fn reorder_playlist_tracks(
 pub async fn export_playlist_m3u(
     playlist_id: String,
     dest_path: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
+    crate::fs_guard::assert_export_path(&app, &dest_path)?;
     let conn = state.db.lock();
     db_export_m3u(&conn, &playlist_id, Path::new(&dest_path)).map_err(|e| e.to_string())
 }
@@ -98,6 +100,10 @@ pub async fn import_playlist_m3u(
     custom_name: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<PlaylistWithTracks, String> {
+    {
+        let conn = state.db.lock();
+        crate::fs_guard::assert_scan_path(&conn, &state.allowed_fs_paths, &file_path)?;
+    }
     let mut conn = state.db.lock();
     db_import_m3u(&mut conn, Path::new(&file_path), custom_name).map_err(|e| e.to_string())
 }

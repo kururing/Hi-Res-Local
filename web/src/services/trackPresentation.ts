@@ -19,16 +19,30 @@ export function normalizeLibraryTrack(track: Track & BackendTrackFields): Track 
 }
 
 export function formatQualityLabel(track: Track): string {
+  if (track.is_mqa) {
+    const details = formatPcmQuality(track);
+    const status = track.mqa_status === 'mqa_studio'
+      ? 'MQA Studio'
+      : track.mqa_status === 'mqa_authenticated'
+        ? 'MQA Authenticated'
+        : 'MQA';
+    const software = 'software upsample';
+    return details ? `${status} • ${details} (${software})` : `${status} (${software})`;
+  }
   const format = track.format?.toLowerCase();
   if (format === 'dsf' || format === 'dff') {
     const rate = track.sample_rate || 0;
     const base = rate % 48_000 === 0 ? 48_000 : 44_100;
     const multiplier = base > 0 ? Math.round(rate / base) : 0;
-    const dsdRate = [64, 128, 256, 512].includes(multiplier)
+    const dsdRate = [64, 128, 256, 512, 1024].includes(multiplier)
       ? `DSD${multiplier}`
       : 'DSD';
     return `${dsdRate} • ${format === 'dff' ? 'DFF/DST' : 'DSF'}`;
   }
+  return formatPcmQuality(track) || 'Audio';
+}
+
+export function formatPcmQuality(track: Track): string {
   const sampleRate = track.sample_rate && track.sample_rate > 0
     ? (track.sample_rate % 1000 === 0
       ? `${track.sample_rate / 1000} kHz`
@@ -41,5 +55,5 @@ export function formatQualityLabel(track: Track): string {
       ? `${track.bitrate} kbps`
       : null;
 
-  return [depthOrBitrate, sampleRate].filter(Boolean).join(' / ') || 'Audio';
+  return [depthOrBitrate, sampleRate].filter(Boolean).join(' / ');
 }

@@ -85,7 +85,7 @@ export function isEqualizerAvailable(
     | Partial<Pick<EngineStatus, 'bit_perfect' | 'is_native' | 'dsd_transport' | 'backend' | 'output_mode'>>
     | null
     | undefined,
-  settings?: Pick<AppSettings, 'playback_mode' | 'audio_backend' | 'dsd_output_mode'> | null,
+  settings?: Pick<AppSettings, 'playback_mode' | 'audio_backend' | 'dsd_output_mode' | 'mqa_passthrough'> | null,
 ): boolean {
   const engineUsesDsp =
     engine?.dsd_transport === 'pcm' ||
@@ -97,6 +97,7 @@ export function isEqualizerAvailable(
   }
 
   if (
+    settings?.mqa_passthrough === true ||
     engine?.bit_perfect === true ||
     engine?.is_native === true ||
     engine?.dsd_transport === 'native_dsd' ||

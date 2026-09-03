@@ -9,13 +9,14 @@ import React, {
 } from 'react';
 import { Track } from '../types/library';
 import { PlaybackStatus, PlaybackState, LoopMode, EngineStatus } from '../types/audio';
-import { IpcService, isTauri } from '../services/ipc';
 import { getArtworkUrlForDiscord } from '../services/remoteArtwork';
 import { Storage } from '../services/storage';
 import { useToast } from './ToastContext';
 import { localizeAudioError, t } from '../i18n';
+import { cloudTrackIdOf } from '../platform/hybrid/mergeLibrary';
 import { useSettings } from './SettingsContext';
 import { useLibrary } from './LibraryContext';
+import { usePlatform } from '../platform';
 import {
   BEFORE_APP_QUIT_EVENT,
   backendPlaybackToLastPlayback,
@@ -24,6 +25,19 @@ import {
   restoreLastPlayback,
   shouldIgnoreEarlyResumePosition,
 } from '../services/playbackState';
+import { isExpectedPlaybackAbort } from '../audio/browserErrors';
+import { mergeTrackPresentation } from '../audio/browserMedia';
+
+function sameTrackIdentity(
+  left: { id?: string | null; trackId?: string | null; path?: string | null } | null | undefined,
+  right: { id?: string | null; trackId?: string | null; path?: string | null } | null | undefined,
+): boolean {
+  if (!left || !right) return false;
+  const leftId = left.id || left.trackId;
+  const rightId = right.id || right.trackId;
+  if (leftId && leftId === rightId) return true;
+  return Boolean(left.path) && Boolean(right.path) && left.path === right.path;
+}
 
 /** Baseline for synthesizing an EngineStatus before the engine reports one. */
 const EMPTY_ENGINE_STATUS: EngineStatus = {
@@ -79,6 +93,7 @@ interface PlaybackProgressValue {
 
 interface PlaybackHistorySession {
   trackId: string;
+  catalogTrackId: string | null;
   listenedSeconds: number;
   lastPosition: number;
   duration: number;
@@ -91,15 +106,12 @@ const PlaybackProgressContext = createContext<PlaybackProgressValue>({ position:
 const LAST_PLAYBACK_SAVE_MS = 2000;
 const DISCORD_RECONNECT_INTERVAL_MS = 15_000;
 
-// In the Tauri desktop shell the Rust backend owns the queue: next/previous,
-// weighted shuffle, gapless preloading and auto-advance all happen there.
-// The browser/mock build keeps the legacy local queue logic as a fallback.
-const useBackendQueue = isTauri();
-
 export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { showToast } = useToast();
   const { settings } = useSettings();
   const { tracks, isLoading: isLibraryLoading } = useLibrary();
+  const { history, audioEngine, presence, capabilities } = usePlatform();
+  const engineOwnsQueue = audioEngine.queueOwnership === 'engine';
   const initialAudioState = useMemo(() => Storage.getAudioState(), []);
 
   const [status, setStatus] = useState<PlaybackStatus>({
@@ -129,6 +141,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   statusRef.current = status;
   const progressRef = useRef<PlaybackProgressValue>({ position: 0, duration: 0 });
   const setProgressRef = useRef<(value: PlaybackProgressValue) => void>(() => {});
+  const languageRef = useRef(settings.language);
+  languageRef.current = settings.language;
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+  const audioEngineRef = useRef(audioEngine);
+  audioEngineRef.current = audioEngine;
   const hasRestoredPlaybackRef = useRef(false);
   const pendingStartPositionRef = useRef<{
     trackId: string;
@@ -145,10 +163,13 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const shuffleQueueRef = useRef<Track[] | null>(null);
 
   useEffect(() => {
+    if (!capabilities.discordPresence) {
+      return;
+    }
     let cancelled = false;
     const syncDiscordActivity = async () => {
       if (!settings.discord_presence_enabled) {
-        await IpcService.invoke('set_discord_presence', { enabled: false, activity: null });
+        await presence.setDiscordPresence(false, null);
         return;
       }
       const track = status.current_track;
@@ -166,10 +187,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         : null;
 
       if (cancelled) return;
-      void IpcService.invoke('set_discord_presence', {
-        enabled: true,
-        activity,
-      }).catch(error => console.warn('Failed to sync Discord activity', error));
+      void presence.setDiscordPresence(true, activity)
+        .catch(error => console.warn('Failed to sync Discord activity', error));
     };
 
     syncDiscordActivity();
@@ -181,6 +200,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
     return () => { cancelled = true; window.clearInterval(reconnectTimer); };
   }, [
+    capabilities.discordPresence,
+    presence,
     settings.discord_presence_enabled,
     status.current_track,
     status.duration,
@@ -197,10 +218,10 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   useEffect(() => {
     void Promise.all([
-      IpcService.invoke('set_volume', { volume: initialAudioState.volume }),
-      IpcService.invoke('set_muted', { muted: initialAudioState.isMuted }),
+      audioEngine.setVolume(initialAudioState.volume),
+      audioEngine.setMuted(initialAudioState.isMuted),
     ]).catch(error => console.warn('Failed to restore saved audio state', error));
-  }, [initialAudioState]);
+  }, [audioEngine, initialAudioState]);
 
   const persistLastPlayback = useCallback((trackId: string, position: number, force = false) => {
     const now = Date.now();
@@ -219,11 +240,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     historyWriteChainRef.current = historyWriteChainRef.current
       .catch(() => undefined)
       .then(async () => {
-        await IpcService.invoke('record_play', { input });
+        await history.record(input);
         window.dispatchEvent(new Event('nghenhac:history-updated'));
       })
       .catch(error => console.warn('Failed to record playback history', error));
-  }, []);
+  }, [history]);
 
   const finalizeHistorySession = useCallback((fullyPlayed = false) => {
     const session = historySessionRef.current;
@@ -231,8 +252,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     session.finalized = true;
     const completedDurationMs = Math.round(session.listenedSeconds * 1000);
     if (completedDurationMs === 0 && !fullyPlayed) return;
+    if (!session.catalogTrackId) return;
     writePlaybackHistory({
-      track_id: session.trackId,
+      track_id: session.catalogTrackId,
       completed_duration_ms: completedDurationMs,
       fully_played: fullyPlayed,
     });
@@ -241,18 +263,22 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const beginHistorySession = useCallback((track: Track, startPosition: number) => {
     const current = historySessionRef.current;
     if (current?.trackId === track.id && !current.finalized) return;
+    const catalogTrackId = cloudTrackIdOf(track);
     historySessionRef.current = {
       trackId: track.id,
+      catalogTrackId,
       listenedSeconds: 0,
       lastPosition: startPosition,
       duration: track.duration || (track.duration_ms ?? 0) / 1000,
       finalized: false,
     };
-    writePlaybackHistory({
-      track_id: track.id,
-      completed_duration_ms: 0,
-      fully_played: false,
-    });
+    if (catalogTrackId) {
+      writePlaybackHistory({
+        track_id: catalogTrackId,
+        completed_duration_ms: 0,
+        fully_played: false,
+      });
+    }
   }, [writePlaybackHistory]);
 
   // Persist immediately when the Tauri window is closed, so reopening the app
@@ -286,18 +312,26 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let cancelled = false;
     void (async () => {
       let saved = Storage.getLastPlayback();
-      if (isTauri()) {
-        try {
-          const backendSaved = backendPlaybackToLastPlayback(
-            await IpcService.invoke('get_saved_playback_state', {})
-          );
-          if (backendSaved) saved = backendSaved;
-        } catch (error) {
-          console.warn('Failed to load SQLite playback position; using local fallback', error);
-        }
+      try {
+        const backendSaved = backendPlaybackToLastPlayback(
+          await audioEngine.getSavedPlaybackState()
+        );
+        if (backendSaved) saved = backendSaved;
+      } catch (error) {
+        console.warn('Failed to load SQLite playback position; using local fallback', error);
       }
 
       if (cancelled) return;
+      // A user-started play must win over a late restore. Mock/web library
+      // loads are async, so this callback can resolve after playQueue.
+      if (
+        playRequestIdRef.current > 0
+        || statusRef.current.state === 'playing'
+        || statusRef.current.state === 'loading'
+      ) {
+        hasRestoredPlaybackRef.current = true;
+        return;
+      }
       hasRestoredPlaybackRef.current = true;
       const restored = restoreLastPlayback(tracks, saved);
       if (!restored) return;
@@ -325,33 +359,22 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return () => {
       cancelled = true;
     };
-  }, [isLibraryLoading, tracks]);
+  }, [audioEngine, isLibraryLoading, tracks]);
 
   useEffect(() => {
-    let unlistenPos: (() => void) | undefined;
-    let unlistenState: (() => void) | undefined;
-    let unlistenTrack: (() => void) | undefined;
-    let unlistenEnded: (() => void) | undefined;
-    let unlistenEngine: (() => void) | undefined;
-    let unlistenExclusive: (() => void) | undefined;
-    let unlistenNativeDsd: (() => void) | undefined;
-    let unlistenAudioError: (() => void) | undefined;
-    let unlistenDeviceLost: (() => void) | undefined;
-    let unlistenVolume: (() => void) | undefined;
     let disposed = false;
-
-    (async () => {
-      const disposePos = await IpcService.listen('audio://position', ({ position_secs, duration_secs }) => {
+    const unsubscribe = audioEngine.subscribe({
+      onPositionChange: (positionSeconds, durationSeconds) => {
+        if (disposed) return;
         const progressValue = normalizePlaybackProgress(
-          position_secs,
-          duration_secs,
+          positionSeconds,
+          durationSeconds,
           statusRef.current.duration || progressRef.current.duration
         );
         const pendingStart = pendingStartPositionRef.current;
         if (
           pendingStart &&
-          (pendingStart.trackId === statusRef.current.current_track?.id ||
-            pendingStart.path === statusRef.current.current_track?.path)
+          sameTrackIdentity(pendingStart, statusRef.current.current_track)
         ) {
           if (shouldIgnoreEarlyResumePosition(
             progressValue.position,
@@ -383,37 +406,27 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (statusRef.current.current_track) {
           persistLastPlayback(statusRef.current.current_track.id, progressValue.position);
         }
-      });
-      if (disposed) {
-        disposePos();
-        return;
-      }
-      unlistenPos = disposePos;
-
-      const disposeState = await IpcService.listen('audio://state_changed', ({ state }) => {
+      },
+      onStateChange: state => {
+        if (disposed) return;
         if (state === 'ended') {
           finalizeHistorySession(true);
-          // Backend queue: auto-advance happens in Rust; either a
+          // Engine-owned queue: auto-advance happens in Rust; either a
           // track_changed or a stopped event follows immediately.
-          if (!useBackendQueue) {
+          if (audioEngineRef.current.queueOwnership !== 'engine') {
             handleTrackEndedRef.current();
           }
           return;
         }
         setStatus(prev => ({ ...prev, state: state as PlaybackState }));
-      });
-      if (disposed) {
-        disposeState();
-        return;
-      }
-      unlistenState = disposeState;
-
-      const disposeTrack = await IpcService.listen('audio://track_changed', nativeTrack => {
-        if (!nativeTrack) return;
+      },
+      onTrackChange: nativeTrack => {
+        if (disposed || !nativeTrack) return;
         const nextIndex = queueRef.current.findIndex(track =>
-          track.id === nativeTrack.id || track.path === nativeTrack.path
+          sameTrackIdentity(track, nativeTrack)
         );
-        const nextTrack = nextIndex >= 0 ? queueRef.current[nextIndex] : nativeTrack;
+        const queued = nextIndex >= 0 ? queueRef.current[nextIndex] : nativeTrack;
+        const nextTrack = mergeTrackPresentation(queued, nativeTrack);
         const duration = nextTrack.duration || (nextTrack.duration_ms ?? 0) / 1000;
         const changedTrack = statusRef.current.current_track?.id !== nextTrack.id;
 
@@ -437,7 +450,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const pendingStart = pendingStartPositionRef.current;
         const shouldApplyPendingStart = Boolean(
           pendingStart &&
-          (pendingStart.trackId === nextTrack.id || pendingStart.path === nextTrack.path)
+          sameTrackIdentity(pendingStart, nextTrack)
         );
         const retainedPosition = shouldApplyPendingStart
           ? clampPlaybackPosition(pendingStart?.position ?? 0, duration)
@@ -446,71 +459,49 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setProgressRef.current({ position: retainedPosition, duration });
         setStatus(prev => ({
           ...prev,
-          state: 'playing',
           current_track: nextTrack,
           position: retainedPosition,
           duration,
         }));
-
-      });
-      if (disposed) {
-        disposeTrack();
-        return;
-      }
-      unlistenTrack = disposeTrack;
-
-      const disposeEnded = await IpcService.listen('audio://track_ended', () => {
-        if (!useBackendQueue) {
+      },
+      onTrackEnded: () => {
+        if (disposed) return;
+        if (audioEngineRef.current.queueOwnership !== 'engine') {
           handleTrackEndedRef.current();
         }
-      });
-      if (disposed) {
-        disposeEnded();
-        return;
-      }
-      unlistenEnded = disposeEnded;
-
-      const disposeEngine = await IpcService.listen('audio://engine_status', statusPayload => {
+      },
+      onEngineStatus: statusPayload => {
+        if (disposed) return;
         const empty =
           !statusPayload?.source_label &&
           !statusPayload?.output_sample_rate &&
           !statusPayload?.output_mode;
         setEngineStatus(empty ? null : statusPayload);
-      });
-      if (disposed) {
-        disposeEngine();
-        return;
-      }
-      unlistenEngine = disposeEngine;
-
-      const disposeExclusive = await IpcService.listen('audio://exclusive_mode', payload => {
+      },
+      onExclusiveMode: payload => {
+        if (disposed) return;
         if (!payload?.enabled) {
           setEngineStatus(prev =>
             prev
-              ? { ...prev, output_mode: payload.output_mode || 'WASAPI Shared', bit_perfect: false }
+              ? { ...prev, output_mode: payload.outputMode || 'WASAPI Shared', bit_perfect: false }
               : {
                   ...EMPTY_ENGINE_STATUS,
-                  output_mode: payload.output_mode || 'WASAPI Shared',
+                  output_mode: payload.outputMode || 'WASAPI Shared',
                 }
           );
-        } else if (payload.output_mode) {
+        } else if (payload.outputMode) {
           setEngineStatus(prev =>
             prev
-              ? { ...prev, output_mode: payload.output_mode }
+              ? { ...prev, output_mode: payload.outputMode }
               : {
                   ...EMPTY_ENGINE_STATUS,
-                  output_mode: payload.output_mode,
+                  output_mode: payload.outputMode,
                 }
           );
         }
-      });
-      if (disposed) {
-        disposeExclusive();
-        return;
-      }
-      unlistenExclusive = disposeExclusive;
-
-      const disposeNativeDsd = await IpcService.listen('audio://native_dsd_status', payload => {
+      },
+      onNativeDsdStatus: payload => {
+        if (disposed) return;
         if (payload.active) {
           setEngineStatus(previous => ({
             ...(previous || {
@@ -522,7 +513,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             is_native: true,
             dsd_output_mode: 'native_dsd',
             dsd_transport: 'native_dsd',
-            dsd_rate: payload.dsd_rate as EngineStatus['dsd_rate'],
+            dsd_rate: payload.dsdRate as EngineStatus['dsd_rate'],
             native_dsd_error: payload.error || null,
           }));
           return;
@@ -538,41 +529,30 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             native_dsd_error: payload.error || null,
           };
         });
-      });
-      if (disposed) {
-        disposeNativeDsd();
-        return;
-      }
-      unlistenNativeDsd = disposeNativeDsd;
-
-      const disposeAudioError = await IpcService.listen('audio://error', payload => {
-        if (payload?.message) {
-          showToast(localizeAudioError(payload.message, settings.language), 'error');
+      },
+      onError: error => {
+        if (disposed) return;
+        if (isExpectedPlaybackAbort(error)) return;
+        if (statusRef.current.state === 'playing' || statusRef.current.state === 'loading') {
+          setStatus(prev => ({ ...prev, state: 'paused' }));
         }
-      });
-      if (disposed) {
-        disposeAudioError();
-        return;
-      }
-      unlistenAudioError = disposeAudioError;
-
-      const disposeDeviceLost = await IpcService.listen('audio://device_lost', payload => {
+        if (error.message) {
+          showToastRef.current(localizeAudioError(error.message, languageRef.current), 'error');
+        }
+      },
+      onDeviceLost: message => {
+        if (disposed) return;
         setStatus(previous => ({ ...previous, state: 'paused' }));
         setEngineStatus(null);
-        showToast(
-          localizeAudioError(payload?.error || 'Audio device unavailable or disconnected', settings.language),
+        showToastRef.current(
+          localizeAudioError(message || 'Audio device unavailable or disconnected', languageRef.current),
           'error'
         );
-      });
-      if (disposed) {
-        disposeDeviceLost();
-        return;
-      }
-      unlistenDeviceLost = disposeDeviceLost;
-
-      const disposeVolume = await IpcService.listen('audio://volume_changed', payload => {
+      },
+      onVolumeChange: payload => {
+        if (disposed) return;
         const volume = payload?.volume;
-        const isMuted = payload?.is_muted;
+        const isMuted = payload?.isMuted;
         if (typeof volume !== 'number') return;
         Storage.saveAudioState(volume, Boolean(isMuted));
         setStatus(prev => ({
@@ -580,38 +560,30 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           volume,
           is_muted: Boolean(isMuted),
         }));
-      });
-      if (disposed) {
-        disposeVolume();
-        return;
-      }
-      unlistenVolume = disposeVolume;
-    })();
+      },
+    });
 
     return () => {
       disposed = true;
-      if (unlistenPos) unlistenPos();
-      if (unlistenState) unlistenState();
-      if (unlistenTrack) unlistenTrack();
-      if (unlistenEnded) unlistenEnded();
-      if (unlistenEngine) unlistenEngine();
-      if (unlistenExclusive) unlistenExclusive();
-      if (unlistenNativeDsd) unlistenNativeDsd();
-      if (unlistenAudioError) unlistenAudioError();
-      if (unlistenDeviceLost) unlistenDeviceLost();
-      if (unlistenVolume) unlistenVolume();
+      unsubscribe();
     };
-  }, [beginHistorySession, finalizeHistorySession, persistLastPlayback, settings.language, showToast]);
+  }, [audioEngine, beginHistorySession, finalizeHistorySession, persistLastPlayback]);
+
+  useEffect(() => {
+    return () => {
+      void audioEngineRef.current.stop();
+    };
+  }, []);
 
   // In Bit-Perfect mode the UI mirrors Windows Endpoint Volume. Polling also
   // catches hardware keys and taskbar changes made outside this application.
   useEffect(() => {
-    if (!engineStatus?.bit_perfect || !isTauri()) return;
+    if (!engineStatus?.bit_perfect || audioEngine.kind !== 'tauri') return;
     let disposed = false;
 
     const syncEndpointVolume = async () => {
       try {
-        const endpoint = await IpcService.invoke('get_system_audio_state', {});
+        const endpoint = await audioEngine.getSystemAudioState();
         if (disposed) return;
         const current = statusRef.current;
         if (
@@ -635,7 +607,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       disposed = true;
       window.clearInterval(intervalId);
     };
-  }, [engineStatus?.bit_perfect]);
+  }, [audioEngine, engineStatus?.bit_perfect]);
 
   const playTrackAtPosition = useCallback(async (
     track: Track,
@@ -663,6 +635,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       activeQueue = [track, ...activeQueue];
     }
     const idx = activeQueue.findIndex(t => t.id === track.id);
+    const resolvedIndex = idx !== -1 ? idx : 0;
+    // Keep refs current before the engine can emit ended/track-change during
+    // the same turn, and skip a late last-playback restore.
+    hasRestoredPlaybackRef.current = true;
+    queueRef.current = activeQueue;
+    queueIndexRef.current = resolvedIndex;
     const targetPosition = clampPlaybackPosition(startPosition, track.duration || 180);
     pendingStartPositionRef.current = targetPosition > 0
       ? { trackId: track.id, path: track.path, position: targetPosition, startedAt: Date.now() }
@@ -672,37 +650,51 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     beginHistorySession(track, targetPosition);
 
     setQueue(activeQueue);
-    setQueueIndex(idx !== -1 ? idx : 0);
+    setQueueIndex(resolvedIndex);
+    statusRef.current = {
+      ...statusRef.current,
+      state: 'loading',
+      current_track: track,
+      duration: track.duration || 180,
+      position: targetPosition,
+    };
     setStatus(prev => ({
       ...prev,
-      state: 'playing',
+      state: 'loading',
       current_track: track,
       duration: track.duration || 180,
       position: targetPosition,
     }));
     setProgressRef.current({ position: targetPosition, duration: track.duration || 180 });
 
-    if (useBackendQueue) {
-      if (lastSyncedQueueRef.current === activeQueue && idx !== -1) {
-        await IpcService.invoke('queue_set_index', { index: idx });
+    try {
+      if (engineOwnsQueue) {
+        if (lastSyncedQueueRef.current === activeQueue && idx !== -1) {
+          await audioEngine.setQueueIndex(idx);
+        } else {
+          await audioEngine.playQueue(
+            activeQueue,
+            idx !== -1 ? idx : 0,
+            targetPosition,
+          );
+          lastSyncedQueueRef.current = activeQueue;
+        }
       } else {
-        await IpcService.invoke('play_queue', {
-          tracks: activeQueue,
-          startIndex: idx !== -1 ? idx : 0,
-          startPositionSecs: targetPosition,
-        });
-        lastSyncedQueueRef.current = activeQueue;
+        await audioEngine.playTrack(track, targetPosition);
+        if (targetPosition > 0) {
+          await audioEngine.seek(targetPosition);
+          pendingStartPositionRef.current = null;
+        }
       }
-    } else {
-      await IpcService.invoke('play_track', { track, startPositionSecs: targetPosition });
-      if (targetPosition > 0) {
-        await IpcService.invoke('seek_playback', { positionSecs: targetPosition });
-        pendingStartPositionRef.current = null;
-      }
+    } catch (error) {
+      if (requestId !== playRequestIdRef.current) return;
+      if (isExpectedPlaybackAbort(error)) return;
+      setStatus(prev => ({ ...prev, state: 'paused' }));
+      return;
     }
     if (requestId !== playRequestIdRef.current) return;
     persistLastPlayback(track.id, targetPosition, true);
-  }, [beginHistorySession, finalizeHistorySession, persistLastPlayback]);
+  }, [audioEngine, beginHistorySession, engineOwnsQueue, finalizeHistorySession, persistLastPlayback]);
 
   const playTrack = useCallback(async (
     track: Track,
@@ -727,22 +719,25 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (statusRef.current.current_track) {
       persistLastPlayback(statusRef.current.current_track.id, progressRef.current.position, true);
     }
-    await IpcService.invoke('pause_playback');
-  }, [persistLastPlayback]);
+    await audioEngine.pause();
+  }, [audioEngine, persistLastPlayback]);
 
   const resume = useCallback(async () => {
-    if (statusRef.current.current_track) {
-      setStatus(prev => ({ ...prev, state: 'playing' }));
-      await IpcService.invoke('resume_playback');
+    if (!statusRef.current.current_track) return;
+    try {
+      await audioEngine.resume();
+    } catch (error) {
+      if (isExpectedPlaybackAbort(error)) return;
+      setStatus(prev => ({ ...prev, state: 'paused' }));
     }
-  }, []);
+  }, [audioEngine]);
 
   const stop = useCallback(async () => {
     finalizeHistorySession(false);
     setStatus(prev => ({ ...prev, state: 'stopped', position: 0 }));
     setProgressRef.current({ position: 0, duration: progressRef.current.duration });
-    await IpcService.invoke('stop_playback');
-  }, [finalizeHistorySession]);
+    await audioEngine.stop();
+  }, [audioEngine, finalizeHistorySession]);
 
   // Local queue navigation (browser/mock fallback only).
   const computeNextIndex = useCallback((isAuto = false): number => {
@@ -784,12 +779,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   const next = useCallback(async () => {
-    if (useBackendQueue) {
-      await IpcService.invoke('next_track').catch(error =>
-        console.warn('next_track failed', error)
-      );
-      return;
-    }
+    // Manual navigation is resolved in the UI even when Rust owns automatic
+    // queue advancement. This lets the desktop adapter obtain/refresh a cloud
+    // URL and cancel an older click before changing the native queue index.
     const nextIdx = computeNextIndex(false);
     if (nextIdx !== -1 && queueRef.current[nextIdx]) {
       await playTrackAtPosition(
@@ -827,13 +819,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const prev = useCallback(async () => {
-    if (useBackendQueue) {
-      // The backend restarts the current track when >3s in, otherwise goes back.
-      await IpcService.invoke('previous_track').catch(error =>
-        console.warn('previous_track failed', error)
-      );
-      return;
-    }
     if (progressRef.current.position > 3) {
       await seekRef.current(0);
       return;
@@ -864,9 +849,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       persistLastPlayback(currentStatus.current_track.id, clamped, true);
     }
     if (currentStatus.state !== 'stopped') {
-      await IpcService.invoke('seek_playback', { positionSecs: clamped });
+      await audioEngine.seek(clamped);
     }
-  }, [persistLastPlayback]);
+  }, [audioEngine, persistLastPlayback]);
 
   const seekRef = useRef(seek);
   seekRef.current = seek;
@@ -904,22 +889,22 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     Storage.saveAudioState(clamped, false);
     setStatus(prev => ({ ...prev, volume: clamped, is_muted: false }));
     await Promise.all([
-      IpcService.invoke('set_volume', { volume: clamped }),
-      ...(shouldUnmute ? [IpcService.invoke('set_muted', { muted: false })] : []),
+      audioEngine.setVolume(clamped),
+      ...(shouldUnmute ? [audioEngine.setMuted(false)] : []),
     ]);
-  }, []);
+  }, [audioEngine]);
 
   const toggleMute = useCallback(async () => {
     const newMute = !statusRef.current.is_muted;
     Storage.saveAudioState(statusRef.current.volume, newMute);
     setStatus(prev => ({ ...prev, is_muted: newMute }));
-    await IpcService.invoke('set_muted', { muted: newMute });
-  }, []);
+    await audioEngine.setMuted(newMute);
+  }, [audioEngine]);
 
   const setLoopMode = useCallback(async (mode: LoopMode) => {
     setStatus(prev => ({ ...prev, loop_mode: mode }));
-    await IpcService.invoke('set_loop_mode', { mode });
-  }, []);
+    await audioEngine.setLoopMode(mode);
+  }, [audioEngine]);
 
   const toggleShuffle = useCallback(async () => {
     const newShuffle = !statusRef.current.shuffle;
@@ -942,8 +927,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       queueRef.current = shuffled;
       setQueue(shuffled);
       setQueueIndex(current ? 0 : -1);
-      if (useBackendQueue) {
-        await IpcService.invoke('queue_replace', { tracks: shuffled, currentIndex: 0 });
+      if (engineOwnsQueue) {
+        await audioEngine.replaceQueue(shuffled, 0);
         lastSyncedQueueRef.current = shuffled;
       }
     } else if (!newShuffle && baseQueueRef.current.length > 0) {
@@ -953,16 +938,16 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setQueue(restored);
       setQueueIndex(restoredIndex);
       shuffleQueueRef.current = null;
-      if (useBackendQueue) {
-        await IpcService.invoke('queue_replace', { tracks: restored, currentIndex: restoredIndex >= 0 ? restoredIndex : 0 });
+      if (engineOwnsQueue) {
+        await audioEngine.replaceQueue(restored, restoredIndex >= 0 ? restoredIndex : 0);
         lastSyncedQueueRef.current = restored;
       }
     }
     // The randomized queue is already materialized above. Keep backend
     // navigation sequential so it consumes that playlist once, instead of
     // applying weighted random picks that can revisit songs.
-    await IpcService.invoke('set_shuffle', { shuffle: false });
-  }, [useBackendQueue]);
+    await audioEngine.setShuffle(false);
+  }, [audioEngine, engineOwnsQueue]);
 
   const playRandomQueue = useCallback(async (
     nextTracks: Track[],
@@ -995,23 +980,23 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const insertAt = queueIndexRef.current >= 0 ? queueIndexRef.current + 1 : 0;
     copy.splice(insertAt, 0, track);
     applyQueueUpdate(copy);
-    if (useBackendQueue) {
-      void IpcService.invoke('queue_play_next', { track }).catch(error =>
+    if (engineOwnsQueue) {
+      void audioEngine.playNext(track).catch(error =>
         console.warn('queue_play_next failed', error)
       );
     }
     showToast(t('toast_added_to_queue', settings.language), 'info');
-  }, [applyQueueUpdate, settings.language, showToast]);
+  }, [applyQueueUpdate, audioEngine, engineOwnsQueue, settings.language, showToast]);
 
   const addToQueue = useCallback((track: Track) => {
     applyQueueUpdate([...queueRef.current, track]);
-    if (useBackendQueue) {
-      void IpcService.invoke('queue_add', { tracks: [track] }).catch(error =>
+    if (engineOwnsQueue) {
+      void audioEngine.addToQueue([track]).catch(error =>
         console.warn('queue_add failed', error)
       );
     }
     showToast(t('toast_added_to_queue', settings.language), 'info');
-  }, [applyQueueUpdate, settings.language, showToast]);
+  }, [applyQueueUpdate, audioEngine, engineOwnsQueue, settings.language, showToast]);
 
   const removeFromQueue = useCallback((index: number) => {
     const isCurrent = index === queueIndexRef.current;
@@ -1019,14 +1004,14 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     copy.splice(index, 1);
     applyQueueUpdate(copy);
 
-    if (useBackendQueue) {
-      void IpcService.invoke('queue_remove', { index })
+    if (engineOwnsQueue) {
+      void audioEngine.removeFromQueue(index)
         .then(() => {
           if (isCurrent) {
             // Backend now points at the following track; start it (or stop when
             // the queue ran out).
             if (copy.length > 0) {
-              return IpcService.invoke('play_current');
+              return audioEngine.playCurrent();
             }
             return stop();
           }
@@ -1044,7 +1029,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } else if (index < queueIndexRef.current) {
       setQueueIndex(prevIdx => prevIdx - 1);
     }
-  }, [applyQueueUpdate, next, stop]);
+  }, [applyQueueUpdate, audioEngine, engineOwnsQueue, next, stop]);
 
   const reorderQueue = useCallback((fromIndex: number, toIndex: number) => {
     const copy = [...queueRef.current];
@@ -1052,8 +1037,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     copy.splice(toIndex, 0, moved);
     applyQueueUpdate(copy);
 
-    if (useBackendQueue) {
-      void IpcService.invoke('queue_reorder', { from: fromIndex, to: toIndex }).catch(error =>
+    if (engineOwnsQueue) {
+      void audioEngine.reorderQueue(fromIndex, toIndex).catch(error =>
         console.warn('queue_reorder failed', error)
       );
     }
@@ -1066,18 +1051,18 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } else if (fromIndex > current && toIndex <= current) {
       setQueueIndex(prevIdx => prevIdx + 1);
     }
-  }, [applyQueueUpdate]);
+  }, [applyQueueUpdate, audioEngine, engineOwnsQueue]);
 
   const clearQueue = useCallback(() => {
     const current = statusRef.current.current_track;
     applyQueueUpdate(current ? [current] : []);
     setQueueIndex(current ? 0 : -1);
-    if (useBackendQueue) {
-      void IpcService.invoke('queue_clear_upcoming').catch(error =>
+    if (engineOwnsQueue) {
+      void audioEngine.clearUpcoming().catch(error =>
         console.warn('queue_clear_upcoming failed', error)
       );
     }
-  }, [applyQueueUpdate]);
+  }, [applyQueueUpdate, audioEngine, engineOwnsQueue]);
 
   const playerValue = useMemo<PlayerContextType>(
     () => ({

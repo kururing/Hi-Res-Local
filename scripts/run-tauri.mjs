@@ -13,6 +13,9 @@ mkdirSync(tmp, { recursive: true });
 const env = {
   ...process.env,
   CARGO_TARGET_DIR: target,
+  // MSVC incremental + crate-type=cdylib leaves stale LLVM symbols
+  // (LNK2019 anon.*.llvm.*) in nnpm_audio_core.dll.
+  CARGO_INCREMENTAL: '0',
   TMP: tmp,
   TEMP: tmp,
   TMPDIR: tmp,

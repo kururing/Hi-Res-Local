@@ -1,0 +1,15 @@
+[package]
+name = "nnpm-probe"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Native CLI audio probe for Nghe Nhạc Pro Max ingestion"
+
+[[bin]]
+name = "nnpm-probe"
+path = "src/main.rs"
+
+[dependencies]
+nnpm-audio-core = { path = "../nnpm-audio-core" }
+serde_json = "1.0"
+base64 = "0.22"

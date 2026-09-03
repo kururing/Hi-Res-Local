@@ -1,5 +1,5 @@
 use std::path::Path;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::db::backup::{
     backup_database as db_backup_database, restore_database as db_restore_database,
@@ -7,7 +7,12 @@ use crate::db::backup::{
 use crate::state::AppState;
 
 #[tauri::command]
-pub async fn backup_database(dest_path: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn backup_database(
+    dest_path: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    crate::fs_guard::assert_export_path(&app, &dest_path)?;
     let conn = state.db.lock();
     db_backup_database(&conn, Path::new(&dest_path)).map_err(|e| e.to_string())
 }
@@ -15,8 +20,10 @@ pub async fn backup_database(dest_path: String, state: State<'_, AppState>) -> R
 #[tauri::command]
 pub async fn restore_database(
     source_path: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    crate::fs_guard::assert_export_path(&app, &source_path)?;
     let mut conn = state.db.lock();
     db_restore_database(&mut conn, Path::new(&source_path)).map_err(|e| e.to_string())
 }
@@ -37,8 +44,12 @@ pub async fn export_database(state: State<'_, AppState>) -> Result<Vec<u8>, Stri
 
 #[tauri::command]
 pub async fn import_database(data: Vec<u8>, state: State<'_, AppState>) -> Result<(), String> {
+    const MAX_IMPORT_DB_BYTES: usize = 64 * 1024 * 1024;
     if data.is_empty() {
         return Err("Backup database is empty".to_string());
+    }
+    if data.len() > MAX_IMPORT_DB_BYTES {
+        return Err("Backup database is too large".to_string());
     }
     let path = std::env::temp_dir().join(format!("nghenhac-restore-{}.db", uuid::Uuid::new_v4()));
     std::fs::write(&path, data).map_err(|e| e.to_string())?;

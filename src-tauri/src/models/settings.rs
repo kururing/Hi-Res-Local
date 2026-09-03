@@ -49,7 +49,7 @@ impl Default for AppSettings {
 }
 
 fn default_dsd_output_mode() -> String {
-    "native_dsd".into()
+    "pcm".into()
 }
 
 fn default_audio_backend() -> String {

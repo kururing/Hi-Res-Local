@@ -1,13 +1,15 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Playlist } from '../types/playlist';
 import { Track } from '../types/library';
-import { IpcService } from '../services/ipc';
 import { BackendPlaylist } from '../types/ipc';
 import { parseM3u, generateM3u } from '../services/m3u';
 import { useToast } from './ToastContext';
 import { useLibrary } from './LibraryContext';
 import { t } from '../i18n';
 import { useSettings } from './SettingsContext';
+import { PlatformUnsupportedError, usePlatform } from '../platform';
+import { cloudTrackIdOf } from '../platform/hybrid/mergeLibrary';
+import { useAuth } from './AuthContext';
 
 function mapBackendPlaylist(pl: BackendPlaylist, trackIds: string[] = []): Playlist {
   return {
@@ -30,6 +32,7 @@ interface PlaylistContextType {
   addTrackToPlaylist: (playlistId: string, trackId: string, notify?: boolean) => Promise<void>;
   removeTrackFromPlaylist: (playlistId: string, trackId: string) => Promise<void>;
   reorderPlaylist: (playlistId: string, fromIndex: number, toIndex: number) => Promise<void>;
+  changePlaylistCover: (playlistId: string) => Promise<void>;
   getPlaylistTracks: (playlist: Playlist) => Track[];
   importM3uFile: (content: string, fallbackName?: string) => Promise<Playlist | null>;
   exportM3uFile: (playlistId: string) => string | null;
@@ -42,36 +45,49 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const { showToast } = useToast();
   const { tracks, getTrackById } = useLibrary();
   const { settings } = useSettings();
+  const { playlists: playlistApi } = usePlatform();
+  const { status: authStatus } = useAuth();
+
+  const catalogTrackId = useCallback((trackId: string): string | null => {
+    const track = getTrackById(trackId);
+    if (!track) return trackId;
+    return cloudTrackIdOf(track);
+  }, [getTrackById]);
 
   const loadPlaylists = useCallback(async () => {
     try {
-      const list = await IpcService.invoke('get_playlists');
+      const list = await playlistApi.list();
       if (!list) return;
       // Track membership lives in the backend join table; fetch it per playlist.
       const mapped = await Promise.all(
         list.map(async pl => {
           try {
-            const detail = await IpcService.invoke('get_playlist', { id: pl.id });
+            const detail = await playlistApi.get(pl.id);
             return mapBackendPlaylist(pl, (detail?.tracks || []).map(track => track.id));
           } catch {
             return mapBackendPlaylist(pl);
           }
         })
       );
-      setPlaylists(mapped);
+      return mapped;
     } catch (e) {
       console.error('Failed to load playlists', e);
+      return undefined;
     }
-  }, []);
+  }, [playlistApi]);
 
   useEffect(() => {
-    loadPlaylists();
-  }, [loadPlaylists]);
+    let cancelled = false;
+    void loadPlaylists().then(mapped => {
+      if (!cancelled && mapped) setPlaylists(mapped);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus, loadPlaylists]);
 
   const createPlaylist = async (name: string, description?: string): Promise<Playlist> => {
-    const created = await IpcService.invoke('create_playlist', {
-      input: { name, description: description ?? null },
-    });
+    const created = await playlistApi.create({ name, description: description ?? null });
     const pl = mapBackendPlaylist(created);
     setPlaylists(prev => [...prev, pl]);
     showToast(t('toast_playlist_created', settings.language, { name }), 'success');
@@ -80,13 +96,11 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const updatePlaylist = async (id: string, partial: Partial<Playlist>) => {
     if (partial.name !== undefined || partial.description !== undefined || partial.cover_url !== undefined) {
-      await IpcService.invoke('update_playlist', {
-        input: {
-          id,
-          name: partial.name ?? null,
-          description: partial.description ?? null,
-          cover_art_path: partial.cover_url ?? null,
-        },
+      await playlistApi.update({
+        id,
+        name: partial.name ?? null,
+        description: partial.description ?? null,
+        cover_art_path: partial.cover_url ?? null,
       });
     }
 
@@ -95,18 +109,20 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const current = playlists.find(p => p.id === id);
       const oldIds = current?.track_ids ?? [];
       const newIds = partial.track_ids;
-      const oldSet = new Set(oldIds);
-      const newSet = new Set(newIds);
-      const added = newIds.filter(trackId => !oldSet.has(trackId));
-      const removed = oldIds.filter(trackId => !newSet.has(trackId));
+      const oldCatalog = oldIds.map(id => catalogTrackId(id) ?? id);
+      const newCatalog = newIds.map(id => catalogTrackId(id)).filter((id): id is string => Boolean(id));
+      const oldSet = new Set(oldCatalog);
+      const newSet = new Set(newCatalog);
+      const added = newCatalog.filter(id => !oldSet.has(id));
+      const removed = oldCatalog.filter(id => !newSet.has(id));
 
       if (removed.length > 0) {
-        await IpcService.invoke('remove_tracks_from_playlist', { playlistId: id, trackIds: removed });
+        await playlistApi.removeTracks(id, removed);
       }
       if (added.length > 0) {
-        await IpcService.invoke('add_tracks_to_playlist', { playlistId: id, trackIds: added });
+        await playlistApi.addTracks(id, added);
       }
-      await IpcService.invoke('reorder_playlist_tracks', { playlistId: id, trackIds: newIds });
+      await playlistApi.reorderTracks(id, newCatalog);
     }
 
     setPlaylists(prev =>
@@ -115,17 +131,22 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const deletePlaylist = async (id: string) => {
-    await IpcService.invoke('delete_playlist', { id });
+    await playlistApi.delete(id);
     setPlaylists(prev => prev.filter(p => p.id !== id));
     showToast(t('toast_playlist_deleted', settings.language), 'info');
   };
 
   const addTrackToPlaylist = async (playlistId: string, trackId: string, notify = true) => {
-    await IpcService.invoke('add_tracks_to_playlist', { playlistId, trackIds: [trackId] });
+    const catalogId = catalogTrackId(trackId);
+    if (!catalogId) {
+      showToast(t('account_guest_subtitle', settings.language), 'info');
+      return;
+    }
+    await playlistApi.addTracks(playlistId, [catalogId]);
     setPlaylists(prev =>
       prev.map(p => {
-        if (p.id === playlistId && !p.track_ids.includes(trackId)) {
-          return { ...p, track_ids: [...p.track_ids, trackId], updated_at: new Date().toISOString() };
+        if (p.id === playlistId && !p.track_ids.includes(catalogId) && !p.track_ids.includes(trackId)) {
+          return { ...p, track_ids: [...p.track_ids, catalogId], updated_at: new Date().toISOString() };
         }
         return p;
       })
@@ -136,11 +157,16 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const removeTrackFromPlaylist = async (playlistId: string, trackId: string) => {
-    await IpcService.invoke('remove_tracks_from_playlist', { playlistId, trackIds: [trackId] });
+    const catalogId = catalogTrackId(trackId) ?? trackId;
+    await playlistApi.removeTracks(playlistId, [catalogId]);
     setPlaylists(prev =>
       prev.map(p => {
         if (p.id === playlistId) {
-          return { ...p, track_ids: p.track_ids.filter(id => id !== trackId), updated_at: new Date().toISOString() };
+          return {
+            ...p,
+            track_ids: p.track_ids.filter(id => id !== trackId && id !== catalogId),
+            updated_at: new Date().toISOString(),
+          };
         }
         return p;
       })
@@ -157,6 +183,18 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     newTrackIds.splice(toIndex, 0, moved);
 
     await updatePlaylist(playlistId, { track_ids: newTrackIds });
+  };
+
+  const changePlaylistCover = async (playlistId: string) => {
+    if (!playlistApi.pickCover) return;
+    try {
+      const selection = await playlistApi.pickCover();
+      if (!selection) return;
+      await updatePlaylist(playlistId, { cover_url: selection.cover_art_path });
+    } catch (error) {
+      if (error instanceof PlatformUnsupportedError) return;
+      throw error;
+    }
   };
 
   const getPlaylistTracks = (playlist: Playlist): Track[] => {
@@ -227,6 +265,7 @@ export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         addTrackToPlaylist,
         removeTrackFromPlaylist,
         reorderPlaylist,
+        changePlaylistCover,
         getPlaylistTracks,
         importM3uFile,
         exportM3uFile,

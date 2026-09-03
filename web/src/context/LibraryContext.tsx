@@ -1,12 +1,14 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import { Track, Album, Artist, Genre, LibraryStats, ScanProgress } from '../types/library';
-import { IpcService, isTauri } from '../services/ipc';
 import { Storage } from '../services/storage';
-import { useToast } from './ToastContext';
+import { useToast, type ToastType } from './ToastContext';
 import { useSettings } from './SettingsContext';
 import { t } from '../i18n';
 import { normalizeLibraryTrack } from '../services/trackPresentation';
 import { artistIdentityKeys } from '../services/artistIdentity';
+import { useAuth } from './AuthContext';
+import { usePlatform } from '../platform';
+import { cloudTrackIdOf } from '../platform/hybrid/mergeLibrary';
 
 interface LibraryContextType {
   tracks: Track[];
@@ -41,9 +43,6 @@ const GENRE_GRADIENTS = [
   'from-violet-600 to-fuchsia-800',
 ];
 
-// SQLite owns favorites in the desktop build; localStorage remains the store
-// for the browser/mock preview.
-const useBackendFavorites = isTauri();
 const FAVORITES_MIGRATED_KEY = 'nghenhac_favorites_migrated_v1';
 
 const artistDisplayScore = (value: string) =>
@@ -55,9 +54,35 @@ function splitAlbumKey(albumKey: string): { albumTitle: string; artistName: stri
   return { albumTitle: albumKey.slice(0, sep), artistName: albumKey.slice(sep + 3) };
 }
 
+/** Applies an optimistic favorite mutation and restores prior state if it fails. */
+export async function persistFavoriteMutation(
+  mutation: Promise<void>,
+  rollback: () => void
+): Promise<void> {
+  try {
+    await mutation;
+  } catch (error) {
+    rollback();
+    throw error;
+  }
+}
+
+function notifyFavoriteFailure(
+  error: unknown,
+  showToast: (message: string, type?: ToastType) => void,
+  language: 'vi' | 'en',
+): void {
+  console.warn('favorite mutation failed', error);
+  if (error instanceof Error && /sign in/i.test(error.message)) {
+    showToast(t('toast_sign_in_required', language), 'error');
+  }
+}
+
 export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { showToast } = useToast();
   const { settings, addMusicFolder } = useSettings();
+  const { runtime, library, favorites, capabilities } = usePlatform();
+  const { status: authStatus } = useAuth();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [stats, setStats] = useState<LibraryStats>({
     total_tracks: 0,
@@ -69,19 +94,14 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<string>>(
-    () => (useBackendFavorites ? new Set() : Storage.getFavoriteTrackIds())
-  );
-  const [favoriteAlbumKeys, setFavoriteAlbumKeys] = useState<Set<string>>(
-    () => (useBackendFavorites ? new Set() : Storage.getFavoriteAlbums())
-  );
-  const [favoriteArtistNames, setFavoriteArtistNames] = useState<Set<string>>(
-    () => (useBackendFavorites ? new Set() : Storage.getFavoriteArtists())
-  );
+  const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<string>>(() => new Set());
+  const [favoriteAlbumKeys, setFavoriteAlbumKeys] = useState<Set<string>>(() => new Set());
+  const [favoriteArtistNames, setFavoriteArtistNames] = useState<Set<string>>(() => new Set());
 
-  /** One-time push of legacy localStorage favorites into SQLite. */
+  /** One-time push of legacy localStorage favorites into SQLite. Cloud
+   *  favorites live in PostgreSQL and must not receive local track ids. */
   const migrateLocalFavorites = useCallback(async (loadedTracks: Track[]) => {
-    if (!useBackendFavorites || localStorage.getItem(FAVORITES_MIGRATED_KEY)) return;
+    if (runtime !== 'tauri' || capabilities.cloudApi || localStorage.getItem(FAVORITES_MIGRATED_KEY)) return;
 
     const trackIds = Storage.getFavoriteTrackIds();
     const albumKeys = Storage.getFavoriteAlbums();
@@ -91,15 +111,15 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     try {
       for (const id of trackIds) {
         if (known.has(id)) {
-          await IpcService.invoke('set_track_favorite', { id, isFavorite: true });
+          await favorites.setTrackFavorite(id, true);
         }
       }
       for (const key of albumKeys) {
         const { albumTitle, artistName } = splitAlbumKey(key);
-        await IpcService.invoke('set_album_favorite', { albumTitle, artistName, isFavorite: true });
+        await favorites.setAlbumFavorite(albumTitle, artistName, true);
       }
       for (const name of artistNames) {
-        await IpcService.invoke('set_artist_favorite', { artistName: name, isFavorite: true });
+        await favorites.setArtistFavorite(name, true);
       }
       // Mark the migration only after every backend write succeeds. A partial
       // failure remains retryable on the next launch; all writes are idempotent.
@@ -107,44 +127,38 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } catch (err) {
       console.warn('Favorites migration failed', err);
     }
-  }, []);
+  }, [capabilities.cloudApi, favorites, runtime]);
 
-  const loadBackendFavorites = useCallback(async () => {
-    if (!useBackendFavorites) return;
+  const loadFavorites = useCallback(async () => {
     try {
       const [favAlbums, favArtists] = await Promise.all([
-        IpcService.invoke('get_favorite_albums'),
-        IpcService.invoke('get_favorite_artists'),
+        favorites.getFavoriteAlbums(),
+        favorites.getFavoriteArtists(),
       ]);
       setFavoriteAlbumKeys(new Set((favAlbums || []).map(a => `${a.album_title}|||${a.artist_name}`)));
       setFavoriteArtistNames(new Set(favArtists || []));
     } catch (err) {
-      console.warn('Failed to load favorites from backend', err);
+      console.warn('Failed to load favorites', err);
     }
-  }, []);
+  }, [favorites]);
 
-  // Load Tracks & Library from IPC on mount
   const reloadLibrary = useCallback(async () => {
     try {
       setIsLoading(true);
       const [fetchedTracks, fetchedStats] = await Promise.all([
-        IpcService.invoke('get_all_tracks'),
-        IpcService.invoke('get_library_stats'),
+        library.getAllTracks(),
+        library.getStats(),
       ]);
 
       const normalized = (fetchedTracks || []).map(normalizeLibraryTrack);
 
-      if (useBackendFavorites) {
+      if (runtime === 'tauri') {
         await migrateLocalFavorites(normalized);
-        // is_favorite comes straight from SQLite.
-        setTracks(normalized);
-        setFavoriteTrackIds(new Set(normalized.filter(track => track.is_favorite).map(track => track.id)));
-        await loadBackendFavorites();
-      } else {
-        const favTracks = Storage.getFavoriteTrackIds();
-        setTracks(normalized.map(track => ({ ...track, is_favorite: favTracks.has(track.id) })));
-        setFavoriteTrackIds(favTracks);
       }
+
+      setTracks(normalized);
+      setFavoriteTrackIds(new Set(normalized.filter(track => track.is_favorite).map(track => track.id)));
+      await loadFavorites();
 
       if (fetchedStats) setStats(fetchedStats);
     } catch (err) {
@@ -152,36 +166,40 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } finally {
       setIsLoading(false);
     }
-  }, [loadBackendFavorites, migrateLocalFavorites]);
+  }, [library, loadFavorites, migrateLocalFavorites, runtime]);
 
   useEffect(() => {
-    reloadLibrary();
+    void reloadLibrary();
+    // Reload when optional desktop login joins or leaves the cloud catalog.
 
-    // Listen for scanning progress events
-    let unlistenProgress: (() => void) | undefined;
-    let unlistenFinished: (() => void) | undefined;
-    let unlistenTrackUpdated: (() => void) | undefined;
-    let unlistenTrackDeleted: (() => void) | undefined;
+    let cancelled = false;
+    const unsubs: Array<() => void> = [];
 
-    (async () => {
-      unlistenProgress = await IpcService.listen('library://scan_progress', (progress) => {
+    const retain = (unsub: () => void) => {
+      if (cancelled) {
+        unsub();
+        return;
+      }
+      unsubs.push(unsub);
+    };
+
+    void Promise.all([
+      library.subscribeScanProgress(progress => {
         setScanProgress(progress);
-      });
-      unlistenFinished = await IpcService.listen('library://scan_finished', () => {
+      }).then(retain),
+      library.subscribeScanFinished(() => {
         setScanProgress(null);
-        reloadLibrary();
-      });
-      unlistenTrackUpdated = await IpcService.listen('library:track_updated', () => { void reloadLibrary(); });
-      unlistenTrackDeleted = await IpcService.listen('library:track_deleted', () => { void reloadLibrary(); });
-    })();
+        void reloadLibrary();
+      }).then(retain),
+      library.subscribeTrackUpdated(() => { void reloadLibrary(); }).then(retain),
+      library.subscribeTrackDeleted(() => { void reloadLibrary(); }).then(retain),
+    ]);
 
     return () => {
-      if (unlistenProgress) unlistenProgress();
-      if (unlistenFinished) unlistenFinished();
-      if (unlistenTrackUpdated) unlistenTrackUpdated();
-      if (unlistenTrackDeleted) unlistenTrackDeleted();
+      cancelled = true;
+      for (const unsub of unsubs) unsub();
     };
-  }, [reloadLibrary]);
+  }, [authStatus, library, reloadLibrary]);
 
   // Derived: Albums
   const albums = useMemo<Album[]>(() => {
@@ -199,9 +217,13 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           genre: track.genre,
           track_count: 0,
           total_duration: 0,
+          cover_url: track.cover_art_path ?? null,
           tracks: [],
         };
         albumMap.set(key, album);
+      }
+      if (!album.cover_url && track.cover_art_path) {
+        album.cover_url = track.cover_art_path;
       }
       album.track_count++;
       album.total_duration += track.duration || 0;
@@ -227,6 +249,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         artist = {
           id: album.artist,
           name: album.artist,
+          image_url: album.tracks.find(track => track.artist_image_url)?.artist_image_url ?? null,
           track_count: 0,
           album_count: 0,
           albums: [],
@@ -235,6 +258,9 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } else if (artistDisplayScore(album.artist) > artistDisplayScore(artist.name)) {
         artist.id = album.artist;
         artist.name = album.artist;
+      }
+      if (!artist.image_url) {
+        artist.image_url = album.tracks.find(track => track.artist_image_url)?.artist_image_url ?? artist.image_url;
       }
       identityKeys.forEach(key => artistMap.set(key, artist!));
       artist.album_count++;
@@ -271,15 +297,15 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const scanDirectory = useCallback(async (path?: string) => {
     let targetPath = path;
     if (!targetPath) {
-      const picked = await IpcService.invoke('open_folder_dialog');
+      const picked = await library.pickFolder();
       if (!picked) return;
       targetPath = picked;
     }
 
-    await IpcService.invoke('add_library_root', {
-      path: targetPath,
-      name: targetPath.split(/[\\/]/).filter(Boolean).pop() || targetPath,
-    });
+    await library.addRoot(
+      targetPath,
+      targetPath.split(/[\\/]/).filter(Boolean).pop() || targetPath,
+    );
     addMusicFolder(targetPath);
     setScanProgress({
       total_files: 0,
@@ -289,7 +315,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     try {
-      const scannedTracks = await IpcService.invoke('scan_directory', { path: targetPath });
+      const scannedTracks = await library.scanDirectory(targetPath);
       if (scannedTracks) {
         setTracks(scannedTracks.map(normalizeLibraryTrack));
         showToast(t('settings_btn_rescan', settings.language), 'success');
@@ -300,7 +326,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } finally {
       setScanProgress(null);
     }
-  }, [addMusicFolder, settings.language, showToast]);
+  }, [addMusicFolder, library, settings.language, showToast]);
 
   const rescanLibrary = useCallback(async () => {
     if (settings.music_folders.length === 0) return;
@@ -313,7 +339,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     try {
-      await IpcService.invoke('scan_library');
+      await library.scanLibrary();
       await reloadLibrary();
       showToast(t('settings_btn_rescan', settings.language), 'success');
     } catch (e) {
@@ -322,74 +348,90 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } finally {
       setScanProgress(null);
     }
-  }, [reloadLibrary, settings.language, settings.music_folders.length, showToast]);
+  }, [library, reloadLibrary, settings.language, settings.music_folders.length, showToast]);
 
   const toggleFavoriteTrack = useCallback((trackId: string): boolean => {
-    let isFav: boolean;
-    if (useBackendFavorites) {
-      isFav = !favoriteTrackIds.has(trackId);
-      void IpcService.invoke('set_track_favorite', { id: trackId, isFavorite: isFav }).catch(err =>
-        console.warn('set_track_favorite failed', err)
-      );
-      setFavoriteTrackIds(prev => {
-        const nextSet = new Set(prev);
-        if (isFav) nextSet.add(trackId);
-        else nextSet.delete(trackId);
-        return nextSet;
-      });
-    } else {
-      isFav = Storage.toggleFavoriteTrack(trackId);
-      setFavoriteTrackIds(Storage.getFavoriteTrackIds());
-    }
+    const isFav = !favoriteTrackIds.has(trackId);
+    setFavoriteTrackIds(prev => {
+      const nextSet = new Set(prev);
+      if (isFav) nextSet.add(trackId);
+      else nextSet.delete(trackId);
+      return nextSet;
+    });
     setTracks(prev =>
       prev.map(track => (track.id === trackId ? { ...track, is_favorite: isFav } : track))
     );
+    void persistFavoriteMutation(
+      (() => {
+        const track = tracks.find(item => item.id === trackId);
+        const catalogId = track ? cloudTrackIdOf(track) : null;
+        if (!catalogId) return Promise.resolve();
+        return favorites.setTrackFavorite(catalogId, isFav);
+      })(),
+      () => {
+        setFavoriteTrackIds(prev => {
+          const nextSet = new Set(prev);
+          if (isFav) nextSet.delete(trackId);
+          else nextSet.add(trackId);
+          return nextSet;
+        });
+        setTracks(prev =>
+          prev.map(track => (track.id === trackId ? { ...track, is_favorite: !isFav } : track))
+        );
+      }
+    ).catch(error => notifyFavoriteFailure(error, showToast, settings.language));
     return isFav;
-  }, [favoriteTrackIds]);
+  }, [favoriteTrackIds, favorites, tracks, showToast, settings.language]);
 
   const toggleFavoriteAlbum = useCallback((albumKey: string): boolean => {
-    let isFav: boolean;
-    if (useBackendFavorites) {
-      isFav = !favoriteAlbumKeys.has(albumKey);
-      const { albumTitle, artistName } = splitAlbumKey(albumKey);
-      void IpcService.invoke('set_album_favorite', { albumTitle, artistName, isFavorite: isFav }).catch(
-        err => console.warn('set_album_favorite failed', err)
-      );
-      setFavoriteAlbumKeys(prev => {
-        const nextSet = new Set(prev);
-        if (isFav) nextSet.add(albumKey);
-        else nextSet.delete(albumKey);
-        return nextSet;
-      });
-    } else {
-      isFav = Storage.toggleFavoriteAlbum(albumKey);
-      setFavoriteAlbumKeys(Storage.getFavoriteAlbums());
-    }
+    const isFav = !favoriteAlbumKeys.has(albumKey);
+    const { albumTitle, artistName } = splitAlbumKey(albumKey);
+    setFavoriteAlbumKeys(prev => {
+      const nextSet = new Set(prev);
+      if (isFav) nextSet.add(albumKey);
+      else nextSet.delete(albumKey);
+      return nextSet;
+    });
+    void persistFavoriteMutation(
+      favorites.setAlbumFavorite(albumTitle, artistName, isFav),
+      () => {
+        setFavoriteAlbumKeys(prev => {
+          const nextSet = new Set(prev);
+          if (isFav) nextSet.delete(albumKey);
+          else nextSet.add(albumKey);
+          return nextSet;
+        });
+      }
+    ).catch(error => notifyFavoriteFailure(error, showToast, settings.language));
     return isFav;
-  }, [favoriteAlbumKeys]);
+  }, [favoriteAlbumKeys, favorites, showToast, settings.language]);
 
   const toggleFavoriteArtist = useCallback((artistName: string): boolean => {
-    let isFav: boolean;
-    if (useBackendFavorites) {
-      isFav = !favoriteArtistNames.has(artistName);
-      void IpcService.invoke('set_artist_favorite', { artistName, isFavorite: isFav }).catch(err =>
-        console.warn('set_artist_favorite failed', err)
-      );
-      setFavoriteArtistNames(prev => {
-        const nextSet = new Set(prev);
-        if (isFav) nextSet.add(artistName);
-        else nextSet.delete(artistName);
-        return nextSet;
-      });
-    } else {
-      isFav = Storage.toggleFavoriteArtist(artistName);
-      setFavoriteArtistNames(Storage.getFavoriteArtists());
-    }
+    const isFav = !favoriteArtistNames.has(artistName);
+    setFavoriteArtistNames(prev => {
+      const nextSet = new Set(prev);
+      if (isFav) nextSet.add(artistName);
+      else nextSet.delete(artistName);
+      return nextSet;
+    });
+    void persistFavoriteMutation(
+      favorites.setArtistFavorite(artistName, isFav),
+      () => {
+        setFavoriteArtistNames(prev => {
+          const nextSet = new Set(prev);
+          if (isFav) nextSet.delete(artistName);
+          else nextSet.add(artistName);
+          return nextSet;
+        });
+      }
+    ).catch(error => notifyFavoriteFailure(error, showToast, settings.language));
     return isFav;
-  }, [favoriteArtistNames]);
+  }, [favoriteArtistNames, favorites, showToast, settings.language]);
 
   const getTrackById = useCallback(
-    (id: string): Track | undefined => tracks.find(track => track.id === id),
+    (id: string): Track | undefined => tracks.find(track => (
+      track.id === id || track.cloudTrackId === id
+    )),
     [tracks]
   );
 

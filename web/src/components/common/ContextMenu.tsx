@@ -20,6 +20,7 @@ import { usePlaylists } from '../../context/PlaylistContext';
 import { useToast } from '../../context/ToastContext';
 import { useSettings } from '../../context/SettingsContext';
 import { t } from '../../i18n';
+import { isLocalFilePath } from '../../platform/web/WebLibraryApi';
 
 export interface ContextMenuState {
   isOpen: boolean;
@@ -93,6 +94,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
   };
 
   const handleCopyPath = () => {
+    if (!isLocalFilePath(track.path)) return;
     navigator.clipboard.writeText(track.path);
     showToast(t('toast_copied', settings.language), 'info');
     onClose();
@@ -279,6 +281,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
       )}
 
       {/* Copy Path */}
+      {isLocalFilePath(track.path) && (
       <button
         onClick={handleCopyPath}
         className="flex items-center gap-2.5 px-3 py-2 hover:bg-oled-hover text-left transition-colors"
@@ -286,6 +289,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ state, onClose }) => {
         <Copy className="w-4 h-4 text-brand-muted" />
         <span>{t('menu_copy_path', settings.language)}</span>
       </button>
+      )}
     </div>}
     </>,
     document.body

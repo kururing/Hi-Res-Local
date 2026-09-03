@@ -3,7 +3,6 @@ import {
   Search,
   ChevronLeft,
   ChevronRight,
-  User,
   X,
 } from 'lucide-react';
 import { useLibrary } from '../../context/LibraryContext';
@@ -15,6 +14,7 @@ import { t } from '../../i18n';
 import { TrackArtwork } from '../common/TrackArtwork';
 import { AlbumArtwork } from '../common/AlbumArtwork';
 import { RemoteArtwork } from '../common/RemoteArtwork';
+import { UserMenu } from './UserMenu';
 
 interface HeaderProps {
   currentView: string;
@@ -284,7 +284,7 @@ export const Header: React.FC<HeaderProps> = ({
                           className="flex w-full items-center gap-2.5 p-2 rounded-lg text-left hover:bg-oled-hover cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
                         >
                           <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full border border-brand-border/70 bg-oled-card">
-                            <RemoteArtwork kind="artist" artist={ar.name} alt={`${ar.name} portrait`} />
+                            <RemoteArtwork kind="artist" artist={ar.name} src={ar.image_url} alt={`${ar.name} portrait`} />
                           </div>
                           <span className="text-xs font-medium text-brand-foreground truncate">
                             {ar.name}
@@ -300,18 +300,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
       </div>
 
-      {/* Profile shortcut */}
-      <button
-        type="button"
-        onClick={() => onNavigate('settings')}
-        className="group flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-brand-border bg-oled-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
-        title={t('nav_settings', settings.language)}
-        aria-label={t('nav_settings', settings.language)}
-      >
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-brand-accent/80 to-brand-secondary text-white shadow-sm group-hover:brightness-110">
-          <User className="h-4 w-4" aria-hidden="true" />
-        </span>
-      </button>
+      <UserMenu onNavigate={onNavigate} />
     </header>
   );
 };

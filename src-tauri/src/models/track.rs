@@ -18,6 +18,10 @@ pub struct Track {
     pub channels: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bit_depth: Option<u8>,
+    #[serde(default)]
+    pub is_mqa: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isrc: Option<String>,
     pub format: String,
     pub file_size: u64,
     pub file_modified_at: String,

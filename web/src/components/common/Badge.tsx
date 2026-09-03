@@ -1,6 +1,6 @@
 import React from 'react';
 import { Track } from '../../types/library';
-import { formatQualityLabel } from '../../services/trackPresentation';
+import { formatPcmQuality, formatQualityLabel } from '../../services/trackPresentation';
 
 interface BadgeProps {
   track?: Track;
@@ -22,20 +22,22 @@ export const Badge: React.FC<BadgeProps> = ({
 }) => {
   const rawFormat = format || track?.format || (track?.path.endsWith('.flac') ? 'FLAC' : track?.path.endsWith('.wav') ? 'WAV' : 'MP3');
   const isDsd = /^(dsf|dff|dsd)$/i.test(rawFormat);
-  const f = isDsd ? 'DSD' : rawFormat;
+  const isMqa = track?.is_mqa === true;
+  const f = isMqa ? 'MQA' : isDsd ? 'DSD' : rawFormat;
   const sr = sampleRate ?? track?.sample_rate;
   const bits = bitsPerSample ?? track?.bit_depth ?? track?.bits_per_sample;
 
-  const isHiRes = (sr && sr >= 88200) || (bits && bits >= 24) || isDsd;
+  const isHiRes = (sr && sr >= 88200) || (bits && bits >= 24) || isDsd || isMqa;
   const isLossless = ['FLAC', 'WAV', 'ALAC', 'AIFF', 'APE', 'DSD'].includes(f.toUpperCase());
 
   const text = variant === 'quality' && track
     ? formatQualityLabel(track)
     : f || 'Audio';
+  const visibleQualityText = isMqa && track ? formatPcmQuality(track) || f : text;
   const qualityText = variant === 'quality' ? (
     <span className="whitespace-nowrap">
       <span className="quality-badge-compact">{f.toUpperCase()}</span>
-      <span className="quality-badge-full">{text}</span>
+      <span className="quality-badge-full">{visibleQualityText}</span>
     </span>
   ) : text;
 

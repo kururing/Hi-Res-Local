@@ -1,0 +1,2 @@
+ALTER TABLE artists
+  ADD COLUMN IF NOT EXISTS image_url TEXT;

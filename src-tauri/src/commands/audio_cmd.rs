@@ -24,6 +24,10 @@ pub struct AudioTrackInput {
     #[serde(default)]
     pub path: Option<String>,
     #[serde(default)]
+    pub stream_url: Option<String>,
+    #[serde(default)]
+    pub stream_expires_at: Option<String>,
+    #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
     pub artist: Option<String>,
@@ -69,6 +73,12 @@ impl AudioTrackInput {
             year: self.year,
             genre: self.genre,
             replay_gain: None,
+            stream_url: self
+                .stream_url
+                .filter(|url| crate::audio::http_input::is_http_stream_url(url)),
+            stream_expires_at: self
+                .stream_expires_at
+                .filter(|value| !value.trim().is_empty()),
         }
     }
 }
@@ -132,6 +142,21 @@ pub struct LibraryStatsDTO {
 
 // ---------------- Playback Commands ----------------
 
+fn assert_playable_track(state: &AppState, track: &AudioTrack) -> Result<(), String> {
+    if track
+        .stream_url
+        .as_ref()
+        .is_some_and(|url| !url.trim().is_empty())
+        && track.path.trim().is_empty()
+    {
+        let url = track.stream_url.as_deref().unwrap_or_default();
+        return crate::audio::http_input::validate_http_stream_url(url)
+            .map_err(|error| error.to_string());
+    }
+    let conn = state.db.lock();
+    crate::fs_guard::assert_media_path(&conn, &state.allowed_fs_paths, &track.path)
+}
+
 fn persist_player_position(state: &AppState, position_override_ms: Option<u64>) {
     let snapshot = state.player.get_snapshot();
     let Some(track) = snapshot.current_track else {
@@ -171,6 +196,8 @@ pub async fn play_track(
             year: db_tr.year,
             genre: db_tr.genre,
             replay_gain: None,
+            stream_url: None,
+            stream_expires_at: None,
         }
     } else if let Some(p) = path {
         let title = std::path::Path::new(&p)
@@ -189,11 +216,14 @@ pub async fn play_track(
             year: None,
             genre: None,
             replay_gain: None,
+            stream_url: None,
+            stream_expires_at: None,
         }
     } else {
         return state.player.play_current().map_err(|e| e.to_string());
     };
 
+    assert_playable_track(&state, &audio_track)?;
     let start_position_ms = start_position_ms
         .unwrap_or_else(|| (start_position_secs.unwrap_or(0.0).max(0.0) * 1000.0) as u64);
     state
@@ -214,6 +244,9 @@ pub async fn play_queue(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let audio_tracks: Vec<AudioTrack> = tracks.into_iter().map(|t| t.into_audio_track()).collect();
+    for track in &audio_tracks {
+        assert_playable_track(&state, track)?;
+    }
     let start_position_ms = start_position_ms
         .unwrap_or_else(|| (start_position_secs.unwrap_or(0.0).max(0.0) * 1000.0) as u64);
     state
@@ -230,6 +263,9 @@ pub async fn queue_replace(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let audio_tracks: Vec<AudioTrack> = tracks.into_iter().map(|t| t.into_audio_track()).collect();
+    for track in &audio_tracks {
+        assert_playable_track(&state, track)?;
+    }
     state
         .player
         .queue_replace(audio_tracks, current_index)
@@ -395,11 +431,19 @@ pub async fn apply_playback_mode(
     backend: Option<AudioBackend>,
     dsd_transport: Option<DsdOutputMode>,
     asio_driver_id: Option<String>,
+    mqa_passthrough: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<EngineStatus, String> {
     state
         .player
-        .apply_playback_mode(mode, device_id, backend, dsd_transport, asio_driver_id)
+        .apply_playback_mode(
+            mode,
+            device_id,
+            backend,
+            dsd_transport,
+            asio_driver_id,
+            mqa_passthrough,
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -424,6 +468,7 @@ pub async fn set_audio_backend(
                 None,
                 Some(AudioBackend::Asio),
                 Some(DsdOutputMode::NativeDsd),
+                None,
                 None,
             )
             .map(|_| ())
@@ -613,6 +658,20 @@ pub async fn queue_play_next(
 }
 
 #[tauri::command]
+pub async fn refresh_stream_url(
+    track_id: String,
+    url: String,
+    expires_at: String,
+    restart_current: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .player
+        .refresh_stream_url(&track_id, url, expires_at, restart_current.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn queue_remove(index: usize, state: State<'_, AppState>) -> Result<(), String> {
     state.player.queue_remove(index).map_err(|e| e.to_string())
 }
@@ -658,13 +717,16 @@ pub async fn get_queue(state: State<'_, AppState>) -> Result<Vec<AudioTrack>, St
 // ---------------- Native Dialogs ----------------
 
 #[tauri::command]
-pub async fn open_folder_dialog() -> Result<Option<String>, String> {
+pub async fn open_folder_dialog(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let folder = rfd::FileDialog::new().pick_folder();
+    if let Some(path) = folder.as_ref() {
+        crate::fs_guard::remember_path(&state.allowed_fs_paths, path);
+    }
     Ok(folder.map(|p| p.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
-pub async fn open_files_dialog() -> Result<Option<Vec<String>>, String> {
+pub async fn open_files_dialog(state: State<'_, AppState>) -> Result<Option<Vec<String>>, String> {
     let files = rfd::FileDialog::new()
         .add_filter(
             "Audio Files",
@@ -675,21 +737,37 @@ pub async fn open_files_dialog() -> Result<Option<Vec<String>>, String> {
         .pick_files();
     Ok(files.map(|list| {
         list.into_iter()
-            .map(|p| p.to_string_lossy().to_string())
+            .map(|path| {
+                crate::fs_guard::remember_path(&state.allowed_fs_paths, &path);
+                path.to_string_lossy().to_string()
+            })
             .collect()
     }))
 }
 
 #[tauri::command]
-pub async fn open_image_dialog() -> Result<Option<String>, String> {
+pub async fn open_image_dialog(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let file = rfd::FileDialog::new()
         .add_filter("Image Files", &["png", "jpg", "jpeg", "webp"])
         .pick_file();
+    if let Some(path) = file.as_ref() {
+        crate::fs_guard::remember_path(&state.allowed_fs_paths, path);
+    }
     Ok(file.map(|path| path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
-pub async fn cache_playlist_cover(source_path: String, app: AppHandle) -> Result<String, String> {
+pub async fn cache_playlist_cover(
+    source_path: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    {
+        let conn = state.db.lock();
+        crate::fs_guard::assert_media_path(&conn, &state.allowed_fs_paths, &source_path).or_else(
+            |_| crate::fs_guard::assert_scan_path(&conn, &state.allowed_fs_paths, &source_path),
+        )?;
+    }
     let source = std::path::Path::new(&source_path);
     if !source.is_file() {
         return Err("Selected cover image was not found".to_string());
@@ -825,6 +903,10 @@ pub async fn scan_directory(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<Track>, String> {
+    {
+        let conn = state.db.lock();
+        crate::fs_guard::assert_scan_path(&conn, &state.allowed_fs_paths, &path)?;
+    }
     let root_path = PathBuf::from(&path);
     let db = Arc::clone(&state.db);
     let roots = vec![root_path];

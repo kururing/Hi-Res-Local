@@ -25,6 +25,11 @@ fn meta_content(html: &str, property: &str) -> Option<String> {
     result
 }
 
+fn is_artist_portrait_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("/features") || lower.contains("/amcartistimages")
+}
+
 fn music_group_image(value: &Value) -> Option<&str> {
     if value.get("@type").and_then(Value::as_str) == Some("MusicGroup") {
         return value.get("image").and_then(Value::as_str);
@@ -41,14 +46,15 @@ fn square_artist_artwork(html: &str) -> Option<String> {
         r#"(?is)<script\b[^>]*type\s*=\s*[\"']application/ld\+json[\"'][^>]*>(.*?)</script>"#,
     )
     .ok()?;
-    let size = Regex::new(r#"/\d+x\d+bb([.-])"#).ok()?;
+    let size = Regex::new(r#"/\d+x\d+(?:bb|cc|cw)?([.-])"#).ok()?;
 
     let result = script.captures_iter(html).find_map(|capture| {
         let value: Value = serde_json::from_str(capture.get(1)?.as_str().trim()).ok()?;
         let image = music_group_image(&value)?;
-        image
-            .starts_with("https://")
-            .then(|| size.replace(image, "/600x600bb$1").into_owned())
+        if !image.starts_with("https://") || !is_artist_portrait_url(image) {
+            return None;
+        }
+        Some(size.replace(image, "/600x600bb$1").into_owned())
     });
     result
 }
@@ -77,8 +83,10 @@ pub async fn get_apple_music_artist_artwork(
         .error_for_status()
         .map_err(|error| error.to_string())?;
     let html = response.text().await.map_err(|error| error.to_string())?;
-    Ok(square_artist_artwork(&html)
-        .or_else(|| meta_content(&html, "og:image").filter(|value| value.starts_with("https://"))))
+    Ok(square_artist_artwork(&html).or_else(|| {
+        meta_content(&html, "og:image")
+            .filter(|value| value.starts_with("https://") && is_artist_portrait_url(value))
+    }))
 }
 
 #[cfg(test)]
@@ -101,6 +109,18 @@ mod tests {
         assert_eq!(
             square_artist_artwork(html).as_deref(),
             Some("https://is1-ssl.mzstatic.com/image/thumb/Features/a.png/600x600bb.png")
+        );
+    }
+
+    #[test]
+    fn ignores_album_artwork_on_artist_pages() {
+        let html = r#"<script type="application/ld+json">{"@type":"MusicGroup","image":"https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/ab/cd/ef/200x200bb.jpg"}</script>"#;
+        assert_eq!(square_artist_artwork(html), None);
+        assert_eq!(
+            super::is_artist_portrait_url(
+                "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/ab/cd/ef/200x200bb.jpg"
+            ),
+            false
         );
     }
 }

@@ -116,7 +116,7 @@ pub fn pack_container4_to_packed_s24(src: &[u8], dst: &mut Vec<u8>) {
     dst.clear();
     dst.reserve((src.len() / 4).saturating_mul(3));
     for chunk in src.as_chunks::<4>().0 {
-        // WAVEFORMATEXTENSIBLE and FFmpeg S32 store 24 valid bits in the most
+        // WAVEFORMATEXTENSIBLE and common S32 decoders store 24 valid bits in the most
         // significant bits, so byte 0 is padding and must be discarded.
         dst.extend_from_slice(&chunk[1..4]);
     }
@@ -131,6 +131,60 @@ pub fn pack_packed_s24_to_container4(src: &[u8], dst: &mut Vec<u8>) {
         b[1..4].copy_from_slice(chunk);
         dst.extend_from_slice(&b);
     }
+}
+
+/// Pack left-justified S32 LE bytes to PCM16 (high 16 bits of each i32).
+///
+/// Used by tests and as a documented conversion for the FLAC S32 → PCM16 wire.
+pub fn pack_s32_le_left_justified_to_s16(src: &[u8], dst: &mut Vec<u8>) {
+    dst.clear();
+    dst.reserve(src.len() / 2);
+    for chunk in src.as_chunks::<4>().0 {
+        dst.extend_from_slice(&chunk[2..4]);
+    }
+}
+
+/// Interleaved i16 samples → PCM16 LE bytes. Stereo order is L,R,L,R.
+pub fn i16_to_pcm16_le(samples: &[i16], out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(samples.len() * 2);
+    for &s in samples {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+}
+
+/// Synthetic channel-identity PCM for writer tests (no decoder).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelIdentityPattern {
+    /// Left = sine, Right = silence.
+    LeftSineRightSilence,
+    /// Left = silence, Right = sine.
+    LeftSilenceRightSine,
+    /// Left = +constant, Right = −constant.
+    LeftPosRightNeg,
+}
+
+/// Pack `frames` of stereo PCM matching `format` / `packed_s24`.
+pub fn synthetic_stereo_pcm(
+    pattern: ChannelIdentityPattern,
+    format: &AudioFormat,
+    packed_s24: bool,
+    frames: usize,
+    out: &mut Vec<u8>,
+) {
+    let mut samples = Vec::with_capacity(frames.saturating_mul(2));
+    for n in 0..frames {
+        let phase = (n as f32) * std::f32::consts::TAU * 440.0 / format.sample_rate.max(1) as f32;
+        let sine = phase.sin() * 0.5;
+        let (l, r) = match pattern {
+            ChannelIdentityPattern::LeftSineRightSilence => (sine, 0.0),
+            ChannelIdentityPattern::LeftSilenceRightSine => (0.0, sine),
+            ChannelIdentityPattern::LeftPosRightNeg => (0.5, -0.5),
+        };
+        samples.push(l);
+        samples.push(r);
+    }
+    f32_to_pcm_bytes(&samples, format, packed_s24, out);
 }
 
 #[cfg(test)]
@@ -177,5 +231,84 @@ mod tests {
         pack_packed_s24_to_container4(&packed, &mut container);
         pack_container4_to_packed_s24(&container, &mut restored);
         assert_eq!(restored, packed);
+    }
+
+    #[test]
+    fn pcm16_stereo_known_offsets() {
+        let samples = [0x1234i16, 0x5678, -1, 0x0001];
+        let mut bytes = Vec::new();
+        i16_to_pcm16_le(&samples, &mut bytes);
+        assert_eq!(bytes, [0x34, 0x12, 0x78, 0x56, 0xFF, 0xFF, 0x01, 0x00]);
+        for (frame, expected_l, expected_r) in [
+            (0usize, [0x34u8, 0x12], [0x78u8, 0x56]),
+            (1, [0xFF, 0xFF], [0x01, 0x00]),
+        ] {
+            let offset = frame * 4;
+            assert_eq!(&bytes[offset..offset + 2], &expected_l);
+            assert_eq!(&bytes[offset + 2..offset + 4], &expected_r);
+        }
+    }
+
+    #[test]
+    fn s32_left_justified_16bit_downpack_keeps_lr_order() {
+        let mut src = Vec::new();
+        for v in [0x1234i32, 0x5678, -1, 1] {
+            src.extend_from_slice(&(v << 16).to_le_bytes());
+        }
+        let mut dst = Vec::new();
+        pack_s32_le_left_justified_to_s16(&src, &mut dst);
+        assert_eq!(dst, [0x34, 0x12, 0x78, 0x56, 0xFF, 0xFF, 0x01, 0x00]);
+    }
+
+    #[test]
+    fn leftover_must_not_cut_stereo_pcm16_frame() {
+        use crate::audio::pcm::frame_aligned_len;
+        let bpf = 4;
+        let leftover = [0x34, 0x12, 0x78, 0x56, 0x11, 0x11];
+        let n = frame_aligned_len(leftover.len(), bpf);
+        assert_eq!(n, 4);
+        assert_eq!(&leftover[..n], &[0x34, 0x12, 0x78, 0x56]);
+        assert_eq!(&leftover[n..], &[0x11, 0x11]);
+    }
+
+    #[test]
+    fn synthetic_left_sine_right_silence_pcm16_has_silent_right() {
+        let fmt = AudioFormat::s16(44_100, 2);
+        let mut bytes = Vec::new();
+        synthetic_stereo_pcm(
+            ChannelIdentityPattern::LeftSineRightSilence,
+            &fmt,
+            false,
+            16,
+            &mut bytes,
+        );
+        assert_eq!(bytes.len(), 16 * 4);
+        for frame in bytes.chunks_exact(4) {
+            let right = i16::from_le_bytes([frame[2], frame[3]]);
+            assert_eq!(right, 0);
+        }
+        let any_left = bytes
+            .chunks_exact(4)
+            .any(|frame| i16::from_le_bytes([frame[0], frame[1]]) != 0);
+        assert!(any_left);
+    }
+
+    #[test]
+    fn synthetic_left_pos_right_neg_signs() {
+        let fmt = AudioFormat::s16(48_000, 2);
+        let mut bytes = Vec::new();
+        synthetic_stereo_pcm(
+            ChannelIdentityPattern::LeftPosRightNeg,
+            &fmt,
+            false,
+            4,
+            &mut bytes,
+        );
+        for frame in bytes.chunks_exact(4) {
+            let left = i16::from_le_bytes([frame[0], frame[1]]);
+            let right = i16::from_le_bytes([frame[2], frame[3]]);
+            assert!(left > 0);
+            assert!(right < 0);
+        }
     }
 }

@@ -6,17 +6,16 @@ import { useSettings } from '../../context/SettingsContext';
 import { Badge } from '../common/Badge';
 import { TrackArtwork } from '../common/TrackArtwork';
 import {
-  parseLrc,
-  normalizeLyricsData,
   findActiveLyricIndex,
   computeEffectiveLyricsMode,
   hasCompleteRomanizedLyrics,
 } from '../../services/lrc';
-import { IpcService } from '../../services/ipc';
 import { LyricData, LyricLine, LyricsMode } from '../../types/lyrics';
 import { t } from '../../i18n';
 import { hydrateRomanizedLyrics } from '../../services/romanizedLyrics';
 import { Storage } from '../../services/storage';
+import { usePlatform } from '../../platform';
+import { resolveLyricsForTrack } from './lyricsLookup';
 
 const capitalizeFirstLetter = (text: string): string =>
   text.replace(/\p{L}/u, letter => letter.toLocaleUpperCase());
@@ -29,6 +28,7 @@ export const LyricsView: React.FC = () => {
   const { position } = usePlaybackProgress();
   const { favoriteTrackIds, toggleFavoriteTrack } = useLibrary();
   const { settings } = useSettings();
+  const { lyrics } = usePlatform();
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
 
   const track = status.current_track;
@@ -74,7 +74,7 @@ export const LyricsView: React.FC = () => {
     }
   };
 
-  // Fetch track lyrics via IPC with stale request cancellation
+  // Fetch track lyrics with stale request cancellation
   useEffect(() => {
     if (!track?.id) {
       setLyricsData(null);
@@ -84,59 +84,9 @@ export const LyricsView: React.FC = () => {
     let isCurrent = true;
     setLoading(true);
 
-    const fetchRemoteLyrics = async (): Promise<LyricData | null> => {
-      // v3 invalidates remote results selected before script-aware matching.
-      const cacheKey = `nghenhac_lrclib_lyrics:v3:${track.id}:${track.title}:${track.artist}:${track.album}`;
-      try {
-        const cached = localStorage.getItem(cacheKey);
-        if (cached) {
-          const parsed = normalizeLyricsData(JSON.parse(cached));
-          if (parsed) return parsed;
-        }
-      } catch {
-        // Ignore malformed or unavailable local cache and query LRCLIB.
-      }
-
-      try {
-        const remote = await IpcService.invoke('fetch_lrclib_lyrics', { trackId: track.id });
-        if (!remote) return null;
-        try {
-          localStorage.setItem(cacheKey, JSON.stringify(remote));
-        } catch {
-          // Caching is optional; lyrics can still be displayed this time.
-        }
-        return normalizeLyricsData(remote);
-      } catch (error) {
-        console.warn('Failed to load lyrics from LRCLIB', error);
-        return null;
-      }
-    };
-
-    IpcService.invoke('get_track_lyrics', { trackId: track.id })
-      .then(async res => {
-        if (!isCurrent) return;
-        let hydrated: LyricData | null = null;
-        if (res) {
-          const normalized = normalizeLyricsData(res);
-          hydrated = normalized ? await hydrateRomanizedLyrics(track.id, normalized) : null;
-        } else if (track.lyrics) {
-          hydrated = await hydrateRomanizedLyrics(track.id, parseLrc(track.lyrics));
-        } else {
-          const normalizedRemote = await fetchRemoteLyrics();
-          hydrated = normalizedRemote ? await hydrateRomanizedLyrics(track.id, normalizedRemote) : null;
-        }
+    void resolveLyricsForTrack(track, lyrics, () => isCurrent, hydrateRomanizedLyrics)
+      .then(hydrated => {
         if (isCurrent) setLyricsData(hydrated);
-      })
-      .catch(async error => {
-        if (!isCurrent) return;
-        console.warn('Failed to load lyrics', error);
-        if (track.lyrics) {
-          const hydrated = await hydrateRomanizedLyrics(track.id, parseLrc(track.lyrics));
-          if (isCurrent) setLyricsData(hydrated);
-        } else {
-          const normalizedRemote = await fetchRemoteLyrics();
-          if (isCurrent) setLyricsData(normalizedRemote ? await hydrateRomanizedLyrics(track.id, normalizedRemote) : null);
-        }
       })
       .finally(() => {
         if (isCurrent) setLoading(false);
@@ -145,7 +95,7 @@ export const LyricsView: React.FC = () => {
     return () => {
       isCurrent = false;
     };
-  }, [track?.id, track?.lyrics, track?.title, track?.artist, track?.album]);
+  }, [lyrics, track?.id, track?.lyrics, track?.title, track?.artist, track?.album, track?.duration, track?.duration_ms]);
 
   // Coerce lyrics mode safely based on actual data
   const lyricsMode = useMemo(

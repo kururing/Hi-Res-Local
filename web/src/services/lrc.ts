@@ -41,8 +41,8 @@ export function normalizeLyricsData(raw: any): LyricData | null {
 
       return {
         timestamp: Math.max(0, ts),
-        text: line.text || '',
-        romanized: line.romanized || undefined,
+        text: cleanLyricDisplayText(line.text || ''),
+        romanized: line.romanized ? (cleanLyricDisplayText(line.romanized) || undefined) : undefined,
         translation: line.translation || undefined,
       };
     });
@@ -50,6 +50,9 @@ export function normalizeLyricsData(raw: any): LyricData | null {
 
   const lines = convertLines(raw.lines || []);
   const romanized = raw.romanized ? normalizeLyricsData(raw.romanized) || undefined : undefined;
+  const plainText = typeof raw.plain_text === 'string' ? raw.plain_text : undefined;
+  const instrumental = raw.instrumental === true
+    || (typeof plainText === 'string' && plainText.trim().toLowerCase() === '[instrumental]');
 
   return {
     title: raw.title,
@@ -59,10 +62,67 @@ export function normalizeLyricsData(raw: any): LyricData | null {
     offset: raw.offset,
     lines,
     is_synced: raw.is_synced ?? lines.length > 0,
-    plain_text: raw.plain_text,
+    plain_text: plainText,
     source: String(raw.source ?? '').toLowerCase() === 'lrclib' ? 'lrclib' : 'local',
     romanized,
+    ...(instrumental ? { instrumental: true } : {}),
   };
+}
+
+/**
+ * Strips karaoke markup LRCLIB/YouTube Music attach to synced lines:
+ * `{agent:v1}`, `{bg}`, `v1:`, Enhanced LRC `<mm:ss.xx>`, and
+ * `<word:start:end|word:start:end>` word timings.
+ */
+export function cleanLyricDisplayText(text: string): string {
+  let value = text.trim();
+  if (!value) return '';
+
+  for (let i = 0; i < 8; i += 1) {
+    const previous = value;
+    value = value
+      .replace(/\{agent:[^}]+\}/gi, '')
+      .replace(/\{bg\}/gi, '')
+      .replace(/^v\d+:\s*/i, '')
+      .trim();
+    const background = value.match(/^\[bg:\s*(.*)\]$/i);
+    if (background?.[1] !== undefined) value = background[1].trim();
+    if (value === previous) break;
+  }
+
+  value = value.replace(/<\d{1,3}:\d{2}(?:[.:]\d{1,3})>\s*/g, '');
+
+  const reconstructed: string[] = [];
+  value = value.replace(/<([^<>]+)>/g, (full, inner: string) => {
+    const words = wordsFromLyricsPlusInner(inner);
+    if (words.length === 0) return full;
+    reconstructed.push(...words);
+    return '';
+  });
+
+  value = value.replace(/\s+/g, ' ').trim();
+  return value || reconstructed.join(' ');
+}
+
+function wordsFromLyricsPlusInner(inner: string): string[] {
+  const words: string[] = [];
+  for (const part of inner.split('|')) {
+    const pieces = part.split(':');
+    if (pieces.length < 3) return [];
+    const end = pieces[pieces.length - 1] ?? '';
+    const start = pieces[pieces.length - 2] ?? '';
+    const word = pieces.slice(0, -2).join(':').trim();
+    if (!/^\d+(?:\.\d+)?$/.test(start) || !/^\d+(?:\.\d+)?$/.test(end) || !word) {
+      return [];
+    }
+    if (/^\d+$/.test(word) && word.length <= 3) return [];
+    words.push(word);
+  }
+  return words;
+}
+
+function isKaraokeMarkup(text: string): boolean {
+  return /\{agent:/i.test(text) || /\{bg\}/i.test(text) || /^v\d+:/i.test(text) || /<[^>]+>/.test(text);
 }
 
 /**
@@ -101,7 +161,9 @@ export function parseLrc(content: string, romanizedContent?: string): LyricData 
     const timeMatches = [...line.matchAll(timeRegex)];
     if (timeMatches.length > 0) {
       // Remove all timestamps from the line to get the lyric text
-      const text = line.replace(timeRegex, '').trim();
+      const rawText = line.replace(timeRegex, '').trim();
+      const text = cleanLyricDisplayText(rawText);
+      if (!text && isKaraokeMarkup(rawText)) continue;
 
       for (const match of timeMatches) {
         const minutes = parseInt(match[1], 10);

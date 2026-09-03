@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::ptr::addr_of;
 use std::sync::{Mutex, OnceLock};
 
 use windows::core::{GUID, HRESULT};
@@ -88,6 +89,7 @@ impl FormatNegotiator {
                 wave = %exact.wave,
                 "exclusive negotiate: exact match accepted"
             );
+            assert_wave_layout(&exact.wave, exact.container_bytes_per_sample);
             return Ok(NegotiatedFormat {
                 format: exact.format,
                 is_native: true,
@@ -150,6 +152,7 @@ impl FormatNegotiator {
             wave = %negotiated.wave,
             "exclusive negotiate: nearest format accepted"
         );
+        assert_wave_layout(&negotiated.wave, negotiated.container_bytes_per_sample);
         Ok(negotiated)
     }
 
@@ -315,20 +318,159 @@ impl HeldWaveFormat {
         self.bytes.as_ptr() as *const WAVEFORMATEX
     }
 
-    pub fn describe(&self) -> String {
+    pub fn fields(&self) -> Option<WaveFields> {
         if self.bytes.len() < std::mem::size_of::<WAVEFORMATEX>() {
-            return format!("invalid WAVEFORMATEX ({} bytes)", self.bytes.len());
+            return None;
         }
         let wfx = unsafe { std::ptr::read_unaligned(self.bytes.as_ptr() as *const WAVEFORMATEX) };
-        let tag = wfx.wFormatTag;
-        let rate = wfx.nSamplesPerSec;
-        let channels = wfx.nChannels;
-        let bits = wfx.wBitsPerSample;
-        let block = wfx.nBlockAlign;
-        let avg = wfx.nAvgBytesPerSec;
-        let cb = wfx.cbSize;
-        format!("tag=0x{tag:04X} rate={rate} ch={channels} bits={bits} block={block} avg={avg} cbSize={cb}")
+        let mut fields = WaveFields {
+            format_tag: wfx.wFormatTag,
+            channels: wfx.nChannels,
+            sample_rate: wfx.nSamplesPerSec,
+            avg_bytes_per_sec: wfx.nAvgBytesPerSec,
+            block_align: wfx.nBlockAlign,
+            bits_per_sample: wfx.wBitsPerSample,
+            cb_size: wfx.cbSize,
+            valid_bits: wfx.wBitsPerSample,
+            channel_mask: 0,
+            sub_format_pcm: wfx.wFormatTag == WAVE_FORMAT_PCM as u16
+                || wfx.wFormatTag == WAVE_FORMAT_IEEE_FLOAT as u16,
+            ieee_float: wfx.wFormatTag == WAVE_FORMAT_IEEE_FLOAT as u16,
+        };
+        if wfx.wFormatTag == WAVE_FORMAT_EXTENSIBLE
+            && self.bytes.len() >= std::mem::size_of::<WAVEFORMATEXTENSIBLE>()
+        {
+            let ext = unsafe {
+                std::ptr::read_unaligned(self.bytes.as_ptr() as *const WAVEFORMATEXTENSIBLE)
+            };
+            // WAVEFORMATEXTENSIBLE is packed; never form references to its fields.
+            let samples = unsafe { std::ptr::read_unaligned(addr_of!(ext.Samples)) };
+            fields.valid_bits = unsafe { samples.wValidBitsPerSample };
+            fields.channel_mask = unsafe { std::ptr::read_unaligned(addr_of!(ext.dwChannelMask)) };
+            let sub = unsafe { std::ptr::read_unaligned(addr_of!(ext.SubFormat)) };
+            fields.sub_format_pcm = sub == SUBTYPE_PCM;
+            fields.ieee_float = sub == SUBTYPE_IEEE_FLOAT;
+            if fields.valid_bits == 0 {
+                fields.valid_bits = wfx.wBitsPerSample;
+            }
+        }
+        Some(fields)
     }
+
+    pub fn describe(&self) -> String {
+        let Some(f) = self.fields() else {
+            return format!("invalid WAVEFORMATEX ({} bytes)", self.bytes.len());
+        };
+        let sub = if f.ieee_float {
+            "IEEE_FLOAT"
+        } else if f.sub_format_pcm {
+            "PCM"
+        } else {
+            "unknown"
+        };
+        format!(
+            "tag=0x{:04X} rate={} ch={} bits={} valid={} block={} avg={} cbSize={} mask=0x{:X} sub={sub}",
+            f.format_tag,
+            f.sample_rate,
+            f.channels,
+            f.bits_per_sample,
+            f.valid_bits,
+            f.block_align,
+            f.avg_bytes_per_sec,
+            f.cb_size,
+            f.channel_mask
+        )
+    }
+
+    /// Check PCM layout invariants. Returns an error string on mismatch.
+    pub fn validate_pcm_layout(&self, container_bytes: usize) -> Result<(), String> {
+        let f = self
+            .fields()
+            .ok_or_else(|| "invalid WAVEFORMATEX".to_string())?;
+        let expected_block = f.channels.saturating_mul(container_bytes as u16);
+        if f.block_align != expected_block {
+            return Err(format!(
+                "nBlockAlign {} != channels {} * containerBytes {}",
+                f.block_align, f.channels, container_bytes
+            ));
+        }
+        let expected_avg = f.sample_rate.saturating_mul(u32::from(f.block_align));
+        if f.avg_bytes_per_sec != expected_avg {
+            return Err(format!(
+                "nAvgBytesPerSec {} != rate {} * blockAlign {}",
+                f.avg_bytes_per_sec, f.sample_rate, f.block_align
+            ));
+        }
+        if f.format_tag == WAVE_FORMAT_EXTENSIBLE {
+            if f.cb_size != 22 {
+                return Err(format!("EXTENSIBLE cbSize {} != 22", f.cb_size));
+            }
+            if f.channels == 2 && f.channel_mask != SPEAKER_STEREO {
+                return Err(format!(
+                    "stereo dwChannelMask 0x{:X} != FL|FR (0x3)",
+                    f.channel_mask
+                ));
+            }
+            if !f.sub_format_pcm && !f.ieee_float {
+                return Err("SubFormat is neither PCM nor IEEE_FLOAT".into());
+            }
+        } else if f.cb_size != 0 {
+            return Err(format!("WAVEFORMATEX cbSize {} != 0", f.cb_size));
+        }
+        match (container_bytes, f.bits_per_sample, f.valid_bits) {
+            (2, 16, 16) => {
+                let expected_block = f.channels.saturating_mul(2);
+                if f.block_align != expected_block {
+                    return Err(format!(
+                        "PCM16 nBlockAlign {} != {}",
+                        f.block_align, expected_block
+                    ));
+                }
+            }
+            (4, 32, 24) => {
+                let expected_block = f.channels.saturating_mul(4);
+                if f.block_align != expected_block {
+                    return Err(format!(
+                        "24-in-32 nBlockAlign {} != {}",
+                        f.block_align, expected_block
+                    ));
+                }
+            }
+            (3, 24, 24) | (3, 24, 0) => {
+                let expected_block = f.channels.saturating_mul(3);
+                if f.block_align != expected_block {
+                    return Err(format!(
+                        "packed 24 nBlockAlign {} != {}",
+                        f.block_align, expected_block
+                    ));
+                }
+            }
+            (4, 32, 32) | (4, 32, 0) => {}
+            other => {
+                return Err(format!(
+                    "unexpected container/bits/valid {other:?} (tag=0x{:04X})",
+                    f.format_tag
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Parsed WAVEFORMATEX / EXTENSIBLE fields used for logging and asserts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaveFields {
+    pub format_tag: u16,
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub avg_bytes_per_sec: u32,
+    pub block_align: u16,
+    pub bits_per_sample: u16,
+    pub cb_size: u16,
+    pub valid_bits: u16,
+    pub channel_mask: u32,
+    pub sub_format_pcm: bool,
+    pub ieee_float: bool,
 }
 
 impl fmt::Debug for HeldWaveFormat {
@@ -782,5 +924,71 @@ pub fn wave_format_for_negotiated(negotiated: &NegotiatedFormat) -> HeldWaveForm
 pub unsafe fn free_wave_format(ptr: *mut WAVEFORMATEX) {
     if !ptr.is_null() {
         unsafe { CoTaskMemFree(Some(ptr.cast())) };
+    }
+}
+
+fn assert_wave_layout(wave: &HeldWaveFormat, container_bytes: usize) {
+    if let Err(err) = wave.validate_pcm_layout(container_bytes) {
+        tracing::error!(
+            target: "wasapi",
+            error = %err,
+            wave = %wave,
+            "WAVEFORMATEX layout invariant failed"
+        );
+        debug_assert!(false, "WAVEFORMATEX layout: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pcm16_stereo_44100_wave_fields() {
+        let wave = wave_pcm_ex(44_100, 2, 16);
+        let f = wave.fields().expect("fields");
+        assert_eq!(f.channels, 2);
+        assert_eq!(f.sample_rate, 44_100);
+        assert_eq!(f.bits_per_sample, 16);
+        assert_eq!(f.valid_bits, 16);
+        assert_eq!(f.block_align, 4);
+        assert_eq!(f.avg_bytes_per_sec, 176_400);
+        assert_eq!(f.cb_size, 0);
+        wave.validate_pcm_layout(2).expect("pcm16 layout");
+    }
+
+    #[test]
+    fn pcm16_extensible_stereo_mask_is_fl_fr() {
+        let wave = wave_extensible_pcm(44_100, 2, 16, 16);
+        let f = wave.fields().expect("fields");
+        assert_eq!(f.channel_mask, SPEAKER_STEREO);
+        assert_eq!(f.valid_bits, 16);
+        assert_eq!(f.bits_per_sample, 16);
+        assert_eq!(f.block_align, 4);
+        assert_eq!(f.cb_size, 22);
+        assert!(f.sub_format_pcm);
+        wave.validate_pcm_layout(2).expect("extensible pcm16");
+    }
+
+    #[test]
+    fn pcm24_in_32_stereo_48000() {
+        let wave = wave_extensible_pcm(48_000, 2, 32, 24);
+        let f = wave.fields().expect("fields");
+        assert_eq!(f.bits_per_sample, 32);
+        assert_eq!(f.valid_bits, 24);
+        assert_eq!(f.block_align, 8);
+        assert_eq!(f.avg_bytes_per_sec, 48_000 * 8);
+        assert_eq!(f.channel_mask, SPEAKER_STEREO);
+        wave.validate_pcm_layout(4).expect("24-in-32 layout");
+    }
+
+    #[test]
+    fn packed_s24_stereo_block_align_is_6() {
+        let wave = wave_pcm_packed24(48_000, 2);
+        let f = wave.fields().expect("fields");
+        assert_eq!(f.bits_per_sample, 24);
+        assert_eq!(f.block_align, 6);
+        assert_eq!(f.avg_bytes_per_sec, 48_000 * 6);
+        wave.validate_pcm_layout(3).expect("packed 24");
     }
 }

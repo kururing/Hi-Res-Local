@@ -53,6 +53,27 @@ impl PlaybackQueue {
         self.current_index.and_then(|idx| self.tracks.get_mut(idx))
     }
 
+    pub fn tracks_mut(&mut self) -> &mut [AudioTrack] {
+        &mut self.tracks
+    }
+
+    pub fn update_stream_url(
+        &mut self,
+        track_id: &str,
+        url: String,
+        expires_at: Option<String>,
+    ) -> bool {
+        let mut updated = false;
+        for track in &mut self.tracks {
+            if track.id == track_id {
+                track.stream_url = Some(url.clone());
+                track.stream_expires_at = expires_at.clone();
+                updated = true;
+            }
+        }
+        updated
+    }
+
     pub fn repeat_mode(&self) -> RepeatMode {
         self.repeat_mode
     }
@@ -525,6 +546,8 @@ mod tests {
             year: None,
             genre: None,
             replay_gain: None,
+            stream_url: None,
+            stream_expires_at: None,
         }
     }
 
@@ -559,6 +582,29 @@ mod tests {
         queue.clear();
         assert_eq!(queue.len(), 0);
         assert_eq!(queue.current_index(), None);
+    }
+
+    #[test]
+    fn test_update_stream_url_keeps_path_empty() {
+        let mut queue = PlaybackQueue::new();
+        let mut cloud = create_test_track("cloud-1", "Cloud");
+        cloud.path.clear();
+        queue.add_track(cloud);
+        assert!(queue.update_stream_url(
+            "cloud-1",
+            "https://127.0.0.1:9000/a.flac?X-Amz-Signature=secret".into(),
+            Some("2099-01-01T00:00:00Z".into()),
+        ));
+        let track = queue.current_track().unwrap();
+        assert!(track.path.is_empty());
+        assert_eq!(
+            track.stream_url.as_deref(),
+            Some("https://127.0.0.1:9000/a.flac?X-Amz-Signature=secret")
+        );
+        assert_eq!(
+            track.stream_expires_at.as_deref(),
+            Some("2099-01-01T00:00:00Z")
+        );
     }
 
     #[test]

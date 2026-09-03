@@ -5,6 +5,113 @@ use std::sync::OnceLock;
 
 use crate::models::lyrics::{LyricsData, LyricsSource, SyncedLyricLine};
 
+fn is_karaoke_markup(text: &str) -> bool {
+    static VOICE_PREFIX: OnceLock<Regex> = OnceLock::new();
+    let lower = text.to_ascii_lowercase();
+    let voice_prefix = VOICE_PREFIX.get_or_init(|| {
+        Regex::new(r"(?i)^v\d+:").expect("voice prefix regex")
+    });
+    lower.contains("{agent:")
+        || lower.contains("{bg}")
+        || voice_prefix.is_match(text)
+        || text.contains('<')
+}
+
+fn words_from_lyrics_plus_inner(inner: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    for part in inner.split('|') {
+        let pieces: Vec<&str> = part.split(':').collect();
+        if pieces.len() < 3 {
+            return None;
+        }
+        let end = pieces[pieces.len() - 1];
+        let start = pieces[pieces.len() - 2];
+        let word = pieces[..pieces.len() - 2].join(":").trim().to_string();
+        if start.parse::<f64>().is_err() || end.parse::<f64>().is_err() || word.is_empty() {
+            return None;
+        }
+        if word.chars().all(|character| character.is_ascii_digit()) && word.len() <= 3 {
+            return None;
+        }
+        words.push(word);
+    }
+    Some(words)
+}
+
+/// Strips karaoke markup LRCLIB/YouTube Music attach to synced lines.
+pub fn clean_lyric_display_text(text: &str) -> String {
+    static AGENT: OnceLock<Regex> = OnceLock::new();
+    static BG_TAG: OnceLock<Regex> = OnceLock::new();
+    static VOICE_PREFIX: OnceLock<Regex> = OnceLock::new();
+    static BG_LINE: OnceLock<Regex> = OnceLock::new();
+    static ENHANCED: OnceLock<Regex> = OnceLock::new();
+    static ANGLE_BLOCK: OnceLock<Regex> = OnceLock::new();
+
+    let agent = AGENT.get_or_init(|| {
+        Regex::new(r"(?i)\{agent:[^}]+\}").expect("agent tag regex")
+    });
+    let bg_tag = BG_TAG.get_or_init(|| Regex::new(r"(?i)\{bg\}").expect("bg tag regex"));
+    let voice_prefix = VOICE_PREFIX.get_or_init(|| {
+        Regex::new(r"(?i)^v\d+:\s*").expect("voice prefix regex")
+    });
+    let bg_line = BG_LINE.get_or_init(|| {
+        Regex::new(r"(?i)^\[bg:\s*(.*)\]$").expect("bg line regex")
+    });
+    let enhanced = ENHANCED.get_or_init(|| {
+        Regex::new(r"<\d{1,3}:\d{2}(?:[.:]\d{1,3})>\s*").expect("enhanced LRC regex")
+    });
+    let angle_block = ANGLE_BLOCK.get_or_init(|| {
+        Regex::new(r"<([^<>]+)>").expect("angle block regex")
+    });
+
+    let mut value = text.trim().to_string();
+    if value.is_empty() {
+        return String::new();
+    }
+
+    for _ in 0..8 {
+        let previous = value.clone();
+        value = agent.replace_all(&value, "").into_owned();
+        value = bg_tag.replace_all(&value, "").into_owned();
+        value = voice_prefix.replace(&value, "").into_owned();
+        value = value.trim().to_string();
+        if let Some(captures) = bg_line.captures(&value) {
+            if let Some(inner) = captures.get(1) {
+                value = inner.as_str().trim().to_string();
+            }
+        }
+        if value == previous {
+            break;
+        }
+    }
+
+    value = enhanced.replace_all(&value, "").into_owned();
+
+    let mut reconstructed = Vec::new();
+    value = angle_block
+        .replace_all(&value, |captures: &regex::Captures| {
+            let inner = captures.get(1).map(|matched| matched.as_str()).unwrap_or("");
+            match words_from_lyrics_plus_inner(inner) {
+                Some(words) if !words.is_empty() => {
+                    reconstructed.extend(words);
+                    String::new()
+                }
+                _ => captures
+                    .get(0)
+                    .map(|matched| matched.as_str().to_string())
+                    .unwrap_or_default(),
+            }
+        })
+        .into_owned();
+
+    value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if value.is_empty() {
+        reconstructed.join(" ")
+    } else {
+        value
+    }
+}
+
 /// Parses an LRC string or plain text into a structured [`LyricsData`].
 pub fn parse_lrc(content: &str, source: LyricsSource) -> LyricsData {
     let lines: Vec<&str> = content.lines().collect();
@@ -67,7 +174,11 @@ pub fn parse_lrc(content: &str, source: LyricsSource) -> LyricsData {
         }
 
         if !timestamps.is_empty() {
-            let text = trimmed[last_tag_end..].trim().to_string();
+            let raw_text = trimmed[last_tag_end..].trim();
+            let text = clean_lyric_display_text(raw_text);
+            if text.is_empty() && is_karaoke_markup(raw_text) {
+                continue;
+            }
             for ts in timestamps {
                 let adjusted_ts = if offset_ms < 0 {
                     ts.saturating_sub(offset_ms.unsigned_abs())
@@ -149,25 +260,32 @@ pub fn load_lyrics_for_track(
     embedded_lyrics: Option<&str>,
     audio_file_path: &Path,
 ) -> Option<LyricsData> {
-    // 1. Discover original lyrics
-    let mut original_lyrics: Option<LyricsData> = None;
-    let lrc_path = audio_file_path.with_extension("lrc");
-    if lrc_path.is_file() {
-        if let Ok(content) = read_lyrics_file(&lrc_path) {
-            let parsed = parse_lrc(&content, LyricsSource::LrcFile);
-            if parsed.is_synced || !parsed.plain_text.trim().is_empty() {
-                original_lyrics = Some(parsed);
-            }
+    // 1. Discover original lyrics. A synchronized source always wins over a
+    // plain-text source, regardless of whether it came from the sidecar file
+    // or the audio metadata.
+    let file_lyrics = {
+        let lrc_path = audio_file_path.with_extension("lrc");
+        if lrc_path.is_file() {
+            read_lyrics_file(&lrc_path)
+                .ok()
+                .map(|content| parse_lrc(&content, LyricsSource::LrcFile))
+        } else {
+            None
         }
-    }
+    };
+    let embedded = embedded_lyrics
+        .filter(|lyrics| !lyrics.trim().is_empty())
+        .map(|lyrics| parse_lrc(lyrics, LyricsSource::Embedded));
 
-    if original_lyrics.is_none() {
-        if let Some(lyrics_str) = embedded_lyrics {
-            if !lyrics_str.trim().is_empty() {
-                original_lyrics = Some(parse_lrc(lyrics_str, LyricsSource::Embedded));
-            }
+    let original_lyrics: Option<LyricsData> = match (file_lyrics, embedded) {
+        (Some(file), Some(metadata)) if file.is_synced && !metadata.is_synced => Some(file),
+        (Some(file), Some(metadata)) if metadata.is_synced && !file.is_synced => Some(metadata),
+        (Some(file), _) if file.is_synced || !file.plain_text.trim().is_empty() => Some(file),
+        (_, Some(metadata)) if metadata.is_synced || !metadata.plain_text.trim().is_empty() => {
+            Some(metadata)
         }
-    }
+        _ => None,
+    };
 
     // 2. Discover companion romanized lyrics
     let mut romanized_lyrics: Option<LyricsData> = None;
@@ -442,6 +560,41 @@ mod tests {
     }
 
     #[test]
+    fn timestamped_metadata_beats_plain_sidecar_file() {
+        let temp_dir = std::env::temp_dir().join(format!("lrc_priority_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let audio_path = temp_dir.join("priority.mp3");
+        let lrc_path = temp_dir.join("priority.lrc");
+        File::create(&audio_path).unwrap();
+        fs::write(&lrc_path, "Plain sidecar lyrics").unwrap();
+
+        let loaded =
+            load_lyrics_for_track(Some("[00:12.00]Timestamped metadata"), &audio_path).unwrap();
+        assert!(loaded.is_synced);
+        assert_eq!(loaded.source, LyricsSource::Embedded);
+        assert_eq!(loaded.lines[0].text, "Timestamped metadata");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn timestamped_sidecar_beats_plain_metadata() {
+        let temp_dir = std::env::temp_dir().join(format!("lrc_priority_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let audio_path = temp_dir.join("priority.mp3");
+        let lrc_path = temp_dir.join("priority.lrc");
+        File::create(&audio_path).unwrap();
+        fs::write(&lrc_path, "[00:12.00]Timestamped sidecar").unwrap();
+
+        let loaded = load_lyrics_for_track(Some("Plain metadata lyrics"), &audio_path).unwrap();
+        assert!(loaded.is_synced);
+        assert_eq!(loaded.source, LyricsSource::LrcFile);
+        assert_eq!(loaded.lines[0].text, "Timestamped sidecar");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn offset_is_global_even_when_declared_last() {
         let data = parse_lrc(
             "[00:01.00]First\n[00:02.00]Second\n[offset:+500]",
@@ -449,6 +602,29 @@ mod tests {
         );
         assert_eq!(data.lines[0].timestamp_ms, 1_500);
         assert_eq!(data.lines[1].timestamp_ms, 2_500);
+    }
+
+    #[test]
+    fn strips_lrclib_agent_and_word_timings() {
+        let sample = "[02:54.18]{Agent:v1}Come my<Come:174.186:174.618|my:174.618:174.9549999>\n[02:55.00]{bg}way";
+        let data = parse_lrc(sample, LyricsSource::Lrclib);
+        assert_eq!(data.lines.len(), 2);
+        assert_eq!(data.lines[0].text, "Come my");
+        assert_eq!(data.lines[1].text, "way");
+    }
+
+    #[test]
+    fn strips_enhanced_lrc_word_timestamps() {
+        let sample = "[00:12.00]<00:12.00>Come <00:12.50>my <00:13.00>way";
+        let data = parse_lrc(sample, LyricsSource::Lrclib);
+        assert_eq!(data.lines[0].text, "Come my way");
+    }
+
+    #[test]
+    fn reconstructs_line_from_word_timings_only() {
+        let sample = "[02:54.18]<Come:174.186:174.618|my:174.618:174.954>";
+        let data = parse_lrc(sample, LyricsSource::Lrclib);
+        assert_eq!(data.lines[0].text, "Come my");
     }
 
     #[test]

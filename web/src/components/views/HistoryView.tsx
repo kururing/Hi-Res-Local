@@ -1,6 +1,5 @@
 import React from 'react';
 import { History as HistoryIcon, Trash2, Clock } from 'lucide-react';
-import { IpcService } from '../../services/ipc';
 import { PlayHistoryEntry } from '../../types/ipc';
 import { usePlayer } from '../../context/PlayerContext';
 import { useLibrary } from '../../context/LibraryContext';
@@ -10,6 +9,7 @@ import { Button } from '../common/Button';
 import { TrackPlayArtwork } from '../common/TrackPlayArtwork';
 import { t } from '../../i18n';
 import { TrackMoreButton } from '../common/TrackMoreButton';
+import { usePlatform } from '../../platform';
 
 interface HistoryViewProps {
   onNavigate: (view: string, payload?: unknown) => void;
@@ -20,22 +20,28 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onNavigate }) => {
   const { playTrack, status } = usePlayer();
   const { settings } = useSettings();
   const { albums, artists } = useLibrary();
-
-  const loadHistory = React.useCallback(async () => {
-    const entries = await IpcService.invoke('get_play_history', { limit: 100, offset: 0 });
-    setHistoryItems(entries);
-  }, []);
+  const { history } = usePlatform();
 
   React.useEffect(() => {
+    let cancelled = false;
+
+    const loadHistory = async () => {
+      const entries = await history.list({ limit: 100, offset: 0 });
+      if (!cancelled) setHistoryItems(entries);
+    };
+
     void loadHistory();
-    const handleUpdate = () => void loadHistory();
+    const handleUpdate = () => { void loadHistory(); };
     window.addEventListener('nghenhac:history-updated', handleUpdate);
-    return () => window.removeEventListener('nghenhac:history-updated', handleUpdate);
-  }, [loadHistory]);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('nghenhac:history-updated', handleUpdate);
+    };
+  }, [history]);
 
   const clearHistory = async () => {
     if (!window.confirm(t('history_clear_confirm', settings.language))) return;
-    await IpcService.invoke('clear_play_history');
+    await history.clear();
     setHistoryItems([]);
   };
 

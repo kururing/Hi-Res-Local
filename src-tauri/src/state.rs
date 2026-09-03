@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use crate::audio::adapters::{FallbackMediaControlsAdapter, StandardAudioAdapter};
@@ -13,6 +14,7 @@ pub struct AppState {
     pub exclusive_adapter: Arc<Mutex<StandardAudioAdapter>>,
     pub media_controls_adapter: Arc<Mutex<FallbackMediaControlsAdapter>>,
     pub discord_presence: DiscordPresence,
+    pub allowed_fs_paths: Mutex<HashSet<std::path::PathBuf>>,
 }
 
 impl AppState {
@@ -24,6 +26,7 @@ impl AppState {
             exclusive_adapter: Arc::new(Mutex::new(StandardAudioAdapter::new())),
             media_controls_adapter: Arc::new(Mutex::new(FallbackMediaControlsAdapter::new())),
             discord_presence: DiscordPresence::new(),
+            allowed_fs_paths: Mutex::new(HashSet::new()),
         }
     }
 }

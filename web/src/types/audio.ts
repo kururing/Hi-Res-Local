@@ -5,8 +5,36 @@ export type LoopMode = 'off' | 'track' | 'playlist';
 export type PlaybackMode = 'auto' | 'high_quality' | 'multitask' | 'advanced';
 export type DsdOutputMode = 'native_dsd' | 'dop' | 'pcm';
 export type AudioBackend = 'shared' | 'wasapi_exclusive' | 'asio';
-export type DsdRate = 'dsd64' | 'dsd128' | 'dsd256' | 'dsd512';
+export type DsdRate = 'dsd64' | 'dsd128' | 'dsd256' | 'dsd512' | 'dsd1024';
 export type VolumeControlKind = 'windows_endpoint' | 'software';
+export type AudioQualityMode = 'maximum' | 'lossless' | 'auto' | 'compatible' | 'data-saver' | 'hires';
+
+export interface AudioSignalPath {
+  source: {
+    codec: string;
+    sampleRate?: number;
+    bitDepth?: number;
+    dsdRate?: number;
+    channels: number;
+  };
+  decode: {
+    format: 'pcm';
+    sampleRate: number;
+    representation: string;
+  };
+  processing: {
+    resampled: boolean;
+    resampler?: string;
+    eq: boolean;
+    replayGain: boolean;
+    normalization: boolean;
+  };
+  output: {
+    audioContextSampleRate: number;
+    verifiedDeviceSampleRate?: number;
+  };
+  qualityMode: AudioQualityMode;
+}
 
 export interface PlaybackStatus {
   state: PlaybackState;
@@ -79,6 +107,8 @@ export interface EngineStatus {
   volume_control_kind: VolumeControlKind;
   /** Set when Auto/HQ fell back from a better path. */
   fallback_reason?: string | null;
+  /** Browser signal path. Device rate is omitted unless independently verified. */
+  signal_path?: AudioSignalPath;
 }
 
 export interface SystemAudioState {

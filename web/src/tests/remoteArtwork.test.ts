@@ -1,17 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const mocks = vi.hoisted(() => ({
-  invoke: vi.fn(),
-}));
-
-vi.mock('@tauri-apps/api/core', () => ({
-  convertFileSrc: (path: string) => `asset://${path}`,
-}));
-
-vi.mock('../services/ipc', () => ({
-  isTauri: () => true,
-  IpcService: { invoke: mocks.invoke },
-}));
+import type { ArtworkAssetsApi } from '../platform/contracts';
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>();
@@ -55,24 +43,32 @@ const albumResults = {
   ],
 };
 
+function createArtworkAssets(overrides: Partial<ArtworkAssetsApi> = {}): ArtworkAssetsApi & {
+  getAppleMusicArtistArtwork: ReturnType<typeof vi.fn>;
+  cacheRemoteArtwork: ReturnType<typeof vi.fn>;
+  clearRemoteArtworkCache: ReturnType<typeof vi.fn>;
+} {
+  const getAppleMusicArtistArtwork = vi.fn(overrides.getAppleMusicArtistArtwork ?? (async (_country: string, artistId: number) => (
+    `https://images.example/artist-${artistId}/600x600bb.jpg`
+  )));
+  const cacheRemoteArtwork = vi.fn(overrides.cacheRemoteArtwork ?? (async (key: string) => `asset://C:/cache/${key}.jpg`));
+  const clearRemoteArtworkCache = vi.fn(overrides.clearRemoteArtworkCache ?? (async () => undefined));
+
+  return {
+    resolveDisplaySource: overrides.resolveDisplaySource ?? (async source => source ?? null),
+    getAppleMusicArtistArtwork,
+    cacheRemoteArtwork,
+    clearRemoteArtworkCache,
+  };
+}
+
 describe('artist artwork identity', () => {
   beforeEach(() => {
     vi.resetModules();
-    mocks.invoke.mockReset();
     Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis });
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: new MemoryStorage() });
     Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { onLine: true } });
     Object.defineProperty(globalThis, 'FileReader', { configurable: true, value: TestFileReader });
-
-    mocks.invoke.mockImplementation(async (command: string, args: Record<string, unknown>) => {
-      if (command === 'get_apple_music_artist_artwork') {
-        return `https://images.example/artist-${args.artistId}/600x600bb.jpg`;
-      }
-      if (command === 'cache_image_data') {
-        return `C:/cache/${args.cacheKey}.jpg`;
-      }
-      return null;
-    });
   });
 
   it('invalidates only artist images cached by the old matcher', async () => {
@@ -98,16 +94,15 @@ describe('artist artwork identity', () => {
       return { ok: true, blob: async () => new Blob(['image'], { type: 'image/jpeg' }) };
     }));
 
+    const artworkAssets = createArtworkAssets();
     const { downloadArtwork } = await import('../services/remoteArtwork');
-    const source = await downloadArtwork('artist', 'Echo', undefined, undefined, 'Right Album');
+    const source = await downloadArtwork('artist', 'Echo', undefined, artworkAssets, undefined, 'Right Album');
 
     expect(source).toContain('asset://');
     expect(requestedUrls.some(url => url.includes('entity=album'))).toBe(true);
     expect(requestedUrls.some(url => url.includes('entity=musicArtist'))).toBe(false);
-    expect(mocks.invoke).toHaveBeenCalledWith('get_apple_music_artist_artwork', {
-      country: 'vn',
-      artistId: 202,
-    });
+    expect(artworkAssets.getAppleMusicArtistArtwork).toHaveBeenCalledWith('vn', 202);
+    expect(artworkAssets.cacheRemoteArtwork).toHaveBeenCalled();
   });
 
   it.each([
@@ -144,15 +139,13 @@ describe('artist artwork identity', () => {
       return { ok: true, blob: async () => new Blob(['image'], { type: 'image/jpeg' }) };
     }));
 
+    const artworkAssets = createArtworkAssets();
     const { downloadArtwork } = await import('../services/remoteArtwork');
-    const source = await downloadArtwork('artist', artist, undefined, undefined, albumHint);
+    const source = await downloadArtwork('artist', artist, undefined, artworkAssets, undefined, albumHint);
 
     expect(source).toContain('asset://');
     expect(requestedUrls.some(url => url.includes('entity=musicArtist'))).toBe(false);
-    expect(mocks.invoke).toHaveBeenCalledWith('get_apple_music_artist_artwork', {
-      country: 'vn',
-      artistId,
-    });
+    expect(artworkAssets.getAppleMusicArtistArtwork).toHaveBeenCalledWith('vn', artistId);
   });
 
   it('reuses artist ID evidence collected while downloading an album', async () => {
@@ -166,15 +159,54 @@ describe('artist artwork identity', () => {
       return { ok: true, blob: async () => new Blob(['image'], { type: 'image/jpeg' }) };
     }));
 
+    const artworkAssets = createArtworkAssets();
     const { downloadArtwork } = await import('../services/remoteArtwork');
-    await downloadArtwork('album', 'Echo', 'Right Album');
+    await downloadArtwork('album', 'Echo', 'Right Album', artworkAssets);
     requestedUrls.length = 0;
-    await downloadArtwork('artist', 'Echo');
+    await downloadArtwork('artist', 'Echo', undefined, artworkAssets);
 
     expect(requestedUrls.some(url => url.includes('itunes.apple.com'))).toBe(false);
-    expect(mocks.invoke).toHaveBeenCalledWith('get_apple_music_artist_artwork', {
-      country: 'vn',
-      artistId: 202,
+    expect(artworkAssets.getAppleMusicArtistArtwork).toHaveBeenCalledWith('vn', 202);
+  });
+
+  it('does not use album artwork when Apple Music lookup returns null', async () => {
+    const requestedUrls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.startsWith('https://itunes.apple.com/search')) {
+        return { ok: true, json: async () => albumResults };
+      }
+      if (url.startsWith('https://itunes.apple.com/lookup')) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [{
+              artistId: 202,
+              artistName: 'Echo',
+              artworkUrl100: 'https://images.example/fallback/100x100bb.jpg',
+            }],
+          }),
+        };
+      }
+      return { ok: true, blob: async () => new Blob(['image'], { type: 'image/jpeg' }) };
+    }));
+
+    const artworkAssets = createArtworkAssets({
+      getAppleMusicArtistArtwork: async () => null,
     });
+    const { downloadArtwork } = await import('../services/remoteArtwork');
+    const source = await downloadArtwork('artist', 'Echo', undefined, artworkAssets, undefined, 'Right Album');
+
+    expect(source).toBeNull();
+    expect(requestedUrls.some(url => url.includes('itunes.apple.com/lookup'))).toBe(false);
+    expect(artworkAssets.getAppleMusicArtistArtwork).toHaveBeenCalledWith('vn', 202);
+  });
+
+  it('clears native artwork cache through the injected adapter', async () => {
+    const artworkAssets = createArtworkAssets();
+    const { clearArtworkCache } = await import('../services/remoteArtwork');
+    clearArtworkCache(artworkAssets);
+    expect(artworkAssets.clearRemoteArtworkCache).toHaveBeenCalledTimes(1);
   });
 });

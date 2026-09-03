@@ -1,18 +1,16 @@
 import { Track } from '../types/library';
-import { isTauri } from './ipc';
+import type { ArtworkAssetsApi } from '../platform/contracts';
 import { getCachedArtwork } from './remoteArtwork';
 
-const isDirectSource = (value: string) => /^(data:|blob:|https?:\/\/)/i.test(value);
-
-export const resolveTrackArtworkSource = async (track: Track | null): Promise<string | null> => {
+export const resolveTrackArtworkSource = async (
+  track: Track | null,
+  artworkAssets: ArtworkAssetsApi,
+): Promise<string | null> => {
   if (!track) return null;
 
   if (track.cover_art_path) {
-    if (isDirectSource(track.cover_art_path)) return track.cover_art_path;
-    if (isTauri()) {
-      const { convertFileSrc } = await import('@tauri-apps/api/core');
-      return convertFileSrc(track.cover_art_path);
-    }
+    const resolved = await artworkAssets.resolveDisplaySource(track.cover_art_path);
+    if (resolved) return resolved;
   }
 
   return getCachedArtwork('album', track.artist, track.album);

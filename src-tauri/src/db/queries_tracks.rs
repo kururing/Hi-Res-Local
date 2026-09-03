@@ -25,6 +25,8 @@ pub fn map_row_to_track(row: &Row) -> rusqlite::Result<Track> {
             .ok()
             .flatten()
             .map(|v| v as u8),
+        is_mqa: row.get::<_, i32>("is_mqa").unwrap_or(0) != 0,
+        isrc: row.get::<_, Option<String>>("isrc").ok().flatten(),
         format: row.get("format")?,
         file_size: row.get::<_, i64>("file_size")? as u64,
         file_modified_at: row.get("file_modified_at")?,
@@ -50,16 +52,16 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> AppResult<()> {
         r#"
         INSERT INTO tracks (
             id, path, title, artist, album_artist, album, genre, year,
-            track_number, disc_number, duration_ms, bitrate, sample_rate, channels, bit_depth,
+            track_number, disc_number, duration_ms, bitrate, sample_rate, channels, bit_depth, is_mqa, isrc,
             format, file_size, file_modified_at, date_added, is_favorite, rating,
             play_count, skip_count, last_played_at, cover_art_path, lyrics,
             has_synced_lyrics, is_corrupt, corrupt_reason, duplicate_group_id, is_primary
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-            ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-            ?16, ?17, ?18, ?19, ?20, ?21,
-            ?22, ?23, ?24, ?25, ?26,
-            ?27, ?28, ?29, ?30, ?31
+            ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+            ?18, ?19, ?20, ?21, ?22, ?23,
+            ?24, ?25, ?26, ?27, ?28,
+            ?29, ?30, ?31, ?32, ?33
         )
         ON CONFLICT(path) DO UPDATE SET
             title = excluded.title,
@@ -75,6 +77,8 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> AppResult<()> {
             sample_rate = excluded.sample_rate,
             channels = excluded.channels,
             bit_depth = excluded.bit_depth,
+            is_mqa = excluded.is_mqa,
+            isrc = excluded.isrc,
             format = excluded.format,
             file_size = excluded.file_size,
             file_modified_at = excluded.file_modified_at,
@@ -101,6 +105,8 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> AppResult<()> {
         track.sample_rate,
         track.channels,
         track.bit_depth.map(|v| v as i64),
+        if track.is_mqa { 1 } else { 0 },
+        track.isrc,
         track.format,
         track.file_size as i64,
         track.file_modified_at,
@@ -157,7 +163,7 @@ pub fn get_track_by_path(conn: &Connection, path: &str) -> AppResult<Option<Trac
 /// All track columns except the potentially large `lyrics` text (returned as
 /// NULL). Use for list views and IPC payloads; lyrics load on demand.
 const TRACK_COLUMNS_NO_LYRICS: &str = "id, path, title, artist, album_artist, album, genre, year, \
-     track_number, disc_number, duration_ms, bitrate, sample_rate, channels, bit_depth, \
+     track_number, disc_number, duration_ms, bitrate, sample_rate, channels, bit_depth, is_mqa, isrc, \
      format, file_size, file_modified_at, date_added, is_favorite, rating, \
      play_count, skip_count, last_played_at, cover_art_path, NULL AS lyrics, \
      has_synced_lyrics, is_corrupt, corrupt_reason, duplicate_group_id, is_primary";

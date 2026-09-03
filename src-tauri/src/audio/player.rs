@@ -74,6 +74,7 @@ struct PlaybackRoutingSnapshot {
     driver: Option<String>,
     exclusive: bool,
     bit_perfect: bool,
+    mqa_passthrough: bool,
     device: Option<String>,
 }
 
@@ -263,6 +264,45 @@ impl AudioPlayer {
             self.emit_queue_updated(&inner);
         }
         self.start_playback_for_current_at(start_position_ms)
+    }
+
+    pub fn refresh_stream_url(
+        &self,
+        track_id: &str,
+        url: String,
+        expires_at: String,
+        restart_current: bool,
+    ) -> AudioResult<()> {
+        crate::audio::http_input::validate_http_stream_url(&url)?;
+        let (updated, is_current, state) = {
+            let mut inner = recover_rw_write(&self.inner);
+            let is_current = inner
+                .queue
+                .current_track()
+                .is_some_and(|track| track.id == track_id);
+            let updated = inner
+                .queue
+                .update_stream_url(track_id, url, Some(expires_at));
+            (updated, is_current, inner.state)
+        };
+
+        // A forced renewal follows a 403 from the active remote input. Merely
+        // changing the queued URL cannot repair that already-open input, so
+        // rebuild it at the current position. Proactive renewals keep the
+        // existing connection and only update the queue for a future reopen.
+        if updated && is_current && restart_current {
+            let position_ms = self.pipeline.position_ms.load(Ordering::Relaxed);
+            match state {
+                PlaybackState::Playing | PlaybackState::Buffering => {
+                    self.reopen_current_preserving_position(true, position_ms)?;
+                }
+                PlaybackState::Paused => {
+                    self.reopen_current_preserving_position(false, position_ms)?;
+                }
+                PlaybackState::Stopped | PlaybackState::Ended => {}
+            }
+        }
+        Ok(())
     }
 
     /// Replace the whole queue and start playback at `start_index`.
@@ -797,6 +837,7 @@ impl AudioPlayer {
         backend: Option<AudioBackend>,
         dsd_transport: Option<DsdOutputMode>,
         asio_driver_id: Option<String>,
+        mqa_passthrough: Option<bool>,
     ) -> AudioResult<EngineStatus> {
         let snapshot = self.snapshot_playback_routing();
         match self.apply_playback_mode_inner(
@@ -805,6 +846,7 @@ impl AudioPlayer {
             backend,
             dsd_transport,
             asio_driver_id,
+            mqa_passthrough,
         ) {
             Ok(status) => Ok(status),
             Err(error) => {
@@ -829,6 +871,7 @@ impl AudioPlayer {
             driver: recover_mutex(&self.pipeline.asio_driver_id).clone(),
             exclusive: recover_rw_read(&self.inner).exclusive_mode,
             bit_perfect: recover_rw_read(&self.inner).bit_perfect,
+            mqa_passthrough: self.pipeline.mqa_passthrough.load(Ordering::Acquire),
             #[cfg(windows)]
             device: self.audio_control.selected_device_id(),
             #[cfg(not(windows))]
@@ -849,6 +892,9 @@ impl AudioPlayer {
         self.pipeline
             .dsd_output_mode
             .store(snapshot.transport, Ordering::SeqCst);
+        self.pipeline
+            .mqa_passthrough
+            .store(snapshot.mqa_passthrough, Ordering::SeqCst);
         #[cfg(windows)]
         {
             *recover_mutex(&self.pipeline.asio_driver_id) = snapshot.driver.clone();
@@ -880,6 +926,7 @@ impl AudioPlayer {
         backend: Option<AudioBackend>,
         dsd_transport: Option<DsdOutputMode>,
         asio_driver_id: Option<String>,
+        mqa_passthrough: Option<bool>,
     ) -> AudioResult<EngineStatus> {
         if let Some(device) = device_id {
             self.audio_control.select_device(Some(device))?;
@@ -888,6 +935,11 @@ impl AudioPlayer {
         self.pipeline
             .playback_mode
             .store(mode.to_index(), Ordering::SeqCst);
+        if let Some(enabled) = mqa_passthrough {
+            self.pipeline
+                .mqa_passthrough
+                .store(enabled, Ordering::SeqCst);
+        }
 
         #[cfg(windows)]
         if let Some(driver) = asio_driver_id {
@@ -1468,10 +1520,17 @@ impl AudioPlayer {
             AudioBackend::from_index(self.pipeline.advanced_backend.load(Ordering::Acquire));
         let transport =
             DsdOutputMode::from_index(self.pipeline.dsd_output_mode.load(Ordering::Acquire));
-        let extension = std::path::Path::new(&track.path)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or_default();
+        let extension = if let Some(url) = track.stream_url.as_deref() {
+            std::path::Path::new(url.split('?').next().unwrap_or(url))
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or_default()
+        } else {
+            std::path::Path::new(&track.path)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or_default()
+        };
         let is_dsd = extension.eq_ignore_ascii_case("dsf") || extension.eq_ignore_ascii_case("dff");
         let current = if self.pipeline.exclusive_mode.load(Ordering::Acquire) {
             PlanStep::ExclusivePcm

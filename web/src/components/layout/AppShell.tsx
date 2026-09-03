@@ -8,6 +8,9 @@ import { EqualizerModal } from '../player/EqualizerModal';
 import { TrackDetailsModal } from '../views/TrackDetailsModal';
 import { ArtworkAdaptiveTheme } from './ArtworkAdaptiveTheme';
 import { usePlayer } from '../../context/PlayerContext';
+import { useAdminCapabilities } from '../../context/AdminCapabilitiesContext';
+import { useSettings } from '../../context/SettingsContext';
+import { t } from '../../i18n';
 
 import { HomeView } from '../views/HomeView';
 
@@ -24,10 +27,12 @@ const PlaylistDetailView = lazy(() => import('../views/PlaylistDetailView').then
 const HistoryView = lazy(() => import('../views/HistoryView').then(module => ({ default: module.HistoryView })));
 const LyricsView = lazy(() => import('../views/LyricsView').then(module => ({ default: module.LyricsView })));
 const SettingsView = lazy(() => import('../views/SettingsView').then(module => ({ default: module.SettingsView })));
+const AccountView = lazy(() => import('../views/AccountView').then(module => ({ default: module.AccountView })));
+const AdminCatalogView = lazy(() => import('../views/admin/AdminCatalogView').then(module => ({ default: module.AdminCatalogView })));
 
 import { Album, Artist, Genre, Track } from '../../types/library';
 import { Playlist } from '../../types/playlist';
-import { isTauri } from '../../services/ipc';
+import { usePlatform } from '../../platform';
 
 interface HistoryEntry {
   view: string;
@@ -54,6 +59,10 @@ const isSameDestination = (current: HistoryEntry, view: string, payload?: unknow
 export const AppShell: React.FC = () => {
   const mainRef = useRef<HTMLElement>(null);
   const { togglePlayPause } = usePlayer();
+  const { window: windowApi, capabilities } = usePlatform();
+  const { catalogAdmin } = useAdminCapabilities();
+  const { settings } = useSettings();
+  const [adminUploadBusy, setAdminUploadBusy] = useState(false);
   const [navigation, setNavigation] = useState<NavigationState>({
     entries: [{ view: 'home' }],
     index: 0,
@@ -103,26 +112,20 @@ export const AppShell: React.FC = () => {
       }, 120);
     };
 
-    window.addEventListener('resize', handleResize, { passive: true });
-
-    if (isTauri()) {
-      void import('@tauri-apps/api/window')
-        .then(({ getCurrentWindow }) => getCurrentWindow().onResized(handleResize))
-        .then(unlisten => {
-          if (disposed) unlisten();
-          else unlistenNativeResize = unlisten;
-        })
-        .catch(error => console.warn('Failed to subscribe to native resize events', error));
-    }
+    void windowApi.subscribeResize(handleResize)
+      .then(unlisten => {
+        if (disposed) unlisten();
+        else unlistenNativeResize = unlisten;
+      })
+      .catch(error => console.warn('Failed to subscribe to resize events', error));
 
     return () => {
       disposed = true;
-      window.removeEventListener('resize', handleResize);
       unlistenNativeResize?.();
       if (settleTimer !== undefined) window.clearTimeout(settleTimer);
       root.classList.remove('is-window-resizing');
     };
-  }, []);
+  }, [windowApi]);
 
   const currentEntry = navigation.entries[navigation.index] || { view: 'home' };
   const currentView = currentEntry.view;
@@ -138,8 +141,25 @@ export const AppShell: React.FC = () => {
     if (currentView === 'settings') setHasVisitedSettings(true);
   }, [currentView]);
 
+  useEffect(() => {
+    if (currentView === 'admin' && !catalogAdmin) {
+      setNavigation({ entries: [{ view: 'home' }], index: 0 });
+    }
+  }, [catalogAdmin, currentView]);
+
+  useEffect(() => {
+    if (currentView === 'account' && !capabilities.account) {
+      setNavigation({ entries: [{ view: 'home' }], index: 0 });
+    }
+  }, [capabilities.account, currentView]);
+
   const navigate = useCallback((view: string, payload?: unknown) => {
     setNavigation(previous => {
+      const leavingAdmin = previous.entries[previous.index]?.view === 'admin' && view !== 'admin';
+      if (leavingAdmin && adminUploadBusy) {
+        const confirmed = window.confirm(t('admin_leave_upload', settings.language));
+        if (!confirmed) return previous;
+      }
       const current = previous.entries[previous.index];
       if (current && isSameDestination(current, view, payload)) return previous;
 
@@ -149,7 +169,7 @@ export const AppShell: React.FC = () => {
       ];
       return { entries, index: entries.length - 1 };
     });
-  }, []);
+  }, [adminUploadBusy, settings.language]);
 
   const goBack = useCallback(() => {
     setNavigation(previous => previous.index > 0
@@ -231,6 +251,17 @@ export const AppShell: React.FC = () => {
         return <LyricsView />;
       case 'settings':
         return null;
+      case 'account':
+        return <AccountView />;
+      case 'admin':
+        return catalogAdmin
+          ? (
+            <AdminCatalogView
+              onLeave={() => navigate('home')}
+              onBusyChange={setAdminUploadBusy}
+            />
+          )
+          : null;
       default:
         return <HomeView onNavigate={navigate} />;
     }

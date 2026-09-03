@@ -6,6 +6,8 @@ import { useSettings } from '../../context/SettingsContext';
 import { useToast } from '../../context/ToastContext';
 import { Copy, FileAudio, HardDrive } from 'lucide-react';
 import { t } from '../../i18n';
+import { isCloudPlayback } from '../../platform/hybrid/mergeLibrary';
+import { isLocalFilePath } from '../../platform/web/WebLibraryApi';
 
 interface TrackDetailsModalProps {
   track: Track | null;
@@ -24,9 +26,14 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
   if (!track || !isOpen) return null;
 
   const handleCopy = () => {
+    if (!isLocalFilePath(track.path)) return;
     navigator.clipboard.writeText(track.path);
     showToast(t('toast_copied', settings.language), 'info');
   };
+
+  const pathLabel = isCloudPlayback(track) && !isLocalFilePath(track.path)
+    ? t('detail_source_cloud', settings.language)
+    : track.path;
 
   return (
     <Modal
@@ -113,6 +120,7 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
               <HardDrive className="w-3.5 h-3.5" aria-hidden="true" />
               {t('detail_path', settings.language)}
             </span>
+            {isLocalFilePath(track.path) && (
             <button
               onClick={handleCopy}
               className="min-h-[44px] px-2 text-xs text-brand-accent hover:underline flex items-center gap-1 focus-visible:outline-none"
@@ -121,9 +129,10 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
               <Copy className="w-3.5 h-3.5" aria-hidden="true" />
               <span>{t('btn_copy', settings.language)}</span>
             </button>
+            )}
           </div>
           <span className="font-mono text-xs text-brand-foreground break-all bg-oled-card p-2 rounded border border-brand-border/40 select-all">
-            {track.path}
+            {pathLabel}
           </span>
         </div>
 

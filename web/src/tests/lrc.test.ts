@@ -192,4 +192,35 @@ describe('LRC Parser & Sync Engine', () => {
     lyrics.romanized = parseLrc('[00:01.00]Привет mir');
     expect(hasCompleteRomanizedLyrics(lyrics)).toBe(false);
   });
+
+  it('strips LRCLIB agent tags and word-level timings from display text', () => {
+    const data = parseLrc(
+      '[02:54.18]{Agent:v1}Come my<Come:174.186:174.618|my:174.618:174.9549999>\n[02:55.00]{bg}way',
+    );
+    expect(data.lines.map(line => line.text)).toEqual(['Come my', 'way']);
+  });
+
+  it('strips Enhanced LRC word timestamps', () => {
+    const data = parseLrc('[00:12.00]<00:12.00>Come <00:12.50>my <00:13.00>way');
+    expect(data.lines[0].text).toBe('Come my way');
+  });
+
+  it('rebuilds a line from word timings when the visible text is missing', () => {
+    const data = parseLrc('[02:54.18]<Come:174.186:174.618|my:174.618:174.954>');
+    expect(data.lines[0].text).toBe('Come my');
+  });
+
+  it('cleans karaoke markup already stored in cached lyrics payloads', () => {
+    const data = normalizeLyricsData({
+      is_synced: true,
+      source: 'lrclib',
+      lines: [
+        {
+          timestamp: 174.18,
+          text: '{Agent:v1}Come my<Come:174.186:174.618|my:174.618:174.9549999>',
+        },
+      ],
+    });
+    expect(data?.lines[0].text).toBe('Come my');
+  });
 });

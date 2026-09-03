@@ -1,4 +1,5 @@
 {
+  "css.customData": [".vscode/css_custom_data.json"],
   "rust-analyzer.cargo.extraEnv": {
     "TMP": "D:\\App\\nghenhacpromax\\.tmp",
     "TEMP": "D:\\App\\nghenhacpromax\\.tmp",

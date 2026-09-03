@@ -29,4 +29,10 @@ describe('Player Queue Logic', () => {
   it('repeats single track on auto end when loopMode is track', () => {
     expect(getNextIndex(1, mockQueue.length, 'track', true)).toBe(1);
   });
+
+  it('keeps next/previous on the client when the engine does not own the queue', () => {
+    expect(getNextIndex(0, mockQueue.length, 'off', false)).toBe(1);
+    expect(getNextIndex(2, mockQueue.length, 'off', false)).toBe(-1);
+    expect(getNextIndex(2, mockQueue.length, 'playlist', false)).toBe(0);
+  });
 });

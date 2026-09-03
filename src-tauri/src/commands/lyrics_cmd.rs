@@ -95,10 +95,150 @@ enum LyricsScript {
     Han,
     Cyrillic,
     Arabic,
+    Vietnamese,
+}
+
+fn is_vietnamese_letter(character: char) -> bool {
+    matches!(
+        character,
+        'à' | 'á'
+            | 'ạ'
+            | 'ả'
+            | 'ã'
+            | 'â'
+            | 'ầ'
+            | 'ấ'
+            | 'ậ'
+            | 'ẩ'
+            | 'ẫ'
+            | 'ă'
+            | 'ằ'
+            | 'ắ'
+            | 'ặ'
+            | 'ẳ'
+            | 'ẵ'
+            | 'è'
+            | 'é'
+            | 'ẹ'
+            | 'ẻ'
+            | 'ẽ'
+            | 'ê'
+            | 'ề'
+            | 'ế'
+            | 'ệ'
+            | 'ể'
+            | 'ễ'
+            | 'ì'
+            | 'í'
+            | 'ị'
+            | 'ỉ'
+            | 'ĩ'
+            | 'ò'
+            | 'ó'
+            | 'ọ'
+            | 'ỏ'
+            | 'õ'
+            | 'ô'
+            | 'ồ'
+            | 'ố'
+            | 'ộ'
+            | 'ổ'
+            | 'ỗ'
+            | 'ơ'
+            | 'ờ'
+            | 'ớ'
+            | 'ợ'
+            | 'ở'
+            | 'ỡ'
+            | 'ù'
+            | 'ú'
+            | 'ụ'
+            | 'ủ'
+            | 'ũ'
+            | 'ư'
+            | 'ừ'
+            | 'ứ'
+            | 'ự'
+            | 'ử'
+            | 'ữ'
+            | 'ỳ'
+            | 'ý'
+            | 'ỵ'
+            | 'ỷ'
+            | 'ỹ'
+            | 'đ'
+            | 'À'
+            | 'Á'
+            | 'Ạ'
+            | 'Ả'
+            | 'Ã'
+            | 'Â'
+            | 'Ầ'
+            | 'Ấ'
+            | 'Ậ'
+            | 'Ẩ'
+            | 'Ẫ'
+            | 'Ă'
+            | 'Ằ'
+            | 'Ắ'
+            | 'Ặ'
+            | 'Ẳ'
+            | 'Ẵ'
+            | 'È'
+            | 'É'
+            | 'Ẹ'
+            | 'Ẻ'
+            | 'Ẽ'
+            | 'Ê'
+            | 'Ề'
+            | 'Ế'
+            | 'Ệ'
+            | 'Ể'
+            | 'Ễ'
+            | 'Ì'
+            | 'Í'
+            | 'Ị'
+            | 'Ỉ'
+            | 'Ĩ'
+            | 'Ò'
+            | 'Ó'
+            | 'Ọ'
+            | 'Ỏ'
+            | 'Õ'
+            | 'Ô'
+            | 'Ồ'
+            | 'Ố'
+            | 'Ộ'
+            | 'Ổ'
+            | 'Ỗ'
+            | 'Ơ'
+            | 'Ờ'
+            | 'Ớ'
+            | 'Ợ'
+            | 'Ở'
+            | 'Ỡ'
+            | 'Ù'
+            | 'Ú'
+            | 'Ụ'
+            | 'Ủ'
+            | 'Ũ'
+            | 'Ư'
+            | 'Ừ'
+            | 'Ứ'
+            | 'Ự'
+            | 'Ử'
+            | 'Ữ'
+            | 'Ỳ'
+            | 'Ý'
+            | 'Ỵ'
+            | 'Ỷ'
+            | 'Ỹ'
+            | 'Đ'
+    )
 }
 
 fn dominant_lyrics_script(value: &str) -> Option<LyricsScript> {
-    let mut counts = [0_u32; 5];
+    let mut counts = [0_u32; 6];
     for character in value.chars() {
         let code = character as u32;
         if (0xAC00..=0xD7AF).contains(&code) || (0x1100..=0x11FF).contains(&code) {
@@ -111,6 +251,8 @@ fn dominant_lyrics_script(value: &str) -> Option<LyricsScript> {
             counts[3] += 1;
         } else if (0x0600..=0x06FF).contains(&code) {
             counts[4] += 1;
+        } else if is_vietnamese_letter(character) {
+            counts[5] += 1;
         }
     }
     let (index, count) = counts
@@ -125,7 +267,8 @@ fn dominant_lyrics_script(value: &str) -> Option<LyricsScript> {
         1 => LyricsScript::Kana,
         2 => LyricsScript::Han,
         3 => LyricsScript::Cyrillic,
-        _ => LyricsScript::Arabic,
+        4 => LyricsScript::Arabic,
+        _ => LyricsScript::Vietnamese,
     })
 }
 
@@ -156,6 +299,8 @@ fn expected_lyrics_script(
         || normalized_genre.contains("cantopop")
     {
         Some(LyricsScript::Han)
+    } else if normalized_genre.contains("vpop") || normalized_genre.contains("vietnamese") {
+        Some(LyricsScript::Vietnamese)
     } else {
         None
     }
@@ -235,14 +380,44 @@ fn lrclib_candidate_score(
         };
     }
 
-    if candidate
+    Some(score)
+}
+
+fn has_synced_lyrics(candidate: &LrclibResponse) -> bool {
+    candidate
         .synced_lyrics
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
-    {
-        score += 4;
+}
+
+fn is_mostly_latin(value: &str) -> bool {
+    value
+        .chars()
+        .filter(|character| {
+            !is_vietnamese_letter(*character)
+                && character.is_alphabetic()
+                && (*character as u32) <= 0x024F
+        })
+        .count()
+        >= 12
+}
+
+fn language_match_rank(
+    candidate: &LrclibResponse,
+    title: &str,
+    artist: &str,
+    album: &str,
+    genre: Option<&str>,
+) -> u8 {
+    let text = candidate_lyrics_text(candidate);
+    let expected = expected_lyrics_script(title, artist, album, genre);
+    let actual = dominant_lyrics_script(text);
+    match (expected, actual) {
+        (Some(expected), Some(actual)) if expected == actual => 2,
+        (Some(_), Some(_)) => 0,
+        (Some(_), None) if is_mostly_latin(text) => 0,
+        _ => 1,
     }
-    Some(score)
 }
 
 fn select_best_lrclib_candidate(
@@ -253,19 +428,29 @@ fn select_best_lrclib_candidate(
     genre: Option<&str>,
     duration_secs: f64,
 ) -> Option<LrclibResponse> {
-    candidates
+    let scored = candidates
         .into_iter()
-        .max_by_key(|candidate| {
+        .filter_map(|candidate| {
+            let score =
+                lrclib_candidate_score(&candidate, title, artist, album, genre, duration_secs)?;
+            (score >= 70).then_some((candidate, score))
+        })
+        .collect::<Vec<_>>();
+
+    // Identity (title/artist/duration/version) qualifies the shortlist.
+    // Among those records: synchronized lyrics first, then the track
+    // language, then the remaining metadata score.
+    scored
+        .into_iter()
+        .max_by_key(|(candidate, score)| {
             (
-                lrclib_candidate_score(candidate, title, artist, album, genre, duration_secs)
-                    .unwrap_or(i32::MIN),
+                has_synced_lyrics(candidate),
+                language_match_rank(candidate, title, artist, album, genre),
+                *score,
                 std::cmp::Reverse(candidate.id),
             )
         })
-        .filter(|candidate| {
-            lrclib_candidate_score(candidate, title, artist, album, genre, duration_secs)
-                .is_some_and(|score| score >= 70)
-        })
+        .map(|(candidate, _)| candidate)
 }
 
 #[tauri::command]
@@ -388,9 +573,11 @@ pub async fn save_romanized_lyrics(
 
     let track = {
         let conn = state.db.lock();
-        get_track_by_id(&conn, &track_id).map_err(|e| e.to_string())?
-    }
-    .ok_or_else(|| "Track not found".to_string())?;
+        let track = get_track_by_id(&conn, &track_id).map_err(|e| e.to_string())?
+            .ok_or_else(|| "Track not found".to_string())?;
+        crate::fs_guard::assert_media_path(&conn, &state.allowed_fs_paths, &track.path)?;
+        track
+    };
 
     let audio_path = Path::new(&track.path);
     let parent = audio_path
@@ -520,6 +707,42 @@ mod tests {
     }
 
     #[test]
+    fn lrclib_ranking_prefers_synced_lyrics_among_equivalent_matches() {
+        let mut plain = candidate(
+            30,
+            "Billionaire",
+            "BABYMONSTER",
+            "DRIP",
+            177.0,
+            "Baby, I'ma monster",
+        );
+        plain.synced_lyrics = None;
+        // Give the plain candidate a slightly closer duration. It should not
+        // outweigh the synchronized timeline for the same recording.
+        let synced = candidate(
+            31,
+            "Billionaire",
+            "BABYMONSTER",
+            "DRIP",
+            178.5,
+            "Baby, I'ma monster",
+        );
+
+        let selected = select_best_lrclib_candidate(
+            vec![plain, synced],
+            "Billionaire",
+            "BABYMONSTER",
+            "DRIP",
+            None,
+            177.0,
+        )
+        .expect("a synchronized matching result");
+
+        assert_eq!(selected.id, 31);
+        assert!(has_synced_lyrics(&selected));
+    }
+
+    #[test]
     fn lrclib_ranking_uses_genre_to_reject_wrong_lyrics_script() {
         let chinese_cache_poison = candidate(
             91,
@@ -559,5 +782,98 @@ mod tests {
             vec!["live", "remaster"]
         );
         assert_eq!(version_markers("Song - Japanese Ver."), vec!["japanese"]);
+    }
+
+    #[test]
+    fn lrclib_ranking_prefers_synced_wrong_language_over_plain_original() {
+        let mut plain_korean = candidate(
+            40,
+            "고민보다 Go",
+            "BTS",
+            "LOVE YOURSELF 承 'Her'",
+            235.0,
+            "하루아침에 전부 탕진 달려 달려",
+        );
+        plain_korean.synced_lyrics = None;
+        let synced_japanese = candidate(
+            41,
+            "고민보다 Go",
+            "BTS",
+            "LOVE YOURSELF 承 'Her'",
+            235.0,
+            "全て無くすまで まだまだ 走り稼ぐだけ",
+        );
+
+        let selected = select_best_lrclib_candidate(
+            vec![plain_korean, synced_japanese],
+            "고민보다 Go",
+            "BTS",
+            "LOVE YOURSELF 承 'Her'",
+            None,
+            235.0,
+        )
+        .expect("synchronized lyrics even when the language mismatches");
+
+        assert_eq!(selected.id, 41);
+        assert!(has_synced_lyrics(&selected));
+    }
+
+    #[test]
+    fn lrclib_ranking_prefers_synced_original_language_over_synced_translation() {
+        let korean = candidate(
+            50,
+            "고민보다 Go",
+            "BTS",
+            "LOVE YOURSELF 承 'Her'",
+            235.0,
+            "하루아침에 전부 탕진 달려 달려",
+        );
+        let japanese = candidate(
+            51,
+            "고민보다 Go",
+            "BTS",
+            "LOVE YOURSELF 承 'Her'",
+            235.0,
+            "全て無くすまで まだまだ 走り稼ぐだけ",
+        );
+
+        let selected = select_best_lrclib_candidate(
+            vec![japanese, korean],
+            "고민보다 Go",
+            "BTS",
+            "LOVE YOURSELF 承 'Her'",
+            None,
+            235.0,
+        )
+        .expect("original-language synchronized lyrics");
+
+        assert_eq!(selected.id, 50);
+    }
+
+    #[test]
+    fn lrclib_ranking_keeps_instrumental_as_a_valid_result() {
+        let instrumental = LrclibResponse {
+            id: 60,
+            track_name: "Interlude".to_string(),
+            artist_name: "Aurora Circuit".to_string(),
+            album_name: "Glass Harbor".to_string(),
+            duration: Some(92.0),
+            plain_lyrics: None,
+            synced_lyrics: None,
+            instrumental: Some(true),
+        };
+
+        let selected = select_best_lrclib_candidate(
+            vec![instrumental],
+            "Interlude",
+            "Aurora Circuit",
+            "Glass Harbor",
+            None,
+            92.0,
+        )
+        .expect("instrumental is a successful match");
+
+        assert_eq!(selected.id, 60);
+        assert_eq!(selected.instrumental, Some(true));
     }
 }

@@ -6,6 +6,7 @@ interface RemoteArtworkProps {
   kind: 'album' | 'artist';
   artist: string;
   album?: string;
+  src?: string | null;
   className?: string;
   alt: string;
   fallback?: React.ReactNode;
@@ -15,11 +16,12 @@ export const RemoteArtwork: React.FC<RemoteArtworkProps> = ({
   kind,
   artist,
   album,
+  src,
   className = '',
   alt,
   fallback,
 }) => {
-  const source = getCachedArtwork(kind, artist, album);
+  const source = src || getCachedArtwork(kind, artist, album);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => setFailed(false), [source]);
@@ -30,6 +32,7 @@ export const RemoteArtwork: React.FC<RemoteArtworkProps> = ({
         <img
           src={source}
           alt={alt}
+          referrerPolicy="no-referrer"
           className="h-full w-full object-cover"
           onError={() => setFailed(true)}
           draggable={false}

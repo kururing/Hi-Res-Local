@@ -20,19 +20,22 @@ import {
   SlidersHorizontal,
   BadgeCheck,
   Activity,
+  ShieldCheck,
 } from 'lucide-react';
 import { useSettings } from '../../context/SettingsContext';
 import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
 import { Button } from '../common/Button';
 import { Storage } from '../../services/storage';
-import { IpcService, isTauri } from '../../services/ipc';
+import { usePlatform } from '../../platform';
 import { AsioDriver, AudioBackend, AudioCapabilities, AudioOutputDevice, DsdOutputMode, DsdRate, PlaybackMode } from '../../types/audio';
 import { localizeAudioError, t } from '../../i18n';
 import { applyImageThemeAccent, createArtworkTheme, createImageTheme } from '../../services/imageTheme';
 import { AppSettings, AppTheme, normalizeAudioSettings } from '../../types/settings';
 import { engineSourceDisplay, engineTransportDisplay, getAdvancedOptionGating, coerceUnavailableAudioOptions, volumeControlLabel, isEqualizerAvailable } from '../../services/playbackDisplay';
+import { WEB_AUDIO_CAPABILITIES } from '../../platform/web/WebAudioConfigurationApi';
 
 function bytesToBase64(bytes: number[]): string {
   let binary = '';
@@ -54,7 +57,7 @@ interface ArtworkDownloadProgress {
   found: number;
 }
 
-const DSD_RATE_ORDER: DsdRate[] = ['dsd64', 'dsd128', 'dsd256', 'dsd512'];
+const DSD_RATE_ORDER: DsdRate[] = ['dsd64', 'dsd128', 'dsd256', 'dsd512', 'dsd1024'];
 
 const formatCapabilityRate = (rate?: number): string => {
   if (!rate) return '—';
@@ -391,7 +394,26 @@ export const SettingsView: React.FC = () => {
   const { scanDirectory, rescanLibrary, scanProgress, albums, artists } = useLibrary();
   const { status, setIsEqualizerOpen, engineStatus } = usePlayer();
   const { showToast } = useToast();
-  const eqAvailable = isEqualizerAvailable(engineStatus, settings);
+  const {
+    runtime,
+    capabilities,
+    library,
+    audioConfiguration,
+    themeAssets,
+    artworkAssets,
+    backup,
+    autostart,
+  } = usePlatform();
+  const { status: authStatus } = useAuth();
+  const canScanLibrary = capabilities.directoryScanning;
+  const canConfigureNativeAudio = runtime !== 'web';
+  const canSelectOutputDevice = canConfigureNativeAudio || runtime === 'web';
+  const showPlaybackStructure = canConfigureNativeAudio || runtime === 'web';
+  const canBackupDatabase = capabilities.databaseBackup && authStatus !== 'authenticated';
+  const canUseDiscordPresence = capabilities.discordPresence;
+  const canUseAutostart = capabilities.autostart;
+  const canConfigureDesktopBehavior = runtime !== 'web';
+  const eqAvailable = runtime !== 'web' && isEqualizerAvailable(engineStatus, settings);
 
   const [outputDevices, setOutputDevices] = useState<AudioOutputDevice[]>([]);
   const [isLoadingDevices, setIsLoadingDevices] = useState(true);
@@ -418,7 +440,7 @@ export const SettingsView: React.FC = () => {
       return;
     }
 
-    if (refreshAll) clearArtworkCache();
+    if (refreshAll) clearArtworkCache(artworkAssets);
     const albumTargets = refreshAll
       ? albums
       : albums.filter(album => !getCachedArtwork('album', album.artist, album.name));
@@ -465,7 +487,7 @@ export const SettingsView: React.FC = () => {
 
       await processInBatches(
         albumTargets,
-        album => downloadArtwork('album', album.artist, album.name, artworkAbortController.signal),
+        album => downloadArtwork('album', album.artist, album.name, artworkAssets, artworkAbortController.signal),
         () => setArtworkProgress(previous => previous ? { ...previous, albumDone: previous.albumDone + 1, found } : previous)
       );
       await processInBatches(
@@ -481,6 +503,7 @@ export const SettingsView: React.FC = () => {
             'artist',
             artist.name,
             undefined,
+            artworkAssets,
             artworkAbortController.signal,
             representativeAlbum?.name,
           );
@@ -512,12 +535,13 @@ export const SettingsView: React.FC = () => {
     setIsCreatingTheme(true);
     try {
       let customImageTheme = await createImageTheme(file);
-      if (isTauri()) {
-        const [{ convertFileSrc }, cachedPath] = await Promise.all([
-          import('@tauri-apps/api/core'),
-          IpcService.invoke('cache_image_data', { cacheKey: customImageTheme.id ?? `theme-${Date.now()}`, category: 'themes', dataUrl: customImageTheme.image_data_url }),
-        ]);
-        customImageTheme = { ...customImageTheme, image_data_url: convertFileSrc(cachedPath) };
+      if (customImageTheme.image_data_url.startsWith('data:image/')) {
+        const cachedUrl = await themeAssets.cacheImage({
+          cacheKey: customImageTheme.id ?? `theme-${Date.now()}`,
+          category: 'themes',
+          dataUrl: customImageTheme.image_data_url,
+        });
+        customImageTheme = { ...customImageTheme, image_data_url: cachedUrl };
       }
       const existingThemes = settings.custom_image_themes.length > 0
         ? settings.custom_image_themes
@@ -543,15 +567,16 @@ export const SettingsView: React.FC = () => {
     if (!track || isCreatingTheme) return;
     setIsCreatingTheme(true);
     try {
-      const source = await resolveTrackArtworkSource(track);
+      const source = await resolveTrackArtworkSource(track, artworkAssets);
       if (!source) throw new Error('Current track has no artwork');
       let savedTheme = await createArtworkTheme(source, `${track.title} — ${track.artist}`);
-      if (isTauri() && savedTheme.image_data_url.startsWith('data:image/')) {
-        const [{ convertFileSrc }, cachedPath] = await Promise.all([
-          import('@tauri-apps/api/core'),
-          IpcService.invoke('cache_image_data', { cacheKey: savedTheme.id ?? `theme-${Date.now()}`, category: 'themes', dataUrl: savedTheme.image_data_url }),
-        ]);
-        savedTheme = { ...savedTheme, image_data_url: convertFileSrc(cachedPath) };
+      if (savedTheme.image_data_url.startsWith('data:image/')) {
+        const cachedUrl = await themeAssets.cacheImage({
+          cacheKey: savedTheme.id ?? `theme-${Date.now()}`,
+          category: 'themes',
+          dataUrl: savedTheme.image_data_url,
+        });
+        savedTheme = { ...savedTheme, image_data_url: cachedUrl };
       }
       const existingThemes = settings.custom_image_themes.length > 0
         ? settings.custom_image_themes
@@ -595,18 +620,18 @@ export const SettingsView: React.FC = () => {
   const loadAudioDevices = useCallback(async () => {
     setIsLoadingDevices(true);
     try {
-      const devices = await IpcService.invoke('get_audio_output_devices');
+      const devices = await audioConfiguration.getOutputDevices();
       const withDefault = devices.some(d => d.id === 'default')
         ? devices
         : [
-            {
-              id: 'default',
-              name: t('settings_output_device_default', settings.language),
-              is_default: true,
-              sample_rates: [44100, 48000],
-            },
-            ...devices,
-          ];
+              {
+                id: 'default',
+                name: t('settings_output_device_default', settings.language),
+                is_default: true,
+                sample_rates: [44100, 48000],
+              },
+              ...devices,
+            ];
 
       const localized = withDefault.map(d =>
         d.id === 'default'
@@ -622,19 +647,29 @@ export const SettingsView: React.FC = () => {
         const byName = localized.find(d => d.name === current);
         if (byName) updateSettings({ output_device: byName.id });
       }
-      setAudioCapabilities(await IpcService.invoke('get_audio_capabilities'));
-      setAsioDrivers(await IpcService.invoke('get_asio_drivers'));
+      setAudioCapabilities(await audioConfiguration.getCapabilities());
+      setAsioDrivers(await audioConfiguration.getAsioDrivers());
     } catch (error) {
       console.error('Failed to load audio devices', error);
       showToast(t('toast_audio_setting_failed', settings.language), 'error');
     } finally {
       setIsLoadingDevices(false);
     }
-  }, [settings.language, settings.output_device, showToast, updateSettings]);
+  }, [
+    audioConfiguration,
+    settings.language,
+    settings.output_device,
+    showToast,
+    updateSettings,
+  ]);
 
   useEffect(() => {
+    if (!showPlaybackStructure) {
+      setIsLoadingDevices(false);
+      return;
+    }
     void loadAudioDevices();
-  }, [loadAudioDevices]);
+  }, [showPlaybackStructure, loadAudioDevices]);
 
   const applyAudioSetting = async (
     action: () => Promise<void>,
@@ -654,10 +689,9 @@ export const SettingsView: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!canUseAutostart) return;
 
-    void import('@tauri-apps/plugin-autostart')
-      .then(({ isEnabled }) => isEnabled())
+    void autostart.isEnabled()
       .then(enabled => {
         if (enabled !== settings.launch_on_startup) {
           updateSettings({ launch_on_startup: enabled });
@@ -666,31 +700,50 @@ export const SettingsView: React.FC = () => {
       .catch(error => console.error('Failed to read startup setting', error));
     // Read the operating-system value once when this settings view opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [canUseAutostart, autostart]);
 
   const vi = settings.language === 'vi';
-  const advancedGating = getAdvancedOptionGating(audioCapabilities);
+  const playbackCapabilities = audioCapabilities ?? (runtime === 'web' ? WEB_AUDIO_CAPABILITIES : null);
+  const advancedGating = getAdvancedOptionGating(playbackCapabilities);
 
-  // The mode owns the legacy flags: every change goes through the single
-  // apply_playback_mode command and persists only when the engine accepted it.
+  const persistPlaybackSettings = (next: ReturnType<typeof normalizeAudioSettings>) => {
+    updateSettings({
+      playback_mode: next.playback_mode,
+      wasapi_exclusive: next.wasapi_exclusive,
+      bit_perfect: next.bit_perfect,
+      audio_backend: next.audio_backend,
+      dsd_output_mode: next.dsd_output_mode,
+      asio_driver_id: next.asio_driver_id,
+      mqa_passthrough: next.mqa_passthrough,
+    });
+  };
+
   const handlePlaybackModeChange = (mode: PlaybackMode) => {
     if (mode === settings.playback_mode || isUpdatingAudio) return;
-    const next = normalizeAudioSettings({ ...settings, playback_mode: mode });
+    const next = coerceUnavailableAudioOptions(
+      normalizeAudioSettings({ ...settings, playback_mode: mode, mqa_passthrough: false }),
+      playbackCapabilities,
+    );
+    if (!canConfigureNativeAudio) {
+      persistPlaybackSettings(next);
+      return;
+    }
     void applyAudioSetting(
       async () => {
-        await IpcService.invoke('apply_playback_mode', {
+        await audioConfiguration.applyPlaybackMode({
           mode,
           deviceId: settings.output_device || 'default',
           backend: mode === 'advanced' ? next.audio_backend : null,
           dsdTransport: mode === 'advanced' ? next.dsd_output_mode : null,
           asioDriverId: next.asio_driver_id,
         });
-        setAudioCapabilities(await IpcService.invoke('get_audio_capabilities'));
+        setAudioCapabilities(await audioConfiguration.getCapabilities());
       },
       {
         playback_mode: next.playback_mode,
         wasapi_exclusive: next.wasapi_exclusive,
         bit_perfect: next.bit_perfect,
+        mqa_passthrough: next.mqa_passthrough,
         audio_backend: next.audio_backend,
         dsd_output_mode: next.dsd_output_mode,
       }
@@ -716,17 +769,24 @@ export const SettingsView: React.FC = () => {
     if (coupled.dsd_output_mode === 'native_dsd') {
       coupled.audio_backend = 'asio';
     }
-    const next = normalizeAudioSettings({ ...settings, ...coupled, playback_mode: 'advanced' });
+    const next = coerceUnavailableAudioOptions(
+      normalizeAudioSettings({ ...settings, ...coupled, playback_mode: 'advanced', mqa_passthrough: false }),
+      playbackCapabilities,
+    );
+    if (!canConfigureNativeAudio) {
+      persistPlaybackSettings(next);
+      return;
+    }
     void applyAudioSetting(
       async () => {
-        await IpcService.invoke('apply_playback_mode', {
+        await audioConfiguration.applyPlaybackMode({
           mode: 'advanced',
           deviceId: settings.output_device || 'default',
           backend: next.audio_backend,
           dsdTransport: next.dsd_output_mode,
           asioDriverId: next.asio_driver_id,
         });
-        setAudioCapabilities(await IpcService.invoke('get_audio_capabilities'));
+        setAudioCapabilities(await audioConfiguration.getCapabilities());
       },
       {
         playback_mode: 'advanced',
@@ -735,25 +795,60 @@ export const SettingsView: React.FC = () => {
         asio_driver_id: next.asio_driver_id,
         wasapi_exclusive: next.wasapi_exclusive,
         bit_perfect: next.bit_perfect,
+        mqa_passthrough: next.mqa_passthrough,
       }
     );
   };
 
+  const handleMqaPassthroughChange = (enabled: boolean) => {
+    if (isUpdatingAudio || runtime === 'web') return;
+    const next = coerceUnavailableAudioOptions(
+      normalizeAudioSettings({ ...settings, mqa_passthrough: enabled }),
+      playbackCapabilities,
+    );
+    void applyAudioSetting(
+      async () => {
+        await audioConfiguration.applyPlaybackMode({
+          mode: next.playback_mode,
+          deviceId: settings.output_device || 'default',
+          backend: next.audio_backend,
+          dsdTransport: next.dsd_output_mode,
+          asioDriverId: next.asio_driver_id,
+        });
+        setAudioCapabilities(await audioConfiguration.getCapabilities());
+      },
+      {
+        playback_mode: next.playback_mode,
+        audio_backend: next.audio_backend,
+        dsd_output_mode: next.dsd_output_mode,
+        wasapi_exclusive: next.wasapi_exclusive,
+        bit_perfect: next.bit_perfect,
+        mqa_passthrough: next.mqa_passthrough,
+      },
+    );
+  };
+
   const handleOutputDeviceChange = (deviceId: string) => {
+    if (!canSelectOutputDevice) return;
     if (deviceId === settings.output_device || isUpdatingAudio) return;
     void (async () => {
       setIsUpdatingAudio(true);
       let deviceSwitched = false;
       try {
-        await IpcService.invoke('set_audio_output_device', { deviceId });
+        await audioConfiguration.setOutputDevice(deviceId);
         deviceSwitched = true;
-        const capabilities = await IpcService.invoke('get_audio_capabilities');
+        if (runtime === 'web') {
+          updateSettings({ output_device: deviceId });
+          showToast(t('toast_audio_setting_applied', settings.language), 'success');
+          return;
+        }
+        const capabilities = await audioConfiguration.getCapabilities();
         setAudioCapabilities(capabilities);
         const next = coerceUnavailableAudioOptions(
           { ...settings, output_device: deviceId },
           capabilities
         );
-        await IpcService.invoke('apply_playback_mode', {
+        await audioConfiguration.applyPlaybackMode({
           mode: next.playback_mode,
           deviceId,
           backend: next.playback_mode === 'advanced' ? next.audio_backend : null,
@@ -773,7 +868,7 @@ export const SettingsView: React.FC = () => {
         if (deviceSwitched) {
           updateSettings({ output_device: deviceId });
           try {
-            setAudioCapabilities(await IpcService.invoke('get_audio_capabilities'));
+            setAudioCapabilities(await audioConfiguration.getCapabilities());
           } catch (capabilitiesError) {
             console.error('Failed to refresh audio capabilities after device switch', capabilitiesError);
           }
@@ -783,6 +878,28 @@ export const SettingsView: React.FC = () => {
         setIsUpdatingAudio(false);
       }
     })();
+  };
+
+  const refreshAudioDevices = async () => {
+    if (runtime !== 'web' || !audioConfiguration.requestOutputDevice) {
+      await loadAudioDevices();
+      return;
+    }
+    setIsLoadingDevices(true);
+    try {
+      const selected = await audioConfiguration.requestOutputDevice();
+      if (selected) {
+        await audioConfiguration.setOutputDevice(selected.id);
+        updateSettings({ output_device: selected.id });
+      }
+      await loadAudioDevices();
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'NotAllowedError') return;
+      console.error('Failed to request an audio output device', error);
+      showToast(t('toast_audio_setting_failed', settings.language), 'error');
+    } finally {
+      setIsLoadingDevices(false);
+    }
   };
 
   const playbackModeOptions: {
@@ -795,38 +912,48 @@ export const SettingsView: React.FC = () => {
       id: 'auto',
       icon: Wand2,
       label: vi ? 'Tự động (khuyến nghị)' : 'Automatic (recommended)',
-      desc: vi
-        ? 'Chọn đường âm thanh tốt nhất và tự hạ cấp an toàn khi cần.'
-        : 'Picks the best audio path and falls back safely when needed.',
+      desc: runtime === 'web'
+        ? t('settings_playback_mode_auto_web_desc', settings.language)
+        : vi
+          ? 'Chọn đường âm thanh tốt nhất và tự hạ cấp an toàn khi cần.'
+          : 'Picks the best audio path and falls back safely when needed.',
     },
     {
       id: 'high_quality',
       icon: Gem,
       label: vi ? 'Chất lượng cao' : 'High quality',
-      desc: vi
-        ? 'WASAPI Exclusive, bit-perfect khi có thể; DSD giải mã ra PCM. DoP chỉ bật trong Nâng cao.'
-        : 'WASAPI Exclusive, bit-perfect when possible; DSD is decoded to PCM. DoP is Advanced-only.',
+      desc: runtime === 'web'
+        ? t('settings_playback_mode_quality_web_desc', settings.language)
+        : vi
+          ? 'WASAPI Exclusive, bit-perfect khi có thể; DSD giải mã ra PCM. DoP chỉ bật trong Nâng cao.'
+          : 'WASAPI Exclusive, bit-perfect when possible; DSD is decoded to PCM. DoP is Advanced-only.',
     },
     {
       id: 'multitask',
       icon: Layers,
       label: vi ? 'Đa nhiệm' : 'Multitasking',
-      desc: vi
-        ? 'WASAPI Shared, âm thanh chung với ứng dụng khác; DSD chuyển thành PCM.'
-        : 'WASAPI Shared, audio mixes with other apps; DSD is converted to PCM.',
+      desc: runtime === 'web'
+        ? t('settings_playback_mode_multitask_web_desc', settings.language)
+        : vi
+          ? 'WASAPI Shared, âm thanh chung với ứng dụng khác; DSD chuyển thành PCM.'
+          : 'WASAPI Shared, audio mixes with other apps; DSD is converted to PCM.',
     },
     {
       id: 'advanced',
       icon: SlidersHorizontal,
       label: vi ? 'Nâng cao' : 'Advanced',
-      desc: vi
-        ? 'Tự chọn backend và DSD transport.'
-        : 'Choose the backend and DSD transport yourself.',
+      desc: runtime === 'web'
+        ? t('settings_playback_mode_advanced_web_desc', settings.language)
+        : vi
+          ? 'Tự chọn backend và DSD transport.'
+          : 'Choose the backend and DSD transport yourself.',
     },
   ];
 
   const engineBackendLabel = engineStatus
-    ? engineStatus.backend === 'asio'
+    ? runtime === 'web'
+      ? engineStatus.output_mode || 'nnpm-audio-core'
+      : engineStatus.backend === 'asio'
       ? 'ASIO'
       : engineStatus.backend === 'wasapi_exclusive'
         ? 'WASAPI Exclusive'
@@ -887,16 +1014,11 @@ export const SettingsView: React.FC = () => {
         : 'No ASIO driver found');
 
   const handleStartupChange = async (enabled: boolean) => {
-    if (!isTauri()) {
-      updateSettings({ launch_on_startup: enabled });
-      return;
-    }
+    if (!canUseAutostart) return;
 
     setIsUpdatingStartup(true);
     try {
-      const autostart = await import('@tauri-apps/plugin-autostart');
-      if (enabled) await autostart.enable();
-      else await autostart.disable();
+      await autostart.setEnabled(enabled);
       updateSettings({ launch_on_startup: enabled });
     } catch (error) {
       console.error('Failed to update startup setting', error);
@@ -907,6 +1029,7 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleDiscordPresenceChange = (enabled: boolean) => {
+    if (!canUseDiscordPresence) return;
     updateSettings({ discord_presence_enabled: enabled });
     showToast(
       t(enabled ? 'toast_discord_enabled' : 'toast_discord_disabled', settings.language),
@@ -915,7 +1038,7 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleExportBackup = async () => {
-    const database = await IpcService.invoke('export_database');
+    const database = await backup.exportDatabase();
     const backupJson = JSON.stringify({
       ...JSON.parse(Storage.exportBackup()),
       database_base64: bytesToBase64(database),
@@ -943,7 +1066,7 @@ export const SettingsView: React.FC = () => {
           ? Uint8Array.from(atob(parsed.database_base64), char => char.charCodeAt(0))
           : null;
         const restore = databaseBytes
-          ? IpcService.invoke('import_database', { data: [...databaseBytes] })
+          ? backup.importDatabase([...databaseBytes])
           : Promise.resolve();
         void restore.then(() => {
           const success = Storage.importBackup(content);
@@ -972,7 +1095,8 @@ export const SettingsView: React.FC = () => {
         </span>
       </div>
 
-      {/* 1. Music Library Folders */}
+      {/* 1. Music Library Folders — desktop/local scanning only */}
+      {canScanLibrary && (
       <section className="p-6 rounded-2xl bg-oled-card border border-brand-border space-y-4 shadow-card-elevated">
         <div className="flex items-center justify-between pb-3 border-b border-brand-border/60">
           <div className="flex items-center gap-2.5">
@@ -985,6 +1109,7 @@ export const SettingsView: React.FC = () => {
             size="sm"
             variant="accent"
             icon={<FolderPlus className="w-4 h-4" />}
+            disabled={!canScanLibrary}
             onClick={() => scanDirectory()}
           >
             {t('btn_add_folder', settings.language)}
@@ -1010,7 +1135,8 @@ export const SettingsView: React.FC = () => {
                   <span className="font-mono text-brand-foreground truncate pr-4">{folder}</span>
                   <button
                     onClick={() => void removeMusicFolder(folder)}
-                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-rose-400 focus-visible:outline-none"
+                    disabled={!canScanLibrary}
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-brand-muted hover:text-rose-400 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label={t('settings_remove_folder', settings.language, { folder })}
                   >
                     <Trash2 className="w-4 h-4" aria-hidden="true" />
@@ -1022,14 +1148,15 @@ export const SettingsView: React.FC = () => {
         </div>
 
         <div className="flex items-center justify-between pt-2">
-          <label className="flex items-center gap-3 cursor-pointer">
+          <label className={`flex items-center gap-3 ${canScanLibrary ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
             <input
               type="checkbox"
               checked={settings.auto_watch}
+              disabled={!canScanLibrary}
               onChange={e => {
                 const enabled = e.target.checked;
                 updateSettings({ auto_watch: enabled });
-                void IpcService.invoke('set_directory_watching', { enabled }).catch(error => {
+                void library.setDirectoryWatching(enabled).catch(error => {
                   console.error('Failed to update folder watching', error);
                   updateSettings({ auto_watch: !enabled });
                 });
@@ -1046,12 +1173,13 @@ export const SettingsView: React.FC = () => {
             variant="secondary"
             icon={<FolderSync className="w-3.5 h-3.5" />}
             onClick={() => void rescanLibrary()}
-            disabled={scanProgress?.is_scanning || settings.music_folders.length === 0}
+            disabled={!canScanLibrary || scanProgress?.is_scanning || settings.music_folders.length === 0}
           >
             {scanProgress?.is_scanning ? t('settings_scanning', settings.language) : t('settings_btn_rescan', settings.language)}
           </Button>
         </div>
 
+        {runtime !== 'web' && (
         <div className="space-y-4 border-t border-brand-border/60 pt-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
@@ -1131,9 +1259,12 @@ export const SettingsView: React.FC = () => {
             </div>
           )}
         </div>
+        )}
       </section>
+      )}
 
       {/* 2. Audio Engine & Hardware */}
+      {showPlaybackStructure && (
       <section className="p-6 rounded-2xl bg-oled-card border border-brand-border space-y-5 shadow-card-elevated">
         <div className="flex items-center gap-2.5 pb-3 border-b border-brand-border/60">
           <Cpu className="w-5 h-5 text-brand-accent" />
@@ -1142,6 +1273,8 @@ export const SettingsView: React.FC = () => {
           </h2>
         </div>
 
+        {showPlaybackStructure && (
+        <>
         {/* Output Device */}
         <div className="flex flex-col gap-2">
           <div className="flex min-h-11 items-center justify-between gap-3">
@@ -1153,7 +1286,7 @@ export const SettingsView: React.FC = () => {
             </label>
             <button
               type="button"
-              onClick={() => void loadAudioDevices()}
+              onClick={() => void refreshAudioDevices()}
               disabled={isLoadingDevices || isUpdatingAudio}
               className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-brand-muted transition-colors hover:bg-oled-hover hover:text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:cursor-wait disabled:opacity-50"
               aria-label={t('settings_output_device_refresh', settings.language)}
@@ -1169,7 +1302,7 @@ export const SettingsView: React.FC = () => {
             <select
               id="audio-output-device"
               value={settings.output_device || 'default'}
-              disabled={isUpdatingAudio || isLoadingDevices || outputDevices.length === 0}
+              disabled={!canSelectOutputDevice || isUpdatingAudio || isLoadingDevices || outputDevices.length === 0}
               aria-busy={isUpdatingAudio || isLoadingDevices}
               onChange={e => handleOutputDeviceChange(e.target.value)}
               className="min-h-11 w-full appearance-none rounded-xl border border-brand-border bg-oled-base px-4 py-2.5 pr-11 text-xs text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:cursor-wait disabled:opacity-60 sm:text-sm"
@@ -1199,9 +1332,9 @@ export const SettingsView: React.FC = () => {
           <p className="text-xs leading-relaxed text-brand-muted" aria-live="polite">
             {isUpdatingAudio
               ? t('settings_output_device_applying', settings.language)
-              : t('settings_output_device_hint', settings.language)}
+              : t(runtime === 'web' ? 'settings_output_device_hint_web' : 'settings_output_device_hint', settings.language)}
           </p>
-          {!isLoadingDevices && selectedOutputDevice && (
+          {!isLoadingDevices && selectedOutputDevice && canConfigureNativeAudio && (
             <section
               className="rounded-xl border border-brand-border/70 bg-oled-base/60 p-3"
               aria-label={vi ? 'Năng lực tối đa của DAC' : 'Maximum DAC capabilities'}
@@ -1260,6 +1393,8 @@ export const SettingsView: React.FC = () => {
           )}
         </div>
 
+        {canConfigureNativeAudio && (
+        <>
         {/* Playback mode */}
         <fieldset className="space-y-3" aria-busy={isUpdatingAudio}>
           <legend className="text-xs font-semibold uppercase tracking-wider text-brand-muted">
@@ -1305,9 +1440,37 @@ export const SettingsView: React.FC = () => {
           </div>
         </fieldset>
 
-        {/* Advanced options (mode = advanced only) */}
-        {settings.playback_mode === 'advanced' && (
+            {settings.playback_mode === 'advanced' && (
           <div className="grid grid-cols-1 gap-4 rounded-xl border border-brand-border bg-oled-base/60 p-4 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+                <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl border border-brand-border bg-oled-base/70 p-3 transition-colors hover:border-brand-accent/50">
+                  <input
+                    type="checkbox"
+                    checked={settings.mqa_passthrough}
+                    disabled={isUpdatingAudio || advancedGating.exclusiveBackendDisabled}
+                    onChange={event => handleMqaPassthroughChange(event.target.checked)}
+                    className="mt-1 h-4 w-4 accent-brand-accent"
+                  />
+                  <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-brand-accent" aria-hidden="true" />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-brand-foreground">
+                      MQA Passthrough
+                    </span>
+                    <span className="mt-0.5 block text-xs leading-relaxed text-brand-muted">
+                      {vi
+                        ? 'Gửi nguyên bit PCM đến DAC MQA Full Decoder qua WASAPI Exclusive. Âm lượng số được giữ 100%; EQ, ReplayGain, crossfade, resample và DSP bị bỏ qua.'
+                        : 'Preserves the PCM payload for an MQA Full Decoder over WASAPI Exclusive. Digital gain stays at 100%; EQ, ReplayGain, crossfade, resampling, and DSP are bypassed.'}
+                    </span>
+                    {settings.mqa_passthrough && (
+                      <span className="mt-2 block text-xs font-medium text-amber-400" role="status">
+                        {vi
+                          ? 'Đầu ra được bảo vệ · Điều chỉnh âm lượng trên DAC/ampli · App không thực hiện MQA Core Decode.'
+                          : 'Protected output · Adjust volume on the DAC/amplifier · The app does not perform MQA Core Decode.'}
+                      </span>
+                    )}
+                  </span>
+                </label>
+              </div>
             <div className="space-y-2">
               <label
                 htmlFor="audio-backend"
@@ -1322,7 +1485,9 @@ export const SettingsView: React.FC = () => {
                 onChange={event => handleAdvancedOptionChange({ audio_backend: event.target.value as AudioBackend })}
                 className="min-h-11 w-full rounded-xl border border-brand-border bg-oled-base px-4 py-2.5 text-xs text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:opacity-60 sm:text-sm"
               >
-                <option value="shared">WASAPI Shared</option>
+                <option value="shared">
+                  WASAPI Shared
+                </option>
                 <option
                   value="wasapi_exclusive"
                   disabled={advancedGating.exclusiveBackendDisabled}
@@ -1424,6 +1589,8 @@ export const SettingsView: React.FC = () => {
             </div>
           </div>
         )}
+        </>
+        )}
 
         {/* Current engine status */}
         <div
@@ -1491,7 +1658,9 @@ export const SettingsView: React.FC = () => {
             </>
           ) : (
             <p className="text-xs text-brand-muted">
-              {vi ? 'Chưa phát nhạc' : 'Not playing'}
+              {runtime === 'web'
+                ? (vi ? 'nnpm-audio-core · Chưa phát nhạc' : 'nnpm-audio-core · Not playing')
+                : (vi ? 'Chưa phát nhạc' : 'Not playing')}
             </p>
           )}
         </div>
@@ -1505,7 +1674,7 @@ export const SettingsView: React.FC = () => {
             </div>
             {!eqAvailable && (
               <p className="pl-6 text-[11px] leading-relaxed text-brand-muted">
-                {t('settings_equalizer_unavailable', settings.language)}
+                {t(runtime === 'web' ? 'settings_equalizer_unavailable_web' : 'settings_equalizer_unavailable', settings.language)}
               </p>
             )}
           </div>
@@ -1520,7 +1689,10 @@ export const SettingsView: React.FC = () => {
             {t('settings_open_equalizer', settings.language)}
           </Button>
         </div>
+        </>
+        )}
       </section>
+      )}
 
       {/* 3. Appearance & Language */}
       <section className="p-6 rounded-2xl bg-oled-card border border-brand-border space-y-5 shadow-card-elevated">
@@ -1558,10 +1730,11 @@ export const SettingsView: React.FC = () => {
 
           {/* Language Selector */}
           <div className="flex flex-col gap-2">
-            <label className="text-xs font-semibold text-brand-muted uppercase tracking-wider">
+            <label htmlFor="settings-language" className="text-xs font-semibold text-brand-muted uppercase tracking-wider">
               {t('settings_language', settings.language)}
             </label>
             <select
+              id="settings-language"
               value={settings.language}
               onChange={e => setLanguage(e.target.value as 'vi' | 'en')}
               className="bg-oled-base border border-brand-border rounded-xl px-3.5 py-2 text-xs sm:text-sm text-brand-foreground"
@@ -1629,6 +1802,7 @@ export const SettingsView: React.FC = () => {
       </section>
 
       {/* 4. Desktop behavior */}
+      {canConfigureDesktopBehavior && (
       <section className="rounded-2xl border border-brand-border bg-oled-card px-6 shadow-card-elevated">
         <div className="flex items-center gap-2.5 border-b border-brand-border/60 py-4">
           <Power className="h-5 w-5 text-brand-accent" aria-hidden="true" />
@@ -1640,7 +1814,7 @@ export const SettingsView: React.FC = () => {
         <div className="divide-y divide-brand-border/60">
           <SettingsSwitch
             checked={settings.launch_on_startup}
-            disabled={isUpdatingStartup}
+            disabled={!canUseAutostart || isUpdatingStartup}
             loading={isUpdatingStartup}
             label={t('settings_startup', settings.language)}
             description={t('settings_startup_desc', settings.language)}
@@ -1654,6 +1828,7 @@ export const SettingsView: React.FC = () => {
           />
           <SettingsSwitch
             checked={settings.discord_presence_enabled}
+            disabled={!canUseDiscordPresence}
             label={t('settings_discord_presence', settings.language)}
             description={t('settings_discord_presence_desc', settings.language)}
             onChange={handleDiscordPresenceChange}
@@ -1661,8 +1836,10 @@ export const SettingsView: React.FC = () => {
         </div>
 
       </section>
+      )}
 
       {/* 5. Backup & Restore */}
+      {canBackupDatabase && (
       <section className="p-6 rounded-2xl bg-oled-card border border-brand-border space-y-4 shadow-card-elevated">
         <div className="flex items-center gap-2.5 pb-3 border-b border-brand-border/60">
           <Download className="w-5 h-5 text-brand-accent" />
@@ -1680,23 +1857,31 @@ export const SettingsView: React.FC = () => {
             size="md"
             variant="secondary"
             icon={<Download className="w-4 h-4" />}
-            onClick={handleExportBackup}
+            disabled={!canBackupDatabase}
+            onClick={() => {
+              if (!canBackupDatabase) return;
+              void handleExportBackup();
+            }}
           >
             {t('settings_btn_export_backup', settings.language)}
           </Button>
 
-          <label className="inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus-visible:outline-none min-h-[44px] px-4 py-2 text-sm gap-2 bg-brand-primary text-white hover:brightness-110 border border-brand-border cursor-pointer shadow-sm">
+          <label className={`inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus-visible:outline-none min-h-[44px] px-4 py-2 text-sm gap-2 bg-brand-primary text-white hover:brightness-110 border border-brand-border shadow-sm ${
+            canBackupDatabase ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+          }`}>
             <Upload className="w-4 h-4" />
             <span>{t('settings_btn_import_backup', settings.language)}</span>
             <input
               type="file"
               accept=".json"
+              disabled={!canBackupDatabase}
               onChange={handleImportBackup}
               className="sr-only"
             />
           </label>
         </div>
       </section>
+      )}
     </div>
   );
 };

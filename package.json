@@ -3,14 +3,34 @@
   "version": "2.0.0",
   "private": true,
   "license": "GPL-3.0-only",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "tauri": "node scripts/run-tauri.mjs",
+    "build:audio-wasm": "node scripts/build-audio-wasm.mjs",
     "tauri:dev": "node scripts/run-tauri.mjs dev",
     "tauri:build": "node scripts/run-tauri.mjs build",
     "dev": "npm --prefix web run dev",
     "build": "npm --prefix web run build",
     "test": "npm --prefix web run test",
-    "typecheck": "npm --prefix web run typecheck"
+    "typecheck": "npm --prefix web run typecheck",
+    "server:dev": "npm --prefix server run dev",
+    "server:typecheck": "npm --prefix server run typecheck",
+    "server:test": "npm --prefix server run test",
+    "server:build": "npm --prefix server run build",
+    "server:migrate": "npm --prefix server run migrate",
+    "server:grant-role": "npm --prefix server run grant-role",
+    "server:revoke-role": "npm --prefix server run revoke-role",
+    "server:cleanup-uploads": "npm --prefix server run cleanup-uploads",
+    "server:worker": "npm --prefix server run worker",
+    "server:generate-test-media": "npm --prefix server run generate-test-media",
+    "server:ensure-storage": "npm --prefix server run ensure-storage",
+    "server:smoke:e2e": "npm --prefix server run smoke:e2e",
+    "infra:up": "docker compose -f infra/compose.yml up -d",
+    "infra:down": "docker compose -f infra/compose.yml down",
+    "smoke:up": "docker compose -f infra/compose.smoke.yml up -d --build",
+    "smoke:test": "node scripts/smoke-compose-test.mjs",
+    "smoke:down": "docker compose -f infra/compose.smoke.yml down -v --remove-orphans"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.0"

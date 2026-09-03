@@ -12,7 +12,7 @@ interface AlbumArtworkProps {
   alt?: string;
 }
 
-/** Uses the cached album art first, then embedded art from any track in the album. */
+/** Prefers catalog/embedded cover over iTunes cache so admin-uploaded art is not overwritten. */
 export const AlbumArtwork: React.FC<AlbumArtworkProps> = ({
   album,
   className = '',
@@ -20,6 +20,29 @@ export const AlbumArtwork: React.FC<AlbumArtworkProps> = ({
   iconClassName,
   alt,
 }) => {
+  const catalogTrack = album.tracks.find(track => track.cover_art_path) ?? null;
+  const catalogCover = album.cover_url || catalogTrack?.cover_art_path || null;
+  if (catalogCover) {
+    return (
+      <TrackArtwork
+        track={catalogTrack ?? {
+          id: album.id,
+          title: album.name,
+          artist: album.artist,
+          album: album.name,
+          duration: 0,
+          path: '',
+          date_added: '',
+          cover_art_path: catalogCover,
+        }}
+        className={className}
+        imageClassName={imageClassName}
+        iconClassName={iconClassName}
+        alt={alt ?? `${album.name} cover`}
+      />
+    );
+  }
+
   const cachedAlbumArtwork = getCachedArtwork('album', album.artist, album.name);
   if (cachedAlbumArtwork) {
     return (
@@ -31,7 +54,7 @@ export const AlbumArtwork: React.FC<AlbumArtworkProps> = ({
         alt={alt ?? `${album.name} cover`}
         fallback={(
           <TrackArtwork
-            track={album.tracks.find(track => track.cover_art_path) ?? album.tracks[0] ?? null}
+            track={album.tracks[0] ?? null}
             className="h-full w-full"
             imageClassName={imageClassName}
             iconClassName={iconClassName}
@@ -42,10 +65,9 @@ export const AlbumArtwork: React.FC<AlbumArtworkProps> = ({
     );
   }
 
-  const embeddedTrack = album.tracks.find(track => track.cover_art_path) ?? album.tracks[0] ?? null;
   return (
     <TrackArtwork
-      track={embeddedTrack}
+      track={album.tracks[0] ?? null}
       className={className}
       imageClassName={imageClassName}
       iconClassName={iconClassName}

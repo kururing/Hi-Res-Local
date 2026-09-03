@@ -6,7 +6,7 @@ import { usePlayer } from '../../context/PlayerContext';
 import { t } from '../../i18n';
 import { Check, Trash2, Plus } from 'lucide-react';
 import { isEqualizerAvailable } from '../../services/playbackDisplay';
-import { IpcService } from '../../services/ipc';
+import { PlatformUnsupportedError, usePlatform } from '../../platform';
 
 const FREQUENCY_LABELS = ['31Hz', '62Hz', '125Hz', '250Hz', '500Hz', '1kHz', '2kHz', '4kHz', '8kHz', '16kHz'];
 const FLAT_GAINS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -26,10 +26,12 @@ export const EqualizerModal: React.FC = () => {
     deleteCustomEqPreset,
     applyEqPreset,
   } = useSettings();
+  const { runtime, audioConfiguration } = usePlatform();
+  const dspSupported = runtime !== 'web';
 
   const [customName, setCustomName] = useState('');
   const [isSavingCustom, setIsSavingCustom] = useState(false);
-  const eqAvailable = isEqualizerAvailable(engineStatus, settings);
+  const eqAvailable = dspSupported && isEqualizerAvailable(engineStatus, settings);
   const configuredGains = settings.eq_preset_id === 'custom'
     ? settings.eq_custom_gains
     : (eqPresets.find(preset => preset.id === settings.eq_preset_id)?.gains || FLAT_GAINS);
@@ -56,6 +58,17 @@ export const EqualizerModal: React.FC = () => {
 
   useEffect(() => clearPendingPreview, [clearPendingPreview]);
 
+  const applyEqualizer = useCallback((enabled: boolean, gains: number[]) => {
+    if (!dspSupported) return;
+    void audioConfiguration.setEqualizer(enabled, gains).catch(error => {
+      if (error instanceof PlatformUnsupportedError) {
+        console.error('Equalizer is not available in this runtime', error);
+        return;
+      }
+      console.error('Failed to apply equalizer', error);
+    });
+  }, [audioConfiguration, dspSupported]);
+
   const scheduleEqPreview = useCallback((gains: number[]) => {
     pendingPreviewRef.current = [...gains];
     if (previewTimerRef.current !== null) return;
@@ -65,9 +78,9 @@ export const EqualizerModal: React.FC = () => {
       const nextGains = pendingPreviewRef.current;
       pendingPreviewRef.current = null;
       if (!nextGains) return;
-      void IpcService.invoke('set_equalizer', { enabled: true, gains: nextGains });
+      applyEqualizer(true, nextGains);
     }, EQ_PREVIEW_INTERVAL_MS);
-  }, []);
+  }, [applyEqualizer]);
 
   const commitEqChanges = useCallback(() => {
     if (!isAdjustingEqRef.current) return;
@@ -87,11 +100,8 @@ export const EqualizerModal: React.FC = () => {
     const nextGains = [...configuredGains];
     draftGainsRef.current = nextGains;
     setDraftGains(nextGains);
-    void IpcService.invoke('set_equalizer', {
-      enabled: settings.eq_enabled,
-      gains: nextGains,
-    });
-  }, [clearPendingPreview, configuredGains, settings.eq_enabled]);
+    applyEqualizer(settings.eq_enabled, nextGains);
+  }, [applyEqualizer, clearPendingPreview, configuredGains, settings.eq_enabled]);
 
   useEffect(() => {
     if (!eqAvailable && isEqualizerOpen) {

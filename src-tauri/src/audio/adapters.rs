@@ -174,6 +174,8 @@ mod tests {
             year: None,
             genre: None,
             replay_gain: None,
+            stream_url: None,
+            stream_expires_at: None,
         };
 
         assert!(adapter.update_metadata(&track, 240000).is_ok());

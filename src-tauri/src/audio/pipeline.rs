@@ -19,7 +19,7 @@ use crate::audio::dto::{
 };
 use crate::audio::gapless::{GaplessController, PreloadedTrack};
 #[cfg(windows)]
-use crate::audio::pcm::{format_sample_rate_khz, AudioFormat, PcmSampleFormat};
+use crate::audio::pcm::{format_sample_rate_khz, frame_aligned_len, AudioFormat, PcmSampleFormat};
 #[cfg(windows)]
 use crate::audio::pcm_convert::f32_to_pcm_bytes;
 #[cfg(windows)]
@@ -83,9 +83,18 @@ pub struct AudioPipeline {
     pub output_pcm_format: Mutex<Option<(AudioFormat, bool)>>,
     #[cfg(windows)]
     pub output_device: Mutex<Option<crate::audio::dto::AudioDeviceDTO>>,
+    #[cfg(windows)]
+    pub wire_logged: AtomicBool,
+    #[cfg(windows)]
+    pub render_buffer_frames: AtomicU32,
+    #[cfg(windows)]
+    pub render_period_100ns: AtomicU64,
+    #[cfg(windows)]
+    pub render_wave_describe: Mutex<Option<String>>,
     pub pending_reset: Arc<AtomicBool>,
     pub exclusive_mode: AtomicBool,
     pub bit_perfect: AtomicBool,
+    pub mqa_passthrough: AtomicBool,
     /// [`DsdOutputMode::to_index`]: 0 = Native DSD, 1 = DoP, 2 = DSD → PCM.
     /// Only consulted directly in Advanced mode; Auto/HQ resolve per track.
     pub dsd_output_mode: AtomicU32,
@@ -150,9 +159,18 @@ impl AudioPipeline {
             output_pcm_format: Mutex::new(None),
             #[cfg(windows)]
             output_device: Mutex::new(None),
+            #[cfg(windows)]
+            wire_logged: AtomicBool::new(false),
+            #[cfg(windows)]
+            render_buffer_frames: AtomicU32::new(0),
+            #[cfg(windows)]
+            render_period_100ns: AtomicU64::new(0),
+            #[cfg(windows)]
+            render_wave_describe: Mutex::new(None),
             pending_reset: Arc::new(AtomicBool::new(false)),
             exclusive_mode: AtomicBool::new(false),
             bit_perfect: AtomicBool::new(false),
+            mqa_passthrough: AtomicBool::new(false),
             dsd_output_mode: AtomicU32::new(DsdOutputMode::Pcm.to_index()),
             playback_mode: AtomicU32::new(PlaybackMode::Auto.to_index()),
             advanced_backend: AtomicU32::new(AudioBackend::Shared.to_index()),
@@ -198,6 +216,20 @@ impl AudioPipeline {
     #[cfg(windows)]
     pub fn set_pcm_producer(&self, producer: PcmRingProducer) {
         *recover_mutex(&self.pcm_producer) = Some(producer);
+    }
+
+    #[cfg(windows)]
+    pub fn clear_pcm_producer(&self) {
+        *recover_mutex(&self.pcm_producer) = None;
+    }
+
+    #[cfg(windows)]
+    pub fn set_render_wire(&self, wave: String, buffer_frames: u32, period_100ns: i64) {
+        *recover_mutex(&self.render_wave_describe) = Some(wave);
+        self.render_buffer_frames
+            .store(buffer_frames, Ordering::Relaxed);
+        self.render_period_100ns
+            .store(period_100ns.max(0) as u64, Ordering::Relaxed);
     }
 
     #[cfg(windows)]
@@ -414,33 +446,85 @@ pub fn resolve_plan(
     advanced_backend: AudioBackend,
     advanced_transport: DsdOutputMode,
 ) -> Vec<PlanStep> {
+    resolve_plan_for_source(
+        mode,
+        is_dsd,
+        advanced_backend,
+        advanced_transport,
+        None,
+        false,
+        false,
+    )
+}
+
+/// Same as [`resolve_plan`], with source details used while selecting a route.
+pub fn resolve_plan_for_source(
+    mode: PlaybackMode,
+    is_dsd: bool,
+    advanced_backend: AudioBackend,
+    advanced_transport: DsdOutputMode,
+    dsd_rate: Option<crate::audio::dto::DsdRate>,
+    is_mqa_payload_verified: bool,
+    mqa_passthrough: bool,
+) -> Vec<PlanStep> {
+    use nnpm_audio_core::router::{
+        AudioBackend as CoreBackend, DacCaps, DsdOutputMode as CoreDsd, OutputRoute, OutputRouter,
+        PlaybackMode as CoreMode, RouterInput,
+    };
+    use nnpm_audio_core::types::DsdRate as CoreRate;
+
+    let core_rate = dsd_rate.map(|rate| match rate {
+        crate::audio::dto::DsdRate::Dsd64 => CoreRate::Dsd64,
+        crate::audio::dto::DsdRate::Dsd128 => CoreRate::Dsd128,
+        crate::audio::dto::DsdRate::Dsd256 => CoreRate::Dsd256,
+        crate::audio::dto::DsdRate::Dsd512 => CoreRate::Dsd512,
+        crate::audio::dto::DsdRate::Dsd1024 => CoreRate::Dsd1024,
+    });
+    let input = RouterInput {
+        mode: match mode {
+            PlaybackMode::Auto => CoreMode::Auto,
+            PlaybackMode::HighQuality => CoreMode::HighQuality,
+            PlaybackMode::Multitask => CoreMode::Multitask,
+            PlaybackMode::Advanced => CoreMode::Advanced,
+        },
+        is_dsd,
+        is_mqa: is_mqa_payload_verified,
+        dsd_rate: core_rate,
+        backend: match advanced_backend {
+            AudioBackend::Shared => CoreBackend::Shared,
+            AudioBackend::WasapiExclusive => CoreBackend::WasapiExclusive,
+            AudioBackend::Asio => CoreBackend::Asio,
+        },
+        dsd_mode: match advanced_transport {
+            DsdOutputMode::NativeDsd => CoreDsd::NativeDsd,
+            DsdOutputMode::Dop => CoreDsd::Dop,
+            DsdOutputMode::Pcm => CoreDsd::Pcm,
+        },
+        // Auto/HQ always attempt Exclusive bit-perfect for PCM, matching the
+        // historical fallback list. Exclusive occupancy still requires a free DAC.
+        bit_perfect: true,
+        mqa_passthrough,
+        caps: DacCaps {
+            exclusive: true,
+            dop_rates: vec![CoreRate::Dsd64, CoreRate::Dsd128, CoreRate::Dsd256],
+            native_dsd_rates: CoreRate::ALL.to_vec(),
+            mqa_renderer: false,
+            web: false,
+        },
+    };
+
     match mode {
-        PlaybackMode::Multitask => vec![PlanStep::Shared],
-        PlaybackMode::Auto => {
-            if is_dsd {
-                // Native DSD and DoP both sound like static on a PCM endpoint.
-                // Auto therefore converts DSD → band-limited PCM, then Shared.
-                vec![PlanStep::ExclusivePcm, PlanStep::Shared]
-            } else {
-                vec![
-                    PlanStep::ExclusiveBitPerfect,
-                    PlanStep::ExclusivePcm,
-                    PlanStep::Shared,
-                ]
-            }
-        }
-        PlaybackMode::HighQuality => {
-            if is_dsd {
-                // Never bit-perfect-wire a DSD source, and never auto-select
-                // DoP: Exclusive DSD → PCM, then Shared. DoP is Advanced-only.
-                vec![PlanStep::ExclusivePcm, PlanStep::Shared]
-            } else {
-                vec![
-                    PlanStep::ExclusiveBitPerfect,
-                    PlanStep::ExclusivePcm,
-                    PlanStep::Shared,
-                ]
-            }
+        PlaybackMode::Auto | PlaybackMode::HighQuality | PlaybackMode::Multitask => {
+            OutputRouter::plan(&input)
+                .into_iter()
+                .filter_map(|route| match route {
+                    OutputRoute::NativeDsd => Some(PlanStep::NativeDsd),
+                    OutputRoute::Dop => Some(PlanStep::Dop),
+                    OutputRoute::ExclusiveBitPerfect => Some(PlanStep::ExclusiveBitPerfect),
+                    OutputRoute::ExclusivePcm => Some(PlanStep::ExclusivePcm),
+                    OutputRoute::Shared | OutputRoute::WebAudio => Some(PlanStep::Shared),
+                })
+                .collect()
         }
         PlaybackMode::Advanced => {
             if is_dsd {
@@ -448,7 +532,11 @@ pub fn resolve_plan(
                     (AudioBackend::Asio, _) | (_, DsdOutputMode::NativeDsd) => {
                         vec![PlanStep::NativeDsd]
                     }
-                    (AudioBackend::WasapiExclusive, DsdOutputMode::Dop) => vec![PlanStep::Dop],
+                    (AudioBackend::WasapiExclusive, DsdOutputMode::Dop) => {
+                        // Advanced is strict: an unsupported DoP rate must fail
+                        // in try_dop, never change the user's transport to PCM.
+                        vec![PlanStep::Dop]
+                    }
                     (AudioBackend::Shared, DsdOutputMode::Dop) => vec![PlanStep::Shared],
                     (AudioBackend::WasapiExclusive, DsdOutputMode::Pcm) => {
                         vec![PlanStep::ExclusivePcm]
@@ -460,7 +548,6 @@ pub fn resolve_plan(
                     AudioBackend::WasapiExclusive => {
                         vec![PlanStep::ExclusiveBitPerfect, PlanStep::ExclusivePcm]
                     }
-                    // ASIO PCM is not implemented; do not advertise it.
                     AudioBackend::Asio | AudioBackend::Shared => vec![PlanStep::Shared],
                 }
             }
@@ -613,6 +700,7 @@ fn decode_loop(
                         pcm_leftover.clear();
                         drain_deadline = None;
                         dop = None;
+                        pipeline.wire_logged.store(false, Ordering::Relaxed);
                         if let Some(dsd_rate) = close_native_session(&mut native, &pipeline) {
                             let _ = event_tx.send(AudioEvent::NativeDsdStatus {
                                 active: false,
@@ -929,6 +1017,30 @@ fn is_dsd_path(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn peek_dsd_rate(path: &str) -> Option<crate::audio::dto::DsdRate> {
+    let mut source = nnpm_audio_core::source::MediaSource::open_file(path).ok()?;
+    let mut head = vec![0u8; 256 * 1024];
+    use std::io::Read;
+    let n = source.read(&mut head).ok()?;
+    let format = nnpm_audio_core::dsd::parse_header(&head[..n], source.len()).ok()?;
+    Some(match format.dsd_rate {
+        nnpm_audio_core::types::DsdRate::Dsd64 => crate::audio::dto::DsdRate::Dsd64,
+        nnpm_audio_core::types::DsdRate::Dsd128 => crate::audio::dto::DsdRate::Dsd128,
+        nnpm_audio_core::types::DsdRate::Dsd256 => crate::audio::dto::DsdRate::Dsd256,
+        nnpm_audio_core::types::DsdRate::Dsd512 => crate::audio::dto::DsdRate::Dsd512,
+        nnpm_audio_core::types::DsdRate::Dsd1024 => crate::audio::dto::DsdRate::Dsd1024,
+    })
+}
+
+fn peek_mqa_payload_verified(path: &str) -> bool {
+    let Ok(mut source) = nnpm_audio_core::source::MediaSource::open_file(path) else {
+        return false;
+    };
+    nnpm_audio_core::mqa::MqaDetector::detect(&mut source, &[])
+        .map(|info| info.payload_verified())
+        .unwrap_or(false)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_open(
     pipeline: &AudioPipeline,
@@ -949,12 +1061,28 @@ fn handle_open(
 
     #[cfg(windows)]
     {
-        let is_dsd = is_dsd_path(&track.path);
+        let is_dsd = !track.is_http_stream() && is_dsd_path(&track.path);
+        let dsd_rate = if is_dsd {
+            peek_dsd_rate(&track.path)
+        } else {
+            None
+        };
         let mode = PlaybackMode::from_index(pipeline.playback_mode.load(Ordering::Acquire));
         let advanced_backend =
             AudioBackend::from_index(pipeline.advanced_backend.load(Ordering::Acquire));
         let transport = DsdOutputMode::from_index(pipeline.dsd_output_mode.load(Ordering::Acquire));
-        let plan = resolve_plan(mode, is_dsd, advanced_backend, transport);
+        let mqa_passthrough = pipeline.mqa_passthrough.load(Ordering::Acquire);
+        let is_mqa_payload_verified =
+            mqa_passthrough && !track.is_http_stream() && peek_mqa_payload_verified(&track.path);
+        let plan = resolve_plan_for_source(
+            mode,
+            is_dsd,
+            advanced_backend,
+            transport,
+            dsd_rate,
+            is_mqa_payload_verified,
+            mqa_passthrough,
+        );
         let mut reasons: Vec<String> = Vec::new();
         if let Some(reason) = asio_pcm_shared_reason(mode, is_dsd, advanced_backend) {
             reasons.push(reason.into());
@@ -1014,11 +1142,13 @@ fn handle_open(
                     );
                 }
             }
-            let message = if reasons.is_empty() {
-                "No playable audio path is available".to_string()
-            } else {
-                reasons.join(" | ")
-            };
+            // `reasons` is ordered from the preferred route to the terminal
+            // fallback.  Earlier failures (for example a normal bit-perfect
+            // rejection) are diagnostic context, not the reason playback
+            // ultimately stopped.  Sending the whole chain made the UI match
+            // the first "Format not supported by DAC" fragment even when the
+            // real failure came later from the Shared decoder.
+            let message = terminal_playback_error(&reasons);
             let _ = event_tx.send(AudioEvent::ErrorOccurred(message));
             let _ = event_tx.send(AudioEvent::StateChanged(PlaybackState::Stopped));
         }
@@ -1098,6 +1228,14 @@ fn fallback_reason_of(reasons: &[String]) -> Option<String> {
     }
 }
 
+#[cfg(windows)]
+fn terminal_playback_error(reasons: &[String]) -> String {
+    reasons
+        .last()
+        .cloned()
+        .unwrap_or_else(|| "No playable audio path is available".to_string())
+}
+
 /// Advanced + ASIO is Native DSD only. PCM files still open Shared; surface
 /// that so the settings status does not look like a silent WASAPI Exclusive miss.
 const ASIO_PCM_SHARED_REASON: &str =
@@ -1167,6 +1305,12 @@ fn try_native_dsd(
 ) -> crate::audio::error::AudioResult<bool> {
     use crate::audio::error::AudioError;
 
+    if track.is_http_stream() {
+        return Err(crate::audio::error::AudioError::Playback(
+            "Cloud HTTP streams cannot use Native DSD or DoP; choose DSD → PCM or play a local file"
+                .into(),
+        ));
+    }
     let path = std::path::Path::new(&track.path);
     if mode != PlaybackMode::Advanced {
         let format =
@@ -1282,6 +1426,12 @@ fn try_dop(
     dop: &mut Option<DopSession>,
     reasons: &[String],
 ) -> crate::audio::error::AudioResult<bool> {
+    if track.is_http_stream() {
+        return Err(crate::audio::error::AudioError::Playback(
+            "Cloud HTTP streams cannot use Native DSD or DoP; choose DSD → PCM or play a local file"
+                .into(),
+        ));
+    }
     let mut reader = crate::audio::dop::DopReader::open(std::path::Path::new(&track.path))?;
     let format = reader.format().clone();
     let pcm_rate = reader.pcm_rate();
@@ -1521,6 +1671,9 @@ fn try_shared(
     let rate = pipeline.sample_rate.load(Ordering::Relaxed);
     let ch = pipeline.channels.load(Ordering::Relaxed) as u16;
     if is_dsd || quality.source_type.as_deref() == Some("DSD") {
+        // Convert directly to the Windows mix rate in one high-quality SWR
+        // pass. The DSD decoder applies an explicit ultrasonic cutoff, so a
+        // second linear resample is neither needed nor desirable here.
         gapless.set_decoder_output_format(Some(AudioFormat::f32(rate, source.channels)))?;
     }
     gapless.set_output_spec(rate, ch);
@@ -1530,9 +1683,13 @@ fn try_shared(
     let status = EngineStatus {
         output_mode: "WASAPI Shared".into(),
         bit_perfect: false,
-        is_native: source.sample_rate == rate && source.channels == ch,
+        // Shared always traverses the Windows mix engine even when rates match.
+        is_native: false,
         output_sample_rate: rate,
-        output_bit_depth: source.bit_depth,
+        output_bit_depth: pipeline
+            .output_pcm_format()
+            .map(|(format, _)| format.bit_depth)
+            .unwrap_or(32),
         source_label: crate::audio::control::source_label_from_format(&source, Some(&quality)),
         backend: AudioBackend::Shared,
         dsd_output_mode: if is_dsd_source {
@@ -1587,6 +1744,8 @@ fn fill_ring(
     let n = vacant.min(scratch.len());
     match gapless.read_samples(&mut scratch[..n]) {
         Ok((written, transitioned, is_eof)) => {
+            #[cfg(windows)]
+            log_audio_wire_once(pipeline, gapless, false);
             if let Some(transition) = transitioned {
                 rg.update(rg_config, gapless.current_replay_gain().as_ref());
                 let occupied = {
@@ -1607,8 +1766,14 @@ fn fill_ring(
 
             if written > 0 {
                 let buf = &mut scratch[..written];
-                rg.process_interleaved(buf);
-                eq.process_interleaved(buf);
+                // DSD → PCM already has −6 dB SACD gain and a Kaiser FIR.
+                // Keep the Shared path minimal and deterministic: ReplayGain
+                // and EQ can destabilize very-high-rate float PCM and are not
+                // part of the clean probe path used to validate conversion.
+                if !gapless.current_is_dsd() {
+                    rg.process_interleaved(buf);
+                    eq.process_interleaved(buf);
+                }
                 let mut guard = recover_mutex(&pipeline.producer);
                 if let Some(prod) = guard.as_mut() {
                     let _ = prod.push_slice(buf);
@@ -1621,18 +1786,33 @@ fn fill_ring(
             }
         }
         Err(err) => {
-            let _ = event_tx.send(AudioEvent::ErrorOccurred(err.to_string()));
-            thread::sleep(Duration::from_millis(4));
+            stop_after_decode_error(pipeline, event_tx, err.to_string());
         }
     }
 }
 
+fn stop_after_decode_error(
+    pipeline: &AudioPipeline,
+    event_tx: &broadcast::Sender<AudioEvent>,
+    message: String,
+) {
+    // A decoder cannot recover by retrying the same failed packet/context.
+    // Stop once so cloud URL renewal can install a fresh decoder without a
+    // tight loop flooding the UI with the same error every few milliseconds.
+    if pipeline.is_playing.swap(false, Ordering::AcqRel) {
+        let _ = event_tx.send(AudioEvent::ErrorOccurred(message));
+        let _ = event_tx.send(AudioEvent::StateChanged(PlaybackState::Stopped));
+    }
+}
+
 #[cfg(windows)]
-fn output_bytes_per_sample(pipeline: &AudioPipeline) -> usize {
+fn output_bytes_per_frame(pipeline: &AudioPipeline) -> usize {
     pipeline
         .output_pcm_format()
-        .map(|(f, packed)| if packed { 3 } else { f.bytes_per_sample() })
-        .unwrap_or(4)
+        .map(|(f, packed)| f.bytes_per_frame_packed(packed))
+        .unwrap_or_else(|| {
+            4usize.saturating_mul(pipeline.channels.load(Ordering::Relaxed).max(1) as usize)
+        })
         .max(1)
 }
 
@@ -1657,19 +1837,26 @@ fn push_pcm_bytes(pipeline: &AudioPipeline, leftover: &mut Vec<u8>, incoming: &[
     if leftover.is_empty() {
         return 0;
     }
-    let bpf = output_bytes_per_sample(pipeline)
-        .saturating_mul(pipeline.channels.load(Ordering::Relaxed).max(1) as usize)
-        .max(1);
+    let bpf = output_bytes_per_frame(pipeline);
+    debug_assert!(bpf >= 2, "stereo frame must be at least 2 bytes per sample");
     let mut guard = recover_mutex(&pipeline.pcm_producer);
     let Some(prod) = guard.as_mut() else {
         return 0;
     };
-    let aligned = (prod.available() / bpf) * bpf;
-    if aligned == 0 {
+    let aligned_space = frame_aligned_len(prod.available(), bpf);
+    if aligned_space == 0 {
         return 0;
     }
-    let n = leftover.len().min(aligned);
+    let n = frame_aligned_len(leftover.len().min(aligned_space), bpf);
+    if n == 0 {
+        return 0;
+    }
     let written = prod.push_bytes(&leftover[..n]);
+    debug_assert_eq!(
+        written % bpf,
+        0,
+        "PCM ring write must be a multiple of blockAlign={bpf}"
+    );
     if written == leftover.len() {
         leftover.clear();
     } else if written > 0 {
@@ -1779,6 +1966,53 @@ fn engine_status_from_gapless(
 }
 
 #[cfg(windows)]
+fn log_audio_wire_once(pipeline: &AudioPipeline, gapless: &GaplessController, exclusive: bool) {
+    if pipeline.wire_logged.load(Ordering::Acquire) {
+        return;
+    }
+    let wave_describe = recover_mutex(&pipeline.render_wave_describe)
+        .clone()
+        .unwrap_or_default();
+    if exclusive && wave_describe.is_empty() {
+        return;
+    }
+    if pipeline.wire_logged.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let decoder = gapless.current_decoder();
+    let badge = gapless.current_quality_badge();
+    let source = decoder.map(|d| d.source_format());
+    let (out_fmt, packed) = pipeline.output_pcm_format().unzip();
+    let packed = packed.unwrap_or(false);
+    let bpf = output_bytes_per_frame(pipeline);
+    let channels = source.map(|f| f.channels).unwrap_or(2);
+    tracing::info!(
+        target: "audio.wire",
+        codec = badge.as_ref().map(|b| b.codec_name.as_str()).unwrap_or("unknown"),
+        source_rate = source.map(|f| f.sample_rate).unwrap_or(0),
+        source_channels = channels,
+        source_bits = decoder.map(|d| d.bit_depth()).unwrap_or(0),
+        decoded_repr = decoder.map(|d| d.decoded_repr().as_str()).unwrap_or("unknown"),
+        planar = decoder.map(|d| d.decoded_planar()).unwrap_or(true),
+        source_layout = decoder.map(|d| d.channel_layout()).unwrap_or("FRONT_LEFT | FRONT_RIGHT"),
+        exclusive,
+        render_rate = out_fmt.map(|f| f.sample_rate).unwrap_or(0),
+        render_channels = out_fmt.map(|f| u32::from(f.channels)).unwrap_or(0),
+        w_bits = out_fmt.map(|f| if packed { 24 } else { f.bit_depth }),
+        valid_bits = out_fmt.map(|f| f.bit_depth),
+        block_align = bpf,
+        avg_bytes_per_sec = out_fmt.map(|f| f.sample_rate.saturating_mul(bpf as u32)),
+        channel_mask = if channels >= 2 { "FL|FR" } else { "FL" },
+        sub_format = out_fmt.map(|f| if f.is_float() { "IEEE_FLOAT" } else { "PCM" }),
+        bytes_per_frame = bpf,
+        buffer_frames = pipeline.render_buffer_frames.load(Ordering::Relaxed),
+        device_period_100ns = pipeline.render_period_100ns.load(Ordering::Relaxed),
+        wave = wave_describe.as_str(),
+        "track wire format"
+    );
+}
+
+#[cfg(windows)]
 fn fill_ring_bit_perfect(
     pipeline: &AudioPipeline,
     gapless: &mut GaplessController,
@@ -1790,6 +2024,7 @@ fn fill_ring_bit_perfect(
     if leftover.is_empty() {
         match gapless.read_pcm_bytes(byte_scratch) {
             Ok((written, _, input_drained)) => {
+                log_audio_wire_once(pipeline, gapless, true);
                 if written > 0 {
                     leftover.extend_from_slice(&byte_scratch[..written]);
                     byte_scratch.clear();
@@ -1800,8 +2035,7 @@ fn fill_ring_bit_perfect(
                 }
             }
             Err(err) => {
-                let _ = event_tx.send(AudioEvent::ErrorOccurred(err.to_string()));
-                thread::sleep(Duration::from_millis(4));
+                stop_after_decode_error(pipeline, event_tx, err.to_string());
             }
         }
     } else {
@@ -1888,13 +2122,17 @@ fn fill_ring_wasapi(
     }
 
     let vacant = ring_vacant_bytes(pipeline);
-    let bps = output_bytes_per_sample(pipeline);
-    if vacant < bps {
+    let bpf = output_bytes_per_frame(pipeline);
+    if vacant < bpf {
         thread::sleep(Duration::from_millis(2));
         return;
     }
 
-    let max_samples = (vacant / bps).min(scratch.len()).min(4096);
+    let channels = pipeline.channels.load(Ordering::Relaxed).max(1) as usize;
+    let max_frames = (vacant / bpf)
+        .min(scratch.len() / channels.max(1))
+        .min(4096);
+    let max_samples = max_frames.saturating_mul(channels);
     if max_samples == 0 {
         thread::sleep(Duration::from_millis(2));
         return;
@@ -1902,12 +2140,11 @@ fn fill_ring_wasapi(
 
     match gapless.read_samples(&mut scratch[..max_samples]) {
         Ok((written, transitioned, is_eof)) => {
+            log_audio_wire_once(pipeline, gapless, true);
             if let Some(transition) = transitioned {
                 rg.update(rg_config, gapless.current_replay_gain().as_ref());
                 let occupied = ring_occupied_bytes(pipeline);
-                let bpf = output_bytes_per_sample(pipeline)
-                    .saturating_mul(pipeline.channels.load(Ordering::Relaxed).max(1) as usize)
-                    .max(1);
+                let bpf = output_bytes_per_frame(pipeline);
                 let samples_ahead = (occupied / bpf)
                     .saturating_mul(pipeline.channels.load(Ordering::Relaxed) as usize);
                 pipeline.schedule_transition(
@@ -1944,8 +2181,7 @@ fn fill_ring_wasapi(
             }
         }
         Err(err) => {
-            let _ = event_tx.send(AudioEvent::ErrorOccurred(err.to_string()));
-            thread::sleep(Duration::from_millis(4));
+            stop_after_decode_error(pipeline, event_tx, err.to_string());
         }
     }
 }
@@ -2203,6 +2439,20 @@ mod tests {
     }
 
     #[test]
+    fn advanced_dsd512_dop_never_silently_converts_to_pcm() {
+        let plan = resolve_plan_for_source(
+            PlaybackMode::Advanced,
+            true,
+            AudioBackend::WasapiExclusive,
+            DsdOutputMode::Dop,
+            Some(crate::audio::dto::DsdRate::Dsd512),
+            false,
+            false,
+        );
+        assert_eq!(plan, vec![PlanStep::Dop]);
+    }
+
+    #[test]
     fn gapless_does_not_hide_pcm_to_native_dsd_route_change() {
         assert!(!can_reuse_route_for_gapless(
             PlaybackMode::Advanced,
@@ -2236,6 +2486,23 @@ mod tests {
             DsdOutputMode::Dop,
             PlanStep::Dop,
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn terminal_error_uses_the_last_failed_fallback() {
+        let reasons = vec![
+            "WASAPI Exclusive bit-perfect: Format not supported by DAC (PCM 24-bit / 96 kHz)"
+                .to_string(),
+            "WASAPI Shared: Audio format unsupported for path broken.dsf: invalid DSF header"
+                .to_string(),
+        ];
+
+        assert_eq!(terminal_playback_error(&reasons), reasons[1]);
+        assert_eq!(
+            terminal_playback_error(&[]),
+            "No playable audio path is available"
+        );
     }
 
     #[test]

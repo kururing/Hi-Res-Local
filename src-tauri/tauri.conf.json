@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://itunes.apple.com https://*.mzstatic.com; img-src 'self' asset: http://asset.localhost data: blob: https://*.mzstatic.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'",
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:3001 http://localhost:3001 http://127.0.0.1:9000 http://localhost:9000 https: https://itunes.apple.com https://*.mzstatic.com; img-src 'self' asset: http://asset.localhost data: blob: https://*.mzstatic.com http://127.0.0.1:9000 http://localhost:9000; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'",
       "assetProtocol": {
         "enable": true,
         "scope": ["$CACHE/**"]
@@ -45,8 +45,6 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
-    "resources": {
-      "vendor/ffmpeg/bin/*.dll": "./"
-    }
+      "resources": {}
   }
 }

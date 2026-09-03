@@ -3,6 +3,7 @@ pub mod commands;
 pub mod db;
 pub mod discord;
 pub mod error;
+pub mod fs_guard;
 pub mod lyrics;
 pub mod models;
 pub mod panic_hook;
@@ -293,6 +294,13 @@ pub fn run() {
                         tick_count = 0;
                         let (count, missing_samples) = player_ticker.underrun_stats();
                         if count != last_underrun_count {
+                            tracing::warn!(
+                                target: "audio",
+                                underrun_count = count,
+                                missing_samples,
+                                new_underruns = count.saturating_sub(last_underrun_count),
+                                "WASAPI Shared PCM underrun detected"
+                            );
                             let _ = app_handle_ticker.emit(
                                 "audio://underrun",
                                 serde_json::json!({
@@ -381,6 +389,7 @@ pub fn run() {
             // Queue Management
             queue_add,
             queue_play_next,
+            refresh_stream_url,
             queue_remove,
             queue_reorder,
             queue_clear,
@@ -451,6 +460,7 @@ pub fn run() {
             get_favorite_albums,
             // Settings
             get_settings,
+            get_audio_toml_patch,
             update_settings,
             get_saved_playback_state,
             quit_app,

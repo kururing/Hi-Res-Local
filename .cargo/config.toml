@@ -2,7 +2,4 @@
 target-dir = "src-tauri/target"
 
 [env]
-# Keep native dependencies discoverable whether Cargo is run from the repository
-# root or through the Tauri wrapper.
-FFMPEG_DIR = { value = "src-tauri/vendor/ffmpeg", relative = true }
 LIBCLANG_PATH = { value = "src-tauri/vendor/llvm-bindgen", relative = true }

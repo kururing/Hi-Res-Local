@@ -5,27 +5,44 @@ use crate::audio::dto::{
 };
 use crate::audio::error::{AudioError, AudioResult};
 use crate::audio::pcm::AudioFormat;
+use nnpm_audio_core::graph::{GraphConfig, ProcessingGraph};
 
-/// High-quality linear / fractional resampler for multi-channel audio
-#[derive(Debug, Clone)]
+/// Streaming band-limited sample-rate converter backed by Rubato.
+///
+/// The historical type name is retained to avoid breaking the desktop API.
 pub struct LinearResampler {
     from_rate: u32,
     to_rate: u32,
-    channels: u16,
-    phase: f64,
-    tail_frame: Vec<f32>,
-    input_scratch: Vec<f32>,
+    graph: Option<ProcessingGraph>,
+    flushed: bool,
 }
 
 impl LinearResampler {
     pub fn new(from_rate: u32, to_rate: u32, channels: u16) -> Self {
+        let graph = if from_rate == to_rate || from_rate == 0 || to_rate == 0 {
+            None
+        } else {
+            Some(
+                ProcessingGraph::new(
+                    from_rate,
+                    channels,
+                    GraphConfig {
+                        target_sample_rate: Some(to_rate),
+                        // This component outputs float. Limiting and dither belong
+                        // only at a later, explicit integer conversion stage.
+                        limiter_enabled: false,
+                        dither_enabled: false,
+                        ..GraphConfig::default()
+                    },
+                )
+                .expect("validated PCM sample-rate conversion"),
+            )
+        };
         Self {
             from_rate,
             to_rate,
-            channels,
-            phase: 0.0,
-            tail_frame: Vec::new(),
-            input_scratch: Vec::new(),
+            graph,
+            flushed: false,
         }
     }
 
@@ -38,57 +55,28 @@ impl LinearResampler {
             output.extend_from_slice(input);
             return;
         }
-
-        let ch = self.channels.max(1) as usize;
-        self.input_scratch.clear();
-        if !self.tail_frame.is_empty() {
-            self.input_scratch.extend_from_slice(&self.tail_frame);
+        if let Some(graph) = self.graph.as_mut() {
+            output.extend(graph.process_f32(input));
         }
-        self.input_scratch.extend_from_slice(input);
-        let num_input_frames = self.input_scratch.len() / ch;
-        if num_input_frames < 2 {
-            self.tail_frame.clear();
-            self.tail_frame
-                .extend_from_slice(&self.input_scratch[..num_input_frames * ch]);
+    }
+
+    pub fn flush(&mut self, output: &mut Vec<f32>) {
+        if self.flushed {
             return;
         }
-
-        let expected = ((num_input_frames as f64 * self.to_rate as f64)
-            / self.from_rate.max(1) as f64) as usize
-            * ch;
-        output.reserve(expected);
-
-        let ratio = self.from_rate as f64 / self.to_rate as f64;
-
-        while (self.phase as usize + 1) < num_input_frames {
-            let idx0 = self.phase as usize;
-            let idx1 = idx0 + 1;
-            let frac = (self.phase - idx0 as f64) as f32;
-
-            for c in 0..ch {
-                let s0 = self.input_scratch[idx0 * ch + c];
-                let s1 = self.input_scratch[idx1 * ch + c];
-                let interpolated = s0 + (s1 - s0) * frac;
-                output.push(interpolated);
-            }
-
-            self.phase += ratio;
+        self.flushed = true;
+        if let Some(graph) = self.graph.as_mut() {
+            output.extend(graph.flush());
         }
-
-        self.phase -= num_input_frames.saturating_sub(1) as f64;
-        if self.phase < 0.0 {
-            self.phase = 0.0;
-        }
-        self.tail_frame.clear();
-        self.tail_frame.extend_from_slice(
-            &self.input_scratch[(num_input_frames - 1) * ch..num_input_frames * ch],
-        );
     }
 
     pub fn reset(&mut self) {
-        self.phase = 0.0;
-        self.tail_frame.clear();
-        self.input_scratch.clear();
+        self.flushed = false;
+        if let Some(graph) = self.graph.as_mut() {
+            graph
+                .reset_stream()
+                .expect("validated PCM sample-rate conversion reset");
+        }
     }
 }
 
@@ -158,13 +146,13 @@ pub struct PreloadedTrack {
 
 impl PreloadedTrack {
     pub fn open(track: AudioTrack) -> AudioResult<Self> {
-        let mut decoder = AudioDecoder::open(&track.path)?;
+        let mut decoder = AudioDecoder::open_pcm_track(&track)?;
         let mut predecoded_samples = Vec::new();
 
         // Preload the first few packets (~100ms) for instantaneous start
         // DSD PCM is configured to the device rate after the output stream is
         // known. Do not consume packets before that configuration, otherwise
-        // those samples would bypass FFmpeg's band-limited resampler.
+        // those samples would bypass the band-limited resampler.
         if !decoder
             .quality_badge()
             .source_type
@@ -190,7 +178,8 @@ impl PreloadedTrack {
 
     /// Open without f32 predecode — used for bit-perfect exclusive output.
     pub fn open_bit_perfect(track: AudioTrack) -> AudioResult<Self> {
-        let decoder = AudioDecoder::open(&track.path)?;
+        let mut decoder = AudioDecoder::open_track(&track)?;
+        decoder.prime_bit_perfect()?;
         Ok(Self {
             track,
             decoder,
@@ -224,6 +213,7 @@ impl PreloadedTrack {
 struct FadingOutSource {
     source: PreloadedTrack,
     resampler: Option<LinearResampler>,
+    resampler_flushed: bool,
     buffer: Vec<f32>,
     offset: usize,
     /// Interleaved samples already faded (at output spec).
@@ -240,6 +230,7 @@ pub struct GaplessController {
     predecode_buffer: Vec<f32>,
     predecode_offset: usize,
     resampler: Option<LinearResampler>,
+    resampler_flushed: bool,
     output_sample_rate: u32,
     output_channels: u16,
     samples_played: u64,
@@ -257,6 +248,7 @@ impl GaplessController {
             predecode_buffer: Vec::with_capacity(8192),
             predecode_offset: 0,
             resampler: None,
+            resampler_flushed: false,
             output_sample_rate,
             output_channels,
             samples_played: 0,
@@ -296,9 +288,8 @@ impl GaplessController {
             return Ok(());
         }
 
-        // DSD decoders expose a PCM-equivalent rate (8x the DSD rate). Let
-        // FFmpeg perform the band-limited conversion before Gapless handles
-        // channel layout and output buffering.
+        // FIR always decimates to an integer PCM rate (176.4/192 kHz for DSD64).
+        // set_output_format keeps that FIR rate and lets Rubato resample to the device.
         source.decoder.set_output_format(Some(AudioFormat::f32(
             output_sample_rate,
             source.source_format().channels,
@@ -306,6 +297,7 @@ impl GaplessController {
     }
 
     fn update_resampler(&mut self) {
+        self.resampler_flushed = false;
         if let Some(ref current) = self.current_source {
             if current.sample_rate() != self.output_sample_rate {
                 self.resampler = Some(LinearResampler::new(
@@ -386,6 +378,7 @@ impl GaplessController {
         self.predecode_offset = 0;
         self.samples_played = 0;
         self.resampler = None;
+        self.resampler_flushed = false;
     }
 
     pub fn current_track(&self) -> Option<&AudioTrack> {
@@ -396,6 +389,16 @@ impl GaplessController {
         self.current_source
             .as_ref()
             .map(|s| s.quality_badge().clone())
+    }
+
+    pub fn current_is_dsd(&self) -> bool {
+        self.current_source.as_ref().is_some_and(|source| {
+            source
+                .quality_badge()
+                .source_type
+                .as_deref()
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("DSD"))
+        })
     }
 
     pub fn current_replay_gain(&self) -> Option<ReplayGainInfo> {
@@ -423,6 +426,10 @@ impl GaplessController {
         self.current_source
             .as_ref()
             .map(|s| s.decoder.source_format())
+    }
+
+    pub fn current_decoder(&self) -> Option<&AudioDecoder> {
+        self.current_source.as_ref().map(|s| &s.decoder)
     }
 
     pub fn set_decoder_output_format(
@@ -501,6 +508,7 @@ impl GaplessController {
             if let Some(ref mut resampler) = self.resampler {
                 resampler.reset();
             }
+            self.resampler_flushed = false;
             Ok(actual)
         } else {
             Err(AudioError::Playback("No active track to seek".to_string()))
@@ -535,6 +543,7 @@ impl GaplessController {
         let next = self.next_preloaded.take()?;
         let old_source = self.current_source.take()?;
         let old_resampler = self.resampler.take();
+        let old_resampler_flushed = self.resampler_flushed;
         let buffer = std::mem::take(&mut self.predecode_buffer);
         let offset = self.predecode_offset;
         self.predecode_offset = 0;
@@ -545,6 +554,7 @@ impl GaplessController {
         self.fading_out = Some(FadingOutSource {
             source: old_source,
             resampler: old_resampler,
+            resampler_flushed: old_resampler_flushed,
             buffer,
             offset,
             fade_pos: 0,
@@ -613,8 +623,20 @@ impl GaplessController {
                     &mut self.channel_scratch,
                     &mut fading.buffer,
                 ),
-                // EOF or decode error on the dying track: stop pulling from it.
-                Ok(None) | Err(_) => break,
+                Ok(None) => {
+                    if !fading.resampler_flushed {
+                        fading.resampler_flushed = true;
+                        if let Some(resampler) = fading.resampler.as_mut() {
+                            resampler.flush(&mut fading.buffer);
+                            if !fading.buffer.is_empty() {
+                                continue;
+                            }
+                        }
+                    }
+                    break;
+                }
+                // A decode error on the dying track must not stop the new one.
+                Err(_) => break,
             }
         }
 
@@ -713,6 +735,15 @@ impl GaplessController {
                         );
                     }
                     None => {
+                        if !self.resampler_flushed {
+                            self.resampler_flushed = true;
+                            if let Some(resampler) = self.resampler.as_mut() {
+                                resampler.flush(&mut self.predecode_buffer);
+                                if !self.predecode_buffer.is_empty() {
+                                    continue;
+                                }
+                            }
+                        }
                         // EOF on current track
                         source.is_eof = true;
                         if let Some(next) = self.next_preloaded.take() {
@@ -754,6 +785,7 @@ mod tests {
         let input = vec![0.1, 0.2, 0.3, 0.4];
         let mut output = Vec::new();
         resampler.resample(&input, &mut output);
+        resampler.flush(&mut output);
         assert_eq!(input, output);
     }
 
@@ -763,6 +795,7 @@ mod tests {
         let input = vec![0.0, 1.0, 0.0];
         let mut output = Vec::new();
         resampler.resample(&input, &mut output);
+        resampler.flush(&mut output);
         // Should produce approximately 2x samples
         assert!(output.len() >= 3);
     }
@@ -799,6 +832,7 @@ mod tests {
         resampler.resample(&[0.0, 0.5, 1.0], &mut output);
         let first_len = output.len();
         resampler.resample(&[1.0, 0.5, 0.0], &mut output);
+        resampler.flush(&mut output);
         assert!(output.len() > first_len);
         assert!(output.iter().all(|sample| sample.is_finite()));
     }

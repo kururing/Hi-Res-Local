@@ -1,5 +1,4 @@
-import { convertFileSrc } from '@tauri-apps/api/core';
-import { IpcService, isTauri } from './ipc';
+import type { ArtworkAssetsApi } from '../platform/contracts';
 import { artistsShareIdentity } from './artistIdentity';
 
 const CACHE_KEY = 'nghenhac_remote_artwork_itunes_v3';
@@ -12,7 +11,6 @@ const LEGACY_CACHE_KEYS = [
   'nghenhac_remote_artwork_itunes_v2',
 ];
 const ITUNES_SEARCH_URL = 'https://itunes.apple.com/search';
-const ITUNES_LOOKUP_URL = 'https://itunes.apple.com/lookup';
 const NETWORK_TIMEOUT_MS = 7_500;
 const ITUNES_REQUEST_CONCURRENCY = 4;
 const MEMORY_CACHE_LIMIT = 2_000;
@@ -256,35 +254,25 @@ const findArtist = async (artist: string, albumHint?: string, signal?: AbortSign
     .sort((a, b) => b.score - a.score)[0]?.item ?? null;
 };
 
-const fetchArtistArtworkUrl = async (artist: string, albumHint?: string, signal?: AbortSignal): Promise<string | null> => {
+const fetchArtistArtworkUrl = async (
+  artist: string,
+  artworkAssets: ArtworkAssetsApi,
+  albumHint?: string,
+  signal?: AbortSignal,
+): Promise<string | null> => {
   const match = await findArtist(artist, albumHint, signal);
   if (!match?.artistId || matchArtistScore(match.artistName || '', artist) < 3) return null;
 
-  if (isTauri()) {
-    try {
-      signal?.throwIfAborted();
-      const portrait = await IpcService.invoke('get_apple_music_artist_artwork', {
-        country: 'vn',
-        artistId: match.artistId,
-      });
-      signal?.throwIfAborted();
-      if (portrait) return portrait.replace(/^http:/i, 'https:');
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      // Fall back to album artwork when Apple Music is unavailable.
-    }
+  try {
+    signal?.throwIfAborted();
+    const portrait = await artworkAssets.getAppleMusicArtistArtwork('vn', match.artistId);
+    signal?.throwIfAborted();
+    if (portrait) return portrait.replace(/^http:/i, 'https:');
+  } catch (error) {
+    if (signal?.aborted) throw error;
   }
 
-  const lookup = await requestITunes(`${ITUNES_LOOKUP_URL}?${new URLSearchParams({
-    id: String(match.artistId),
-    entity: 'album',
-    country: 'vn',
-    limit: '25',
-  })}`, signal);
-  const album = (lookup.results || []).find(item =>
-    item.artworkUrl100 && matchArtistScore(item.artistName || '', artist) >= 3
-  );
-  return album?.artworkUrl100 ? toLargeArtworkUrl(album.artworkUrl100) : null;
+  return null;
 };
 
 const pumpArtistArtworkRequests = () => {
@@ -301,11 +289,16 @@ const pumpArtistArtworkRequests = () => {
   }
 };
 
-const findArtistArtworkUrl = (artist: string, albumHint?: string, signal?: AbortSignal): Promise<string | null> => new Promise((resolve, reject) => {
+const findArtistArtworkUrl = (
+  artist: string,
+  artworkAssets: ArtworkAssetsApi,
+  albumHint?: string,
+  signal?: AbortSignal,
+): Promise<string | null> => new Promise((resolve, reject) => {
   queuedArtistArtworkRequests.push({
     run: () => {
       signal?.throwIfAborted();
-      return fetchArtistArtworkUrl(artist, albumHint, signal);
+      return fetchArtistArtworkUrl(artist, artworkAssets, albumHint, signal);
     },
     resolve,
     reject,
@@ -346,15 +339,11 @@ const toDataUrl = async (url: string, externalSignal?: AbortSignal): Promise<str
   }
 };
 
-const persistArtwork = async (key: string, source: string): Promise<string> => {
-  if (!isTauri()) return source;
-  const path = await IpcService.invoke('cache_image_data', {
-    cacheKey: key,
-    category: 'remote-artwork',
-    dataUrl: source,
-  });
-  return convertFileSrc(path);
-};
+const persistArtwork = async (
+  key: string,
+  source: string,
+  artworkAssets: ArtworkAssetsApi,
+): Promise<string> => artworkAssets.cacheRemoteArtwork(key, source);
 
 const findITunesArtworkUrl = async (
   kind: ArtworkKind,
@@ -362,8 +351,12 @@ const findITunesArtworkUrl = async (
   album?: string,
   signal?: AbortSignal,
   artistAlbumHint?: string,
+  artworkAssets?: ArtworkAssetsApi,
 ): Promise<string | null> => {
-  if (kind === 'artist') return findArtistArtworkUrl(artist, artistAlbumHint, signal);
+  if (kind === 'artist') {
+    if (!artworkAssets) return null;
+    return findArtistArtworkUrl(artist, artworkAssets, artistAlbumHint, signal);
+  }
   const term = `${artist} ${album || ''}`.trim();
   const params = new URLSearchParams({
     term,
@@ -396,7 +389,7 @@ const findITunesArtworkUrl = async (
 export const getCachedArtwork = (kind: ArtworkKind, artist: string, album?: string) =>
   memoryCache.get(keyFor(kind, artist, album)) ?? readCache()[keyFor(kind, artist, album)] ?? null;
 
-export const clearArtworkCache = () => {
+export const clearArtworkCache = (artworkAssets: ArtworkAssetsApi) => {
   cacheGeneration += 1;
   memoryCache.clear();
   discordUrlCache.clear();
@@ -410,9 +403,7 @@ export const clearArtworkCache = () => {
     localStorage.removeItem(ARTIST_MATCH_VERSION_KEY);
     LEGACY_CACHE_KEYS.forEach(key => localStorage.removeItem(key));
   } catch { /* storage unavailable */ }
-  if (isTauri()) {
-    void IpcService.invoke('clear_image_cache', { category: 'remote-artwork' }).catch(() => undefined);
-  }
+  void artworkAssets.clearRemoteArtworkCache().catch(() => undefined);
 };
 
 /** Returns the public iTunes artwork URL for integrations such as Discord. */
@@ -440,7 +431,8 @@ export const getArtworkUrlForDiscord = async (artist: string, album?: string): P
 export const downloadArtwork = async (
   kind: ArtworkKind,
   artist: string,
-  album?: string,
+  album: string | undefined,
+  artworkAssets: ArtworkAssetsApi,
   signal?: AbortSignal,
   artistAlbumHint?: string,
 ): Promise<string | null> => {
@@ -458,7 +450,7 @@ export const downloadArtwork = async (
   const request = (async () => {
     try {
       signal?.throwIfAborted();
-      const rawUrl = await findITunesArtworkUrl(kind, artist, album, signal, artistAlbumHint);
+      const rawUrl = await findITunesArtworkUrl(kind, artist, album, signal, artistAlbumHint, artworkAssets);
       if (!rawUrl) {
         if (requestGeneration === cacheGeneration) {
           addBoundedSet(missingArtwork, key, MISSING_ARTWORK_LIMIT);
@@ -467,7 +459,7 @@ export const downloadArtwork = async (
       }
       const downloaded = await toDataUrl(rawUrl, signal);
       signal?.throwIfAborted();
-      const cachedSource = await persistArtwork(key, downloaded);
+      const cachedSource = await persistArtwork(key, downloaded, artworkAssets);
       signal?.throwIfAborted();
       if (requestGeneration !== cacheGeneration) return cachedSource;
       setBoundedMap(memoryCache, key, cachedSource, MEMORY_CACHE_LIMIT);

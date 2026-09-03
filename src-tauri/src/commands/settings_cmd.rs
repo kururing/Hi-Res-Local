@@ -8,6 +8,11 @@ use crate::models::settings::AppSettings;
 use crate::state::AppState;
 
 #[tauri::command]
+pub async fn get_audio_toml_patch() -> Result<nnpm_audio_core::config::SettingsPatch, String> {
+    Ok(crate::audio::toml_config::load_settings_patch())
+}
+
+#[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
     let conn = state.db.lock();
     db_get_settings(&conn).map_err(|e| e.to_string())

@@ -1,0 +1,53 @@
+{
+  "name": "nghe-nhac-pro-max-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "migrate": "tsx scripts/migrate.ts",
+    "grant-role": "tsx scripts/grant-role.ts",
+    "revoke-role": "tsx scripts/revoke-role.ts",
+    "cleanup-uploads": "tsx scripts/cleanup-uploads.ts",
+    "reconcile-imports": "tsx scripts/reconcile-imports.ts",
+    "worker": "tsx src/worker.ts",
+    "generate-test-media": "tsx scripts/generate-test-media.ts",
+    "ensure-storage": "tsx scripts/ensure-storage.ts",
+    "wait-infra": "tsx scripts/wait-infra.ts",
+    "smoke:e2e": "tsx scripts/smoke-e2e.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.864.0",
+    "@aws-sdk/s3-request-presigner": "^3.864.0",
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^11.0.1",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/swagger": "^9.5.1",
+    "@fastify/swagger-ui": "^6.1.1",
+    "@fastify/type-provider-typebox": "^5.2.0",
+    "@sinclair/typebox": "^0.34.41",
+    "ajv-formats": "^3.0.1",
+    "argon2": "^0.43.1",
+    "dotenv": "^16.6.1",
+    "fastify": "^5.4.0",
+    "jose": "^6.0.12",
+    "pg": "^8.16.3",
+    "sharp": "^0.35.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.17.0",
+    "@types/pg": "^8.15.5",
+    "pino-pretty": "^13.1.1",
+    "tsx": "^4.20.4",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,9 +1,4 @@
 /target
-
-# Vendored FFmpeg binaries (run scripts/fetch-ffmpeg-windows.ps1)
-/vendor/ffmpeg/bin/
-/vendor/ffmpeg/lib/
-/vendor/ffmpeg/include/
 /vendor/llvm-bindgen/
 
 # The extracted ASIO sources are required by build.rs. Keep the original

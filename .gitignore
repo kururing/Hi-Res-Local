@@ -17,11 +17,13 @@ src-tauri/target
 
 # Worktrees & Git
 /.worktrees/
+/.local/
 
 # IDE & OS
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
+!.vscode/css_custom_data.json
 .idea
 .DS_Store
 *.suo
@@ -31,7 +33,12 @@ src-tauri/target
 *.sw?
 *.log
 
-# Database runtime files
+# Local secrets and env
+.env
+.env.local
+**/.env
+!**/.env.example
+!**/.env.example.*
 *.db
 *.db-shm
 *.db-wal
@@ -40,3 +47,9 @@ src-tauri/target
 /.audio_check.wav
 /audio_spectrum.png
 /moon_ring_spectrum.png
+
+# Generated test media and reports
+**/vitest-report.json
+**/integration-summary.txt
+**/integration-report.json
+server/tmp-media/

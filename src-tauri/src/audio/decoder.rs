@@ -1,23 +1,20 @@
-//! FFmpeg-based streaming audio decoder (`ffmpeg-next` 9.x).
-//!
-//! Provides interleaved f32 samples for the DSP / gapless path and optional
-//! raw PCM bytes for bit-perfect WASAPI Exclusive output.
+//! Streaming decoder backed by `nnpm-audio-core` (Symphonia + DSD adapter).
 
-#![allow(clippy::manual_is_multiple_of)] // Keep compatibility with the project's Rust 1.80 MSRV.
+#![allow(clippy::manual_is_multiple_of)]
 
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::Once;
 
-use ffmpeg::channel_layout::ChannelLayout;
-use ffmpeg::codec::{self, decoder, packet::Packet};
-use ffmpeg::format::sample::{Sample as AvSample, Type as SampleType};
-use ffmpeg::software::resampling;
-use ffmpeg::util::error::{Error as FfError, EAGAIN};
-use ffmpeg::{format, frame, media, rescale, Rational, Rescale};
-use ffmpeg_next as ffmpeg;
+use nnpm_audio_core::decimator::{dsd_decode_block_bytes, dsd_pcm_output_rate_hz};
+use nnpm_audio_core::dsd::{parse_header, DsdEncoding};
+use nnpm_audio_core::decoder::PcmDecoder;
+use nnpm_audio_core::dsd::DsdSource;
+use nnpm_audio_core::graph::{GraphConfig, ProcessingGraph};
+use nnpm_audio_core::ndsd::NdsdSourceAdapter;
+use nnpm_audio_core::source::MediaSource;
+use nnpm_audio_core::DecodedSampleRepr;
 
-use crate::audio::dsd::{DsdEncoding, DsdiffReader, DsfReader};
-use crate::audio::dto::{DsdOutputMode, QualityBadge, ReplayGainInfo};
+use crate::audio::dto::{DsdOutputMode, DsdRate, QualityBadge, ReplayGainInfo};
 use crate::audio::error::{AudioError, AudioResult};
 use crate::audio::pcm::{AudioFormat, PcmSampleFormat};
 use crate::audio::pcm_convert::{pack_container4_to_packed_s24, pack_packed_s24_to_container4};
@@ -25,688 +22,247 @@ use crate::audio::pcm_convert::{pack_container4_to_packed_s24, pack_packed_s24_t
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BitPerfectPack {
     Identity,
-    /// Decoder 4-byte container → packed 3-byte S24.
     Container4ToPacked3,
-    /// Packed 3-byte S24 → WASAPI 24-in-32.
+    #[allow(dead_code)]
     Packed3ToContainer4,
 }
 
 struct BitPerfectWire {
-    target: AudioFormat,
-    packed_s24: bool,
-    container_bytes: usize,
     pack: BitPerfectPack,
 }
 
-static FFMPEG_INIT: Once = Once::new();
-
-fn ensure_ffmpeg() {
-    FFMPEG_INIT.call_once(|| {
-        #[cfg(windows)]
-        prepare_ffmpeg_dll_search();
-        let _ = ffmpeg::init();
-    });
+enum Inner {
+    Pcm(PcmDecoder),
+    Dsd(DsdPcmSession),
 }
 
-/// Windows loads avcodec/avformat/avutil/swresample via the DLL search path.
-/// Packaged Tauri resources are not always next to the exe (`vendor/ffmpeg/bin`
-/// or flattened into the resource dir), so we AddDllDirectory / SetDllDirectory
-/// before `ffmpeg::init()`.
-#[cfg(windows)]
-fn prepare_ffmpeg_dll_search() {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::core::PCWSTR;
-    use windows::Win32::System::LibraryLoader::{
-        AddDllDirectory, SetDefaultDllDirectories, SetDllDirectoryW,
-        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_USER_DIRS,
-    };
-
-    let mut dirs = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            dirs.push(parent.to_path_buf());
-            dirs.push(parent.join("resources"));
-            dirs.push(
-                parent
-                    .join("resources")
-                    .join("vendor")
-                    .join("ffmpeg")
-                    .join("bin"),
-            );
-            dirs.push(parent.join("vendor").join("ffmpeg").join("bin"));
-        }
-    }
-    dirs.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("vendor")
-            .join("ffmpeg")
-            .join("bin"),
-    );
-
-    unsafe {
-        let _ = SetDefaultDllDirectories(
-            LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_USER_DIRS,
-        );
-    }
-
-    let mut preferred: Option<Vec<u16>> = None;
-    for dir in dirs {
-        if !dir.is_dir() {
-            continue;
-        }
-        let wide: Vec<u16> = dir
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        unsafe {
-            let _ = AddDllDirectory(PCWSTR(wide.as_ptr()));
-        }
-        let has_avcodec = std::fs::read_dir(&dir)
-            .ok()
-            .map(|rd| {
-                rd.flatten().any(|e| {
-                    e.file_name()
-                        .to_string_lossy()
-                        .to_ascii_lowercase()
-                        .starts_with("avcodec")
-                })
-            })
-            .unwrap_or(false);
-        if has_avcodec && preferred.is_none() {
-            preferred = Some(wide);
-        }
-    }
-    if let Some(wide) = preferred {
-        unsafe {
-            let _ = SetDllDirectoryW(PCWSTR(wide.as_ptr()));
-        }
-    }
-}
-
-struct FfmpegAudioDecoder {
-    path: PathBuf,
-    ictx: format::context::Input,
-    decoder: decoder::Audio,
-    stream_index: usize,
+struct DsdPcmSession {
+    adapter: NdsdSourceAdapter,
+    graph: ProcessingGraph,
+    /// Integer FIR rate (176.4/192 kHz for DSD64). Graph input stays here.
+    fir_rate: u32,
+    /// Device / playback rate after Rubato.
     sample_rate: u32,
     channels: u16,
-    /// Native decoder sample format (may be planar).
-    source_av_format: AvSample,
-    channel_layout: ChannelLayout,
-    source_format: AudioFormat,
-    bit_depth: u32,
-    duration_ms: u64,
-    quality_badge: QualityBadge,
-    replay_gain_info: Option<ReplayGainInfo>,
-    /// Target exclusive / convert format. `None` → bit-perfect native path.
-    output_target: Option<AudioFormat>,
-    swr: Option<resampling::Context>,
-    decoded_frame: frame::Audio,
-    converted_frame: frame::Audio,
-    f32_buf: Vec<f32>,
-    bytes_buf: Vec<u8>,
-    pack_buf: Vec<u8>,
-    eof_sent: bool,
-    finished: bool,
-    /// True when codecpar had no usable sample format yet (fill from first frame).
-    pending_format: bool,
-    bit_perfect_wire: Option<BitPerfectWire>,
-}
-
-/// DSF/DFF adapter: the bundled FFmpeg build has no DFF demuxer, and feeding
-/// DSF as interleaved `DSD_MSBF` across several file blocks is not what
-/// `dsfdec` does. DSF packets are one physical block of channel-planar
-/// LSB/MSB bytes (`DSD_LSBF_PLANAR` / `DSD_MSBF_PLANAR`). DFF raw stays
-/// interleaved MSB (`DSD_MSBF`); DST stays on FFmpeg's DST decoder.
-enum DsdInput {
-    Dsf(DsfReader),
-    Dff(DsdiffReader),
-}
-
-impl DsdInput {
-    fn next_packet(&mut self, max_bytes: usize) -> crate::audio::dsd::DsdResult<Option<Vec<u8>>> {
-        match self {
-            Self::Dsf(reader) => reader.next_planar_block(),
-            Self::Dff(reader) => reader.next_packet(max_bytes),
-        }
-    }
-
-    fn seek_ms(&mut self, target_ms: u64) {
-        match self {
-            Self::Dsf(reader) => reader.seek_ms(target_ms),
-            Self::Dff(reader) => reader.seek_ms(target_ms),
-        }
-    }
-}
-
-struct DsdAudioDecoder {
-    path: PathBuf,
-    reader: DsdInput,
-    decoder: decoder::Audio,
-    decoded_frame: frame::Audio,
-    converted_frame: frame::Audio,
-    f32_buf: Vec<f32>,
-    bytes_buf: Vec<u8>,
-    finished: bool,
-    eof_sent: bool,
-    format: AudioFormat,
-    output_target: Option<AudioFormat>,
-    swr: Option<resampling::Context>,
-    quality_badge: QualityBadge,
-    duration_ms: u64,
-}
-
-impl DsdAudioDecoder {
-    fn open(path: &Path) -> AudioResult<Self> {
-        ensure_ffmpeg();
-        let extension = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let (reader, dsd_format, codec_id) = if extension == "dsf" {
-            let reader = DsfReader::open(path).map_err(|e| AudioError::UnsupportedFormat {
-                path: path.to_path_buf(),
-                details: e.to_string(),
-            })?;
-            let format = reader.format.clone();
-            let codec_id = if format.lsb_first {
-                codec::Id::DSD_LSBF_PLANAR
-            } else {
-                codec::Id::DSD_MSBF_PLANAR
-            };
-            (DsdInput::Dsf(reader), format, codec_id)
-        } else {
-            let reader = DsdiffReader::open(path).map_err(|e| AudioError::UnsupportedFormat {
-                path: path.to_path_buf(),
-                details: e.to_string(),
-            })?;
-            let format = reader.format.clone();
-            let codec_id = match format.encoding {
-                DsdEncoding::Raw => codec::Id::DSD_MSBF,
-                DsdEncoding::Dst => codec::Id::DST,
-            };
-            (DsdInput::Dff(reader), format, codec_id)
-        };
-        let codec = decoder::find(codec_id).ok_or_else(|| AudioError::UnsupportedFormat {
-            path: path.to_path_buf(),
-            details: format!("Bundled FFmpeg has no {:?} decoder", codec_id),
-        })?;
-        let mut context = codec::context::Context::new_with_codec(codec);
-        let channels = i32::from(dsd_format.channels.max(1));
-        unsafe {
-            (*context.as_mut_ptr()).sample_rate = dsd_format.pcm_sample_rate as i32;
-            (*context.as_mut_ptr()).ch_layout = ChannelLayout::default(channels).into();
-        }
-        let decoder = context
-            .decoder()
-            .open_as(codec)
-            .map_err(|e| AudioError::DecodeError {
-                path: path.to_path_buf(),
-                details: e.to_string(),
-            })?
-            .audio()
-            .map_err(|e| AudioError::DecodeError {
-                path: path.to_path_buf(),
-                details: e.to_string(),
-            })?;
-
-        let quality_badge = dsd_format.quality_badge(DsdOutputMode::Pcm);
-
-        Ok(Self {
-            path: path.to_path_buf(),
-            reader,
-            decoder,
-            decoded_frame: frame::Audio::empty(),
-            converted_frame: frame::Audio::empty(),
-            f32_buf: Vec::with_capacity(16_384),
-            bytes_buf: Vec::with_capacity(64 * 1024),
-            finished: false,
-            eof_sent: false,
-            format: AudioFormat::f32(dsd_format.pcm_sample_rate, dsd_format.channels),
-            output_target: None,
-            swr: None,
-            duration_ms: dsd_format.duration_ms,
-            quality_badge,
-        })
-    }
-
-    fn pull_frame(&mut self) -> AudioResult<Option<()>> {
-        loop {
-            match self.decoder.receive_frame(&mut self.decoded_frame) {
-                Ok(()) => return Ok(Some(())),
-                Err(FfError::Eof) => {
-                    self.finished = true;
-                    return Ok(None);
-                }
-                Err(FfError::Other { errno }) if errno == EAGAIN => {}
-                Err(FfError::InvalidData) => continue,
-                Err(e) => {
-                    return Err(AudioError::DecodeError {
-                        path: self.path.clone(),
-                        details: e.to_string(),
-                    });
-                }
-            }
-
-            if self.finished {
-                return Ok(None);
-            }
-            match self
-                .reader
-                .next_packet(32 * 1024)
-                .map_err(|e| AudioError::DecodeError {
-                    path: self.path.clone(),
-                    details: e.to_string(),
-                })? {
-                Some(bytes) => {
-                    let packet = Packet::copy(&bytes);
-                    match self.decoder.send_packet(&packet) {
-                        Ok(()) => {}
-                        Err(FfError::Other { errno }) if errno == EAGAIN => {}
-                        Err(e) => {
-                            return Err(AudioError::DecodeError {
-                                path: self.path.clone(),
-                                details: e.to_string(),
-                            });
-                        }
-                    }
-                }
-                None if !self.eof_sent => {
-                    self.decoder
-                        .send_eof()
-                        .map_err(|e| AudioError::DecodeError {
-                            path: self.path.clone(),
-                            details: e.to_string(),
-                        })?;
-                    self.eof_sent = true;
-                }
-                None => {
-                    self.finished = true;
-                    return Ok(None);
-                }
-            }
-        }
-    }
-
-    fn decode_next_packet(&mut self) -> AudioResult<Option<&[f32]>> {
-        loop {
-            match self.pull_frame()? {
-                Some(()) => {
-                    if self.output_target.is_some() {
-                        self.ensure_swr()?;
-                        self.converted_frame = frame::Audio::empty();
-                        if let Some(swr) = self.swr.as_mut() {
-                            swr.run(&self.decoded_frame, &mut self.converted_frame)
-                                .map_err(|e| AudioError::DecodeError {
-                                    path: self.path.clone(),
-                                    details: format!("DSD PCM resampler: {e}"),
-                                })?;
-                        }
-                        if self.converted_frame.samples() == 0 {
-                            continue;
-                        }
-                        frame_to_f32(&self.converted_frame, &mut self.f32_buf)?;
-                    } else {
-                        frame_to_f32(&self.decoded_frame, &mut self.f32_buf)?;
-                    }
-                    attenuate_dsd_pcm(&mut self.f32_buf);
-                    if self.f32_buf.is_empty() {
-                        continue;
-                    }
-                    return Ok(Some(&self.f32_buf));
-                }
-                None => return Ok(None),
-            }
-        }
-    }
-
-    fn ensure_swr(&mut self) -> AudioResult<()> {
-        let Some(target) = self.output_target else {
-            self.swr = None;
-            return Ok(());
-        };
-        if target.sample_rate == self.format.sample_rate {
-            self.swr = None;
-            return Ok(());
-        }
-        if self.swr.is_some() {
-            return Ok(());
-        }
-
-        let source_layout = if self.decoded_frame.channel_layout().is_empty() {
-            ChannelLayout::default(i32::from(self.format.channels.max(1)))
-        } else {
-            self.decoded_frame.channel_layout()
-        };
-        let target_layout = ChannelLayout::default(i32::from(self.format.channels.max(1)));
-        let mut options = ffmpeg::Dictionary::new();
-        // Steep anti-image so shaped DSD noise above ~20 kHz is not folded
-        // back in when dropping from 352.8 kHz to 88.2/48 kHz.
-        options.set("filter_size", "64");
-        options.set("phase_shift", "10");
-        options.set("cutoff", "0.905");
-        self.swr = Some(
-            resampling::Context::get_with(
-                self.decoded_frame.format(),
-                source_layout,
-                self.format.sample_rate,
-                AvSample::F32(SampleType::Packed),
-                target_layout,
-                target.sample_rate,
-                options,
-            )
-            .map_err(|e| AudioError::DecodeError {
-                path: self.path.clone(),
-                details: format!("Failed to create DSD PCM resampler: {e}"),
-            })?,
-        );
-        Ok(())
-    }
-
-    fn decode_next_bytes(&mut self) -> AudioResult<Option<&[u8]>> {
-        let samples = match self.decode_next_packet()? {
-            Some(samples) => samples.to_vec(),
-            None => return Ok(None),
-        };
-        {
-            crate::audio::pcm_convert::f32_to_pcm_bytes(
-                &samples,
-                &self.format,
-                false,
-                &mut self.bytes_buf,
-            );
-        }
-        Ok(Some(&self.bytes_buf))
-    }
-
-    fn seek(&mut self, target_ms: u64) -> AudioResult<u64> {
-        self.reader.seek_ms(target_ms);
-        self.decoder.flush();
-        self.swr = None;
-        self.converted_frame = frame::Audio::empty();
-        self.finished = false;
-        self.eof_sent = false;
-        self.f32_buf.clear();
-        self.bytes_buf.clear();
-        Ok(target_ms.min(self.duration_ms))
-    }
-
-    fn set_output_format(&mut self, target: Option<AudioFormat>) -> AudioResult<()> {
-        self.output_target =
-            target.map(|format| AudioFormat::f32(format.sample_rate, self.format.channels));
-        self.swr = None;
-        self.converted_frame = frame::Audio::empty();
-        Ok(())
-    }
-
-    fn playback_sample_rate(&self) -> u32 {
-        self.output_target
-            .map(|target| target.sample_rate)
-            .unwrap_or(self.format.sample_rate)
-    }
-
-    fn playback_channels(&self) -> u16 {
-        self.format.channels
-    }
-}
-
-enum DecoderKind {
-    Ffmpeg(FfmpegAudioDecoder),
-    Dsd(DsdAudioDecoder),
 }
 
 pub struct AudioDecoder {
-    inner: DecoderKind,
+    path: PathBuf,
+    inner: Inner,
+    quality_badge: QualityBadge,
+    replay_gain_info: Option<ReplayGainInfo>,
+    source_format: AudioFormat,
+    bit_depth: u32,
+    duration_ms: u64,
+    channel_layout: String,
+    bit_perfect_wire: Option<BitPerfectWire>,
+    bytes_buf: Vec<u8>,
+    pack_buf: Vec<u8>,
+    f32_buf: Vec<f32>,
+    pcm_graph: Option<ProcessingGraph>,
+    output_sample_rate: u32,
+    graph_flushed: bool,
+    /// First packet decoded to prove the exact WASAPI wire representation.
+    bit_perfect_primed: bool,
 }
 
 impl AudioDecoder {
     pub fn open<P: AsRef<Path>>(path: P) -> AudioResult<Self> {
         let path_ref = path.as_ref();
-        if path_ref
+        let ext = path_ref
             .extension()
             .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("dff") || e.eq_ignore_ascii_case("dsf"))
-        {
-            return Ok(Self {
-                inner: DecoderKind::Dsd(DsdAudioDecoder::open(path_ref)?),
-            });
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if ext == "dsf" || ext == "dff" {
+            let source = MediaSource::open_file(path_ref).map_err(map_core)?;
+            return Self::from_dsd_source(path_ref.to_path_buf(), source);
         }
-        Ok(Self {
-            inner: DecoderKind::Ffmpeg(FfmpegAudioDecoder::open(path_ref)?),
-        })
+        let mut source = MediaSource::open_file(path_ref).map_err(map_core)?;
+        if source.looks_like_dsd() {
+            return Self::from_dsd_source(path_ref.to_path_buf(), source);
+        }
+        Self::from_pcm(path_ref.to_path_buf(), source)
     }
 
-    pub fn sample_rate(&self) -> u32 {
-        match &self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.sample_rate(),
-            DecoderKind::Dsd(decoder) => decoder.format.sample_rate,
-        }
+    pub fn open_track(track: &crate::audio::dto::AudioTrack) -> AudioResult<Self> {
+        let mut decoder = if let Some(url) = track.stream_url.as_deref() {
+            Self::open_url(url)?
+        } else {
+            Self::open(&track.path)?
+        };
+        decoder.replay_gain_info = track.replay_gain.clone();
+        Ok(decoder)
     }
 
-    pub fn channels(&self) -> u16 {
-        match &self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.channels(),
-            DecoderKind::Dsd(decoder) => decoder.format.channels,
-        }
+    pub fn open_pcm_track(track: &crate::audio::dto::AudioTrack) -> AudioResult<Self> {
+        Self::open_track(track)
     }
 
-    pub fn path(&self) -> &Path {
-        match &self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.path(),
-            DecoderKind::Dsd(decoder) => &decoder.path,
-        }
-    }
-
-    pub fn quality_badge(&self) -> &QualityBadge {
-        match &self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.quality_badge(),
-            DecoderKind::Dsd(decoder) => &decoder.quality_badge,
-        }
-    }
-
-    pub fn replay_gain_info(&self) -> Option<&ReplayGainInfo> {
-        match &self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.replay_gain_info(),
-            DecoderKind::Dsd(_) => None,
-        }
-    }
-
-    pub fn duration_ms(&self) -> u64 {
-        match &self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.duration_ms(),
-            DecoderKind::Dsd(decoder) => decoder.duration_ms,
-        }
-    }
-
-    pub fn source_format(&self) -> AudioFormat {
-        match &self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.source_format(),
-            DecoderKind::Dsd(decoder) => decoder.format,
-        }
-    }
-
-    pub fn bit_depth(&self) -> u32 {
-        match &self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.bit_depth(),
-            DecoderKind::Dsd(_) => 1,
-        }
-    }
-
-    pub fn seek(&mut self, target_ms: u64) -> AudioResult<u64> {
-        match &mut self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.seek(target_ms),
-            DecoderKind::Dsd(decoder) => decoder.seek(target_ms),
-        }
-    }
-
-    pub fn decode_next_packet(&mut self) -> AudioResult<Option<&[f32]>> {
-        match &mut self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.decode_next_packet(),
-            DecoderKind::Dsd(decoder) => decoder.decode_next_packet(),
-        }
-    }
-
-    pub fn decode_next_bytes(&mut self) -> AudioResult<Option<&[u8]>> {
-        match &mut self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.decode_next_bytes(),
-            DecoderKind::Dsd(decoder) => decoder.decode_next_bytes(),
-        }
-    }
-
-    pub fn configure_bit_perfect_wire(
-        &mut self,
-        target: AudioFormat,
-        packed_s24: bool,
-        container_bytes: usize,
-    ) -> AudioResult<()> {
-        if self.quality_badge().source_type.as_deref() == Some("DSD") {
-            return Err(AudioError::FormatNotSupported {
-                requested: target.describe(),
-                details: format!(
-                    "{} is a DSD source; use Native DSD through ASIO, DoP, or DSD → PCM",
-                    self.quality_badge().codec_name
-                ),
-            });
-        }
-        match &mut self.inner {
-            DecoderKind::Ffmpeg(decoder) => {
-                decoder.configure_bit_perfect_wire(target, packed_s24, container_bytes)
+    pub fn open_url(url: &str) -> AudioResult<Self> {
+        crate::audio::http_input::validate_http_stream_url(url)?;
+        let display = crate::audio::http_input::display_stream_path(url);
+        let mut source = MediaSource::open_http(url).map_err(map_core)?;
+        if source.looks_like_dsd() {
+            let mut head = vec![0u8; 65_536];
+            let n = source.read(&mut head).unwrap_or(0);
+            head.truncate(n);
+            let _ = source.seek(SeekFrom::Start(0));
+            if parse_header(&head, source.len())
+                .map(|format| format.encoding == DsdEncoding::Dst)
+                .unwrap_or(false)
+            {
+                return Err(AudioError::Playback(
+                    "DST over HTTP is not supported".to_string(),
+                ));
             }
-            DecoderKind::Dsd(decoder) => Err(AudioError::FormatNotSupported {
-                requested: target.describe(),
-                details: format!(
-                    "{} is a DSD source; use Native DSD through ASIO, DoP, or DSD → PCM",
-                    decoder.quality_badge.codec_name
-                ),
-            }),
+            return Self::from_dsd_source(display, source);
         }
+        Self::from_pcm(display, source)
     }
 
-    pub fn set_output_format(&mut self, target: Option<AudioFormat>) -> AudioResult<()> {
-        match &mut self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.set_output_format(target),
-            DecoderKind::Dsd(decoder) => decoder.set_output_format(target),
-        }
-    }
-
-    /// Playback rate after an explicitly configured software converter. The
-    /// source format and quality metadata remain available separately.
-    pub fn playback_sample_rate(&self) -> u32 {
-        match &self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.playback_sample_rate(),
-            DecoderKind::Dsd(decoder) => decoder.playback_sample_rate(),
-        }
-    }
-
-    pub fn playback_channels(&self) -> u16 {
-        match &self.inner {
-            DecoderKind::Ffmpeg(decoder) => decoder.playback_channels(),
-            DecoderKind::Dsd(decoder) => decoder.playback_channels(),
-        }
-    }
-}
-
-impl FfmpegAudioDecoder {
-    pub fn open<P: AsRef<Path>>(path: P) -> AudioResult<Self> {
-        ensure_ffmpeg();
-        let path_buf = path.as_ref().to_path_buf();
-
-        let ictx = format::input(&path_buf).map_err(|e| AudioError::UnsupportedFormat {
-            path: path_buf.clone(),
-            details: e.to_string(),
-        })?;
-
-        let stream = ictx.streams().best(media::Type::Audio).ok_or_else(|| {
-            AudioError::UnsupportedFormat {
-                path: path_buf.clone(),
-                details: "No audio stream found".to_string(),
-            }
-        })?;
-
-        let stream_index = stream.index();
-        let time_base = stream.time_base();
-        let parameters = stream.parameters();
-        let codec_id = parameters.id();
-
-        let codec = decoder::find(codec_id).ok_or_else(|| AudioError::UnsupportedFormat {
-            path: path_buf.clone(),
-            details: format!("No decoder for codec {:?}", codec_id),
-        })?;
-
-        let context =
-            codec::context::Context::from_parameters(parameters.clone()).map_err(|e| {
-                AudioError::DecodeError {
-                    path: path_buf.clone(),
-                    details: e.to_string(),
-                }
-            })?;
-
-        let decoder = context
-            .decoder()
-            .open_as(codec)
-            .map_err(|e| AudioError::DecodeError {
-                path: path_buf.clone(),
-                details: e.to_string(),
-            })?;
-
-        let decoder = decoder.audio().map_err(|e| AudioError::DecodeError {
-            path: path_buf.clone(),
-            details: e.to_string(),
-        })?;
-
-        let (sample_rate, channels, source_av_format, channel_layout, bit_depth, pending_format) =
-            probe_source_format(&decoder, &parameters);
-
-        let source_format =
-            map_av_to_audio_format(sample_rate, channels, source_av_format, bit_depth);
-
-        let duration_ms = compute_duration_ms(&ictx, stream_index, time_base);
-        let replay_gain_info = extract_replay_gain(&ictx, stream_index);
-        let quality_badge = build_quality_badge(
-            &path_buf,
-            codec.name(),
-            sample_rate,
-            channels,
-            bit_depth,
-            parameters.bit_rate(),
-        );
-
+    fn from_pcm(path: PathBuf, source: MediaSource) -> AudioResult<Self> {
+        let decoder = PcmDecoder::open(source).map_err(map_core)?;
+        let info = decoder.info().clone();
+        let bit_depth = u32::from(info.bit_depth.unwrap_or(16));
+        let source_format = match info.bit_depth.unwrap_or(16) {
+            16 => AudioFormat::s16(info.sample_rate, info.channels),
+            24 => AudioFormat::s24_in_32(info.sample_rate, info.channels),
+            32 => AudioFormat::s32(info.sample_rate, info.channels),
+            _ => AudioFormat::f32(info.sample_rate, info.channels),
+        };
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_ascii_lowercase();
+        let quality_badge = QualityBadge {
+            sample_rate: info.sample_rate,
+            channels: info.channels,
+            bit_depth: info.bit_depth.map(u32::from),
+            bitrate_kbps: info.bitrate_kbps,
+            codec_name: info.codec.to_ascii_uppercase(),
+            container_format: if ext.is_empty() {
+                info.container.clone()
+            } else {
+                ext
+            },
+            is_lossless: info.lossless,
+            is_hi_res: QualityBadge::compute_is_hi_res(
+                info.sample_rate,
+                info.bit_depth.map(u32::from),
+            ),
+            source_type: None,
+            dsd_rate: None,
+            dsd_output_mode: None,
+        };
         Ok(Self {
-            path: path_buf,
-            ictx,
-            decoder,
-            stream_index,
-            sample_rate,
-            channels,
-            source_av_format,
-            channel_layout,
+            path,
+            duration_ms: decoder.duration_ms(),
+            inner: Inner::Pcm(decoder),
+            quality_badge,
+            replay_gain_info: None,
             source_format,
             bit_depth,
-            duration_ms,
-            quality_badge,
-            replay_gain_info,
-            output_target: None,
-            swr: None,
-            decoded_frame: frame::Audio::empty(),
-            converted_frame: frame::Audio::empty(),
-            f32_buf: Vec::with_capacity(4096),
-            bytes_buf: Vec::with_capacity(8192),
-            pack_buf: Vec::with_capacity(8192),
-            eof_sent: false,
-            finished: false,
-            pending_format,
             bit_perfect_wire: None,
+            bytes_buf: Vec::new(),
+            pack_buf: Vec::new(),
+            f32_buf: Vec::new(),
+            pcm_graph: None,
+            output_sample_rate: info.sample_rate,
+            graph_flushed: false,
+            bit_perfect_primed: false,
+            channel_layout: info.channel_layout.unwrap_or_else(|| match info.channels {
+                1 => "FRONT_LEFT".into(),
+                2 => "FRONT_LEFT | FRONT_RIGHT".into(),
+                n => format!("{n}ch"),
+            }),
+        })
+    }
+
+    fn from_dsd_source(path: PathBuf, source: MediaSource) -> AudioResult<Self> {
+        let adapter = NdsdSourceAdapter::open(source).map_err(map_core)?;
+        let format = adapter.format().clone();
+        let fir_rate = dsd_pcm_output_rate_hz(format.dsd_sample_rate);
+        if fir_rate == 0 {
+            return Err(AudioError::UnsupportedFormat {
+                path: path.clone(),
+                details: format!("unsupported DSD sample rate {} Hz", format.dsd_sample_rate),
+            });
+        }
+        let graph = ProcessingGraph::new(
+            fir_rate,
+            format.channels,
+            GraphConfig {
+                target_sample_rate: Some(fir_rate),
+                ..GraphConfig::default()
+            },
+        )
+        .map_err(map_core)?;
+        let quality_badge = QualityBadge {
+            sample_rate: format.dsd_sample_rate,
+            channels: format.channels,
+            bit_depth: Some(1),
+            bitrate_kbps: Some(
+                ((u64::from(format.dsd_sample_rate) * u64::from(format.channels)) / 1000) as u32,
+            ),
+            codec_name: if matches!(format.encoding, nnpm_audio_core::dsd::DsdEncoding::Dst) {
+                "DST".into()
+            } else {
+                "DSD".into()
+            },
+            container_format: match format.container {
+                nnpm_audio_core::dsd::DsdContainer::Dsf => "dsf".into(),
+                nnpm_audio_core::dsd::DsdContainer::Dff => "dff".into(),
+            },
+            is_lossless: true,
+            is_hi_res: true,
+            source_type: Some("DSD".into()),
+            dsd_rate: Some(map_dsd_rate_dto(format.dsd_rate)),
+            dsd_output_mode: Some(DsdOutputMode::Pcm),
+        };
+        Ok(Self {
+            path,
+            duration_ms: format.duration_ms,
+            inner: Inner::Dsd(DsdPcmSession {
+                adapter,
+                graph,
+                fir_rate,
+                sample_rate: fir_rate,
+                channels: format.channels,
+            }),
+            quality_badge,
+            replay_gain_info: None,
+            source_format: AudioFormat::f32(fir_rate, format.channels),
+            bit_depth: 1,
+            bit_perfect_wire: None,
+            bytes_buf: Vec::new(),
+            pack_buf: Vec::new(),
+            f32_buf: Vec::new(),
+            pcm_graph: None,
+            output_sample_rate: fir_rate,
+            graph_flushed: false,
+            bit_perfect_primed: false,
+            channel_layout: match format.channels {
+                1 => "FRONT_LEFT".into(),
+                2 => "FRONT_LEFT | FRONT_RIGHT".into(),
+                n => format!("{n}ch"),
+            },
         })
     }
 
     pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
+        match &self.inner {
+            Inner::Pcm(d) => d.sample_rate(),
+            Inner::Dsd(d) => d.sample_rate,
+        }
     }
 
     pub fn channels(&self) -> u16 {
-        self.channels
+        match &self.inner {
+            Inner::Pcm(d) => d.channels(),
+            Inner::Dsd(d) => d.channels,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -733,179 +289,306 @@ impl FfmpegAudioDecoder {
         self.bit_depth
     }
 
+    pub fn decoded_repr(&self) -> DecodedSampleRepr {
+        match &self.inner {
+            Inner::Pcm(d) => d.last_repr(),
+            Inner::Dsd(_) => DecodedSampleRepr::F32,
+        }
+    }
+
+    pub fn decoded_planar(&self) -> bool {
+        true
+    }
+
+    pub fn channel_layout(&self) -> &str {
+        &self.channel_layout
+    }
+
     pub fn seek(&mut self, target_ms: u64) -> AudioResult<u64> {
-        let ts = (target_ms as i64).rescale((1, 1000), rescale::TIME_BASE);
-        self.ictx
-            .seek(ts, ..ts)
-            .map_err(|e| AudioError::SeekError {
-                target_ms,
-                reason: e.to_string(),
-            })?;
-
-        self.decoder.flush();
-        self.eof_sent = false;
-        self.finished = false;
-        self.f32_buf.clear();
+        let actual = match &mut self.inner {
+            Inner::Pcm(d) => d.seek(target_ms).map_err(map_core)?,
+            Inner::Dsd(d) => {
+                let actual = d.adapter.seek_ms(target_ms).map_err(map_core)?;
+                d.graph.reset_stream().map_err(map_core)?;
+                actual
+            }
+        };
+        self.graph_flushed = false;
+        self.bit_perfect_primed = false;
         self.bytes_buf.clear();
-
-        Ok(target_ms)
+        if self.pcm_graph.is_some() {
+            self.rebuild_pcm_graph()?;
+        }
+        Ok(actual)
     }
 
-    /// Decode next chunk as interleaved f32 in [-1, 1]. Returns `None` at EOF.
     pub fn decode_next_packet(&mut self) -> AudioResult<Option<&[f32]>> {
-        match self.pull_frame()? {
-            None => Ok(None),
-            Some(()) => {
-                if let Some(ref mut swr) = self.swr {
-                    self.converted_frame = frame::Audio::empty();
-                    swr.run(&self.decoded_frame, &mut self.converted_frame)
-                        .map_err(|e| AudioError::DecodeError {
-                            path: self.path.clone(),
-                            details: format!("PCM resampler: {e}"),
-                        })?;
-                    frame_to_f32(&self.converted_frame, &mut self.f32_buf)?;
-                } else {
-                    frame_to_f32(&self.decoded_frame, &mut self.f32_buf)?;
+        match &mut self.inner {
+            Inner::Pcm(d) => loop {
+                match d.decode_next().map_err(map_core)? {
+                    Some(samples) => {
+                        self.f32_buf = if let Some(graph) = self.pcm_graph.as_mut() {
+                            graph.process_f32(samples)
+                        } else {
+                            samples.to_vec()
+                        };
+                        if !self.f32_buf.is_empty() {
+                            return Ok(Some(self.f32_buf.as_slice()));
+                        }
+                    }
+                    None => {
+                        if !self.graph_flushed {
+                            self.graph_flushed = true;
+                            if let Some(graph) = self.pcm_graph.as_mut() {
+                                self.f32_buf = graph.flush();
+                                if !self.f32_buf.is_empty() {
+                                    return Ok(Some(self.f32_buf.as_slice()));
+                                }
+                            }
+                        }
+                        return Ok(None);
+                    }
                 }
-                Ok(Some(self.f32_buf.as_slice()))
-            }
+            },
+            Inner::Dsd(session) => loop {
+                match session
+                    .adapter
+                    .next_block(dsd_decode_block_bytes(
+                        session.adapter.format().dsd_sample_rate,
+                        session.channels,
+                    ))
+                    .map_err(map_core)?
+                {
+                    Some(block) => {
+                        let rate = session.adapter.format().dsd_sample_rate;
+                        self.f32_buf = session.graph.process_dsd_block(&block, rate);
+                        tracing::debug!(target: "dsd", dsd_sample_rate = rate,
+                            fir_rate = session.fir_rate,
+                            pcm_sample_rate = session.sample_rate,
+                            input_bytes = block.bytes.len(), output_samples = self.f32_buf.len(),
+                            "DSD FIR block converted to f32 PCM");
+                        if !self.f32_buf.is_empty() {
+                            return Ok(Some(self.f32_buf.as_slice()));
+                        }
+                    }
+                    None => {
+                        if !self.graph_flushed {
+                            self.graph_flushed = true;
+                            self.f32_buf = session.graph.flush();
+                            if !self.f32_buf.is_empty() {
+                                return Ok(Some(self.f32_buf.as_slice()));
+                            }
+                        }
+                        return Ok(None);
+                    }
+                }
+            },
         }
     }
 
-    fn playback_sample_rate(&self) -> u32 {
-        self.output_target
-            .map(|target| target.sample_rate)
-            .unwrap_or(self.sample_rate)
-    }
-
-    fn playback_channels(&self) -> u16 {
-        self.output_target
-            .map(|target| target.channels)
-            .unwrap_or(self.channels)
-    }
-
-    /// Decode next chunk as raw interleaved PCM bytes matching `output_format`
-    /// (or source format if no converter). Prefer no conversion when formats match.
     pub fn decode_next_bytes(&mut self) -> AudioResult<Option<&[u8]>> {
-        match self.pull_frame()? {
-            None => Ok(None),
-            Some(()) => {
-                if let Some(ref mut swr) = self.swr {
-                    swr.run(&self.decoded_frame, &mut self.converted_frame)
-                        .map_err(|e| AudioError::DecodeError {
-                            path: self.path.clone(),
-                            details: format!("swr: {e}"),
-                        })?;
-                    copy_frame_bytes(&self.converted_frame, &mut self.bytes_buf)?;
-                } else {
-                    copy_frame_bytes(&self.decoded_frame, &mut self.bytes_buf)?;
-                    self.apply_bit_perfect_pack()?;
+        if matches!(self.inner, Inner::Dsd(_)) {
+            return Err(AudioError::UnsupportedFormat {
+                path: self.path.clone(),
+                details: "DSD sources have no bit-perfect PCM wire".into(),
+            });
+        }
+        if self.bit_perfect_primed {
+            self.bit_perfect_primed = false;
+        } else {
+            let Some(_) = self.decode_next_packet()? else {
+                return Ok(None);
+            };
+            if let Inner::Pcm(d) = &self.inner {
+                let native = d.last_bytes();
+                if native.is_empty() {
+                    return Err(AudioError::FormatNotSupported {
+                        requested: self.source_format.describe(),
+                        details: format!(
+                            "Decoded {:?} has no exact native PCM byte representation",
+                            d.last_repr()
+                        ),
+                    });
                 }
-                Ok(Some(self.bytes_buf.as_slice()))
+                self.bytes_buf.clear();
+                self.bytes_buf.extend_from_slice(native);
             }
         }
+        self.apply_bit_perfect_pack()?;
+        Ok(Some(self.bytes_buf.as_slice()))
     }
 
-    /// Bit-perfect: native decoder layout must match the exclusive wire format.
-    ///
-    /// Rate / channel mismatches error out. Container packing only (4-byte
-    /// 24-in-32 ↔ packed S24) is converted without resample or DSP.
+    /// Decode and retain one packet before WASAPI negotiation. Metadata bit
+    /// depth alone cannot distinguish integer PCM from IEEE float, nor the
+    /// container width Symphonia actually emitted.
+    pub fn prime_bit_perfect(&mut self) -> AudioResult<()> {
+        if matches!(self.inner, Inner::Dsd(_)) {
+            return Err(AudioError::FormatNotSupported {
+                requested: "bit-perfect PCM wire".into(),
+                details: "DSD sources require Native DSD or DoP".into(),
+            });
+        }
+        if self.bit_perfect_primed {
+            return Ok(());
+        }
+        if self.decode_next_packet()?.is_none() {
+            return Err(AudioError::DecodeError {
+                path: self.path.clone(),
+                details: "Audio stream ended before its PCM representation could be verified"
+                    .into(),
+            });
+        }
+        let Inner::Pcm(decoder) = &self.inner else {
+            unreachable!();
+        };
+        let repr = decoder.last_repr();
+        let exact = exact_wire_format(
+            repr,
+            self.quality_badge.bit_depth,
+            self.source_format.sample_rate,
+            self.source_format.channels,
+        )
+        .ok_or_else(|| AudioError::FormatNotSupported {
+            requested: format!("exact {:?} PCM wire", repr),
+            details: format!(
+                "Decoded representation {:?} / {:?}-bit has no lossless WASAPI mapping",
+                repr, self.quality_badge.bit_depth
+            ),
+        })?;
+        let native = decoder.last_bytes();
+        let bytes_per_frame = exact.bytes_per_frame();
+        if native.is_empty() || native.len() % bytes_per_frame != 0 {
+            return Err(AudioError::FormatNotSupported {
+                requested: exact.describe(),
+                details: format!(
+                    "Decoded {:?} produced {} bytes, not aligned to {}-byte frames",
+                    repr,
+                    native.len(),
+                    bytes_per_frame
+                ),
+            });
+        }
+        self.source_format = exact;
+        self.output_sample_rate = exact.sample_rate;
+        self.bytes_buf.clear();
+        self.bytes_buf.extend_from_slice(native);
+        self.bit_perfect_primed = true;
+        Ok(())
+    }
+
     pub fn configure_bit_perfect_wire(
         &mut self,
         target: AudioFormat,
         packed_s24: bool,
-        container_bytes: usize,
+        _container_bytes: usize,
     ) -> AudioResult<()> {
-        self.output_target = None;
-        self.swr = None;
-        self.bit_perfect_wire = Some(BitPerfectWire {
-            target,
-            packed_s24,
-            container_bytes: container_bytes.max(1),
-            pack: BitPerfectPack::Identity,
-        });
-        if self.pending_format || matches!(self.source_av_format, AvSample::None) {
-            return Ok(());
+        if matches!(self.inner, Inner::Dsd(_)) {
+            return Err(AudioError::UnsupportedFormat {
+                path: self.path.clone(),
+                details: "Bit-perfect wire is not available for DSD sources".into(),
+            });
         }
-        self.resolve_bit_perfect_wire()
-    }
-
-    fn resolve_bit_perfect_wire(&mut self) -> AudioResult<()> {
-        let Some(wire) = self.bit_perfect_wire.as_ref() else {
-            return Ok(());
-        };
-        let target = wire.target;
-        let packed_s24 = wire.packed_s24;
-        let container_bytes = wire.container_bytes;
-
-        if self.sample_rate != target.sample_rate || self.channels != target.channels {
+        if !self.bit_perfect_primed || self.decoded_repr() == DecodedSampleRepr::Unknown {
+            return Err(AudioError::FormatNotSupported {
+                requested: target.describe(),
+                details: "Bit-perfect wire must be verified from a decoded packet first".into(),
+            });
+        }
+        if self.source_format.sample_rate != target.sample_rate
+            || self.source_format.channels != target.channels
+        {
             return Err(AudioError::FormatNotSupported {
                 requested: target.describe(),
                 details: format!(
                     "Bit-perfect requires matching rate/channels (source {} Hz / {} ch)",
-                    self.sample_rate, self.channels
+                    self.source_format.sample_rate, self.source_format.channels
                 ),
             });
         }
+        let pack = if self.source_format.sample_format != target.sample_format {
+            return Err(AudioError::FormatNotSupported {
+                requested: target.describe(),
+                details: format!(
+                    "Bit-perfect cannot convert {:?} to {:?} (source {})",
+                    self.source_format.sample_format,
+                    target.sample_format,
+                    self.source_format.describe()
+                ),
+            });
+        } else if target.sample_format == PcmSampleFormat::S24 && packed_s24 {
+            BitPerfectPack::Container4ToPacked3
+        } else {
+            BitPerfectPack::Identity
+        };
+        self.bit_perfect_wire = Some(BitPerfectWire { pack });
+        Ok(())
+    }
 
-        let native_bps = av_container_bytes(self.source_av_format);
-        if native_bps == 0 {
+    pub fn set_output_format(&mut self, target: Option<AudioFormat>) -> AudioResult<()> {
+        self.bit_perfect_wire = None;
+        self.graph_flushed = false;
+        let target_rate = target
+            .map(|format| format.sample_rate)
+            .unwrap_or(self.source_format.sample_rate);
+        if target_rate == 0 {
+            return Err(AudioError::FormatNotSupported {
+                requested: "0 Hz PCM output".into(),
+                details: "Output sample rate must be greater than zero".into(),
+            });
+        }
+        self.output_sample_rate = target_rate;
+        match &mut self.inner {
+            Inner::Pcm(_) => self.rebuild_pcm_graph(),
+            Inner::Dsd(session) => {
+                session.sample_rate = target_rate;
+                session.graph = ProcessingGraph::new(
+                    session.fir_rate,
+                    session.channels,
+                    GraphConfig {
+                        target_sample_rate: Some(target_rate),
+                        ..GraphConfig::default()
+                    },
+                )
+                .map_err(map_core)?;
+                Ok(())
+            }
+        }
+    }
+
+    pub fn playback_sample_rate(&self) -> u32 {
+        self.output_sample_rate
+    }
+
+    pub fn playback_channels(&self) -> u16 {
+        self.channels()
+    }
+
+    fn rebuild_pcm_graph(&mut self) -> AudioResult<()> {
+        let input_rate = self.source_format.sample_rate;
+        if self.output_sample_rate == input_rate {
+            self.pcm_graph = None;
             return Ok(());
         }
-
-        if matches!(self.source_av_format, AvSample::U8(_)) {
-            return Err(AudioError::FormatNotSupported {
-                requested: target.describe(),
-                details: "Bit-perfect cannot map unsigned 8-bit PCM onto a 16-bit exclusive wire"
-                    .into(),
-            });
-        }
-
-        let encoding_matches = matches!(
-            (self.source_av_format, target.sample_format),
-            (AvSample::I16(_), PcmSampleFormat::S16)
-                | (AvSample::I32(_), PcmSampleFormat::S24)
-                | (AvSample::I32(_), PcmSampleFormat::S32)
-                | (AvSample::F32(_), PcmSampleFormat::F32)
+        self.pcm_graph = Some(
+            ProcessingGraph::new(
+                input_rate,
+                self.source_format.channels,
+                GraphConfig {
+                    target_sample_rate: Some(self.output_sample_rate),
+                    target_bit_depth: self.bit_depth.min(u32::from(u16::MAX)) as u16,
+                    ..GraphConfig::default()
+                },
+            )
+            .map_err(map_core)?,
         );
-        if !encoding_matches {
-            return Err(AudioError::FormatNotSupported {
-                requested: target.describe(),
-                details: format!(
-                    "Bit-perfect encoding mismatch: decoder {:?} vs wire {:?}",
-                    self.source_av_format, target.sample_format
-                ),
-            });
-        }
-
-        let pack = if native_bps == container_bytes {
-            BitPerfectPack::Identity
-        } else if native_bps == 4 && container_bytes == 3 && packed_s24 {
-            BitPerfectPack::Container4ToPacked3
-        } else if native_bps == 3 && container_bytes == 4 && !packed_s24 {
-            BitPerfectPack::Packed3ToContainer4
-        } else {
-            return Err(AudioError::FormatNotSupported {
-                requested: target.describe(),
-                details: format!(
-                    "Bit-perfect layout mismatch: decoder {native_bps} bytes/sample vs wire {container_bytes} (packed_s24={packed_s24})"
-                ),
-            });
-        };
-
-        if let Some(wire) = self.bit_perfect_wire.as_mut() {
-            wire.pack = pack;
-        }
         Ok(())
     }
 
     fn apply_bit_perfect_pack(&mut self) -> AudioResult<()> {
-        let pack = self
-            .bit_perfect_wire
-            .as_ref()
-            .map(|w| w.pack)
-            .unwrap_or(BitPerfectPack::Identity);
-        match pack {
+        let Some(wire) = self.bit_perfect_wire.as_ref() else {
+            return Ok(());
+        };
+        match wire.pack {
             BitPerfectPack::Identity => Ok(()),
             BitPerfectPack::Container4ToPacked3 => {
                 pack_container4_to_packed_s24(&self.bytes_buf, &mut self.pack_buf);
@@ -919,583 +602,47 @@ impl FfmpegAudioDecoder {
             }
         }
     }
-
-    /// Configure optional software resample/convert toward a target exclusive format.
-    /// When `None` or equal to source, disable swr (bit-perfect path).
-    pub fn set_output_format(&mut self, target: Option<AudioFormat>) -> AudioResult<()> {
-        self.bit_perfect_wire = None;
-        self.output_target = target;
-        self.rebuild_swr()
-    }
-
-    fn rebuild_swr(&mut self) -> AudioResult<()> {
-        self.swr = None;
-
-        let Some(target) = self.output_target else {
-            return Ok(());
-        };
-
-        if formats_match_bitperfect(&self.source_format, &target) {
-            return Ok(());
-        }
-
-        if self.pending_format || matches!(self.source_av_format, AvSample::None) {
-            // Defer until the first decoded frame reveals the native format.
-            return Ok(());
-        }
-
-        let dst_sample = audio_format_to_av_sample(target.sample_format);
-        let dst_layout = ChannelLayout::default(i32::from(target.channels.max(1)));
-
-        let swr = resampling::Context::get(
-            self.source_av_format,
-            self.channel_layout,
-            self.sample_rate.max(1),
-            dst_sample,
-            dst_layout,
-            target.sample_rate.max(1),
-        )
-        .map_err(|e| AudioError::DecodeError {
-            path: self.path.clone(),
-            details: format!("Failed to create swr context: {e}"),
-        })?;
-
-        self.swr = Some(swr);
-        Ok(())
-    }
-
-    fn pull_frame(&mut self) -> AudioResult<Option<()>> {
-        loop {
-            match self.decoder.receive_frame(&mut self.decoded_frame) {
-                Ok(()) => {
-                    self.apply_frame_format_if_needed()?;
-                    return Ok(Some(()));
-                }
-                Err(FfError::Eof) => {
-                    self.finished = true;
-                    return Ok(None);
-                }
-                Err(FfError::Other { errno }) if errno == EAGAIN => {
-                    // Need more input packets.
-                }
-                Err(FfError::InvalidData) => {
-                    tracing::warn!("FFmpeg invalid frame data, skipping");
-                    continue;
-                }
-                Err(e) => {
-                    return Err(AudioError::DecodeError {
-                        path: self.path.clone(),
-                        details: e.to_string(),
-                    });
-                }
-            }
-
-            if self.finished {
-                return Ok(None);
-            }
-
-            let mut packet = Packet::empty();
-            match packet.read(&mut self.ictx) {
-                Ok(()) => {
-                    if packet.stream() != self.stream_index {
-                        continue;
-                    }
-                    match self.decoder.send_packet(&packet) {
-                        Ok(()) => continue,
-                        Err(FfError::Other { errno }) if errno == EAGAIN => continue,
-                        Err(FfError::Eof) => {
-                            self.finished = true;
-                            return Ok(None);
-                        }
-                        Err(e) => {
-                            tracing::warn!("FFmpeg send_packet error: {e}, skipping");
-                            continue;
-                        }
-                    }
-                }
-                Err(FfError::Eof) => {
-                    if !self.eof_sent {
-                        match self.decoder.send_eof() {
-                            Ok(()) => {
-                                self.eof_sent = true;
-                                continue;
-                            }
-                            Err(FfError::Eof) => {
-                                self.finished = true;
-                                return Ok(None);
-                            }
-                            Err(e) => {
-                                return Err(AudioError::DecodeError {
-                                    path: self.path.clone(),
-                                    details: e.to_string(),
-                                });
-                            }
-                        }
-                    }
-                    self.finished = true;
-                    return Ok(None);
-                }
-                Err(FfError::InvalidData) => continue,
-                Err(e) => {
-                    return Err(AudioError::DecodeError {
-                        path: self.path.clone(),
-                        details: e.to_string(),
-                    });
-                }
-            }
-        }
-    }
-
-    fn apply_frame_format_if_needed(&mut self) -> AudioResult<()> {
-        if !self.pending_format && !matches!(self.source_av_format, AvSample::None) {
-            return Ok(());
-        }
-
-        let rate = self.decoded_frame.rate();
-        let ch = self.decoded_frame.channels();
-        let fmt = self.decoded_frame.format();
-        let mut layout = self.decoded_frame.channel_layout();
-        if layout.is_empty() && ch > 0 {
-            layout = ChannelLayout::default(i32::from(ch));
-        }
-
-        let bits = bits_from_av_sample(fmt, self.bit_depth);
-        self.sample_rate = if rate > 0 { rate } else { self.sample_rate };
-        self.channels = if ch > 0 { ch } else { self.channels };
-        self.source_av_format = fmt;
-        self.channel_layout = layout;
-        self.bit_depth = bits;
-        self.source_format = map_av_to_audio_format(self.sample_rate, self.channels, fmt, bits);
-        self.pending_format = false;
-
-        // Refresh badge with resolved format.
-        self.quality_badge.sample_rate = self.sample_rate;
-        self.quality_badge.channels = self.channels;
-        self.quality_badge.bit_depth = Some(self.bit_depth);
-        self.quality_badge.is_hi_res =
-            QualityBadge::compute_is_hi_res(self.sample_rate, Some(self.bit_depth));
-
-        self.rebuild_swr()?;
-        self.resolve_bit_perfect_wire()
-    }
 }
 
-fn attenuate_dsd_pcm(samples: &mut [f32]) {
-    // SACD/DSD can represent levels above 0 dBFS PCM. FFmpeg's dsd2pcm FIR
-    // therefore clips unless we take the conventional 6 dB of headroom.
-    const DSD_PCM_ATTENUATION: f32 = 0.5;
-    for sample in samples {
-        *sample *= DSD_PCM_ATTENUATION;
-    }
-}
-
-fn av_container_bytes(fmt: AvSample) -> usize {
-    match fmt {
-        AvSample::U8(_) => 1,
-        AvSample::I16(_) => 2,
-        AvSample::I32(_) | AvSample::F32(_) => 4,
-        AvSample::I64(_) | AvSample::F64(_) => 8,
-        AvSample::None => 0,
-    }
-}
-
-fn probe_source_format(
-    decoder: &decoder::Audio,
-    parameters: &codec::Parameters,
-) -> (u32, u16, AvSample, ChannelLayout, u32, bool) {
-    let mut sample_rate = decoder.rate();
-    let mut channels = decoder.channels();
-    let mut source_av_format = decoder.format();
-    let mut channel_layout = decoder.channel_layout();
-    let bits_raw;
-
-    unsafe {
-        let par = parameters.as_ptr();
-        if sample_rate == 0 {
-            sample_rate = (*par).sample_rate as u32;
-        }
-        if matches!(source_av_format, AvSample::None) {
-            source_av_format = AvSample::from(std::mem::transmute::<
-                i32,
-                ffmpeg::ffi::AVSampleFormat,
-            >((*par).format));
-        }
-        bits_raw = (*par).bits_per_raw_sample as u32;
-        if channel_layout.is_empty() {
-            channel_layout = ChannelLayout::from((*par).ch_layout);
-        }
-        if channels == 0 {
-            channels = channel_layout.channels() as u16;
-        }
-    }
-
-    if channels == 0 {
-        channels = 2;
-    }
-    if sample_rate == 0 {
-        sample_rate = 44_100;
-    }
-    if channel_layout.is_empty() {
-        channel_layout = ChannelLayout::default(i32::from(channels));
-    }
-
-    let pending = matches!(source_av_format, AvSample::None);
-    let bit_depth = bits_from_av_sample(source_av_format, bits_raw);
-
-    (
-        sample_rate,
-        channels,
-        source_av_format,
-        channel_layout,
-        bit_depth,
-        pending,
-    )
-}
-
-fn bits_from_av_sample(fmt: AvSample, bits_per_raw: u32) -> u32 {
-    match fmt {
-        AvSample::U8(_) => 8,
-        AvSample::I16(_) => 16,
-        AvSample::I32(_) => {
-            if bits_per_raw == 24 {
-                24
-            } else if bits_per_raw > 0 {
-                bits_per_raw
-            } else {
-                32
-            }
-        }
-        AvSample::I64(_) => 64,
-        AvSample::F32(_) => 32,
-        AvSample::F64(_) => 64,
-        AvSample::None => {
-            if bits_per_raw > 0 {
-                bits_per_raw
-            } else {
-                16
-            }
-        }
-    }
-}
-
-fn map_av_to_audio_format(
+fn exact_wire_format(
+    repr: DecodedSampleRepr,
+    logical_bits: Option<u32>,
     sample_rate: u32,
     channels: u16,
-    fmt: AvSample,
-    bit_depth: u32,
-) -> AudioFormat {
-    let (sample_format, depth) = match fmt {
-        AvSample::I16(_) => (PcmSampleFormat::S16, 16),
-        AvSample::I32(_) if bit_depth == 24 => (PcmSampleFormat::S24, 24),
-        AvSample::I32(_) => (PcmSampleFormat::S32, 32),
-        AvSample::F32(_) => (PcmSampleFormat::F32, 32),
-        AvSample::F64(_) => (PcmSampleFormat::F32, 32),
-        AvSample::U8(_) => (PcmSampleFormat::S16, 16),
-        AvSample::I64(_) => (PcmSampleFormat::S32, 32),
-        AvSample::None => {
-            if bit_depth == 24 {
-                (PcmSampleFormat::S24, 24)
-            } else if bit_depth >= 32 {
-                (PcmSampleFormat::S32, 32)
-            } else {
-                (PcmSampleFormat::S16, 16)
-            }
+) -> Option<AudioFormat> {
+    match repr {
+        DecodedSampleRepr::S16 if logical_bits.unwrap_or(16) <= 16 => {
+            Some(AudioFormat::s16(sample_rate, channels))
         }
-    };
-    AudioFormat::new(sample_rate, channels, sample_format, depth)
-}
-
-fn audio_format_to_av_sample(fmt: PcmSampleFormat) -> AvSample {
-    match fmt {
-        PcmSampleFormat::S16 => AvSample::I16(SampleType::Packed),
-        // FFmpeg has no packed S24; 24-bit travels as S32 (24-in-32).
-        PcmSampleFormat::S24 | PcmSampleFormat::S32 => AvSample::I32(SampleType::Packed),
-        PcmSampleFormat::F32 => AvSample::F32(SampleType::Packed),
-    }
-}
-
-fn formats_match_bitperfect(source: &AudioFormat, target: &AudioFormat) -> bool {
-    source.sample_rate == target.sample_rate
-        && source.channels == target.channels
-        && source.sample_format == target.sample_format
-        && source.bit_depth == target.bit_depth
-}
-
-fn compute_duration_ms(
-    ictx: &format::context::Input,
-    stream_index: usize,
-    time_base: Rational,
-) -> u64 {
-    if let Some(stream) = ictx.streams().nth(stream_index) {
-        let dur = stream.duration();
-        if dur > 0 {
-            let ms = dur.rescale(time_base, (1, 1000));
-            if ms > 0 {
-                return ms as u64;
-            }
+        DecodedSampleRepr::S24 if logical_bits.is_some_and(|bits| bits > 16 && bits <= 24) => {
+            Some(AudioFormat::s24_in_32(sample_rate, channels))
         }
-    }
-
-    let format_dur = ictx.duration();
-    if format_dur > 0 {
-        // AV_TIME_BASE is microseconds.
-        return (format_dur as u64) / 1000;
-    }
-    0
-}
-
-fn extract_replay_gain(
-    ictx: &format::context::Input,
-    stream_index: usize,
-) -> Option<ReplayGainInfo> {
-    let mut info = ReplayGainInfo::default();
-    let mut found = false;
-
-    let mut apply = |key: &str, val: &str| {
-        let key_u = key.to_ascii_uppercase();
-        if key_u.contains("REPLAYGAIN_TRACK_GAIN") || key_u.contains("R128_TRACK_GAIN") {
-            if let Some(db) = parse_db_string(val) {
-                info.track_gain_db = Some(db);
-                found = true;
-            }
-        } else if key_u.contains("REPLAYGAIN_TRACK_PEAK") {
-            if let Ok(peak) = val.trim().parse::<f32>() {
-                info.track_peak = Some(peak);
-                found = true;
-            }
-        } else if key_u.contains("REPLAYGAIN_ALBUM_GAIN") || key_u.contains("R128_ALBUM_GAIN") {
-            if let Some(db) = parse_db_string(val) {
-                info.album_gain_db = Some(db);
-                found = true;
-            }
-        } else if key_u.contains("REPLAYGAIN_ALBUM_PEAK") {
-            if let Ok(peak) = val.trim().parse::<f32>() {
-                info.album_peak = Some(peak);
-                found = true;
-            }
-        }
-    };
-
-    for (k, v) in ictx.metadata().iter() {
-        apply(k, v);
-    }
-
-    if let Some(stream) = ictx.streams().nth(stream_index) {
-        for (k, v) in stream.metadata().iter() {
-            apply(k, v);
-        }
-    }
-
-    if found {
-        Some(info)
-    } else {
-        None
-    }
-}
-
-fn build_quality_badge(
-    path: &Path,
-    codec_name: &str,
-    sample_rate: u32,
-    channels: u16,
-    bit_depth: u32,
-    bit_rate: i64,
-) -> QualityBadge {
-    let ext = path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown")
-        .to_lowercase();
-
-    let codec_name_upper = codec_name.to_uppercase();
-    let is_lossless = match ext.as_str() {
-        "flac" | "wav" | "alac" | "aiff" | "aif" | "pcm" => true,
-        "mp3" | "ogg" | "aac" | "m4a" | "opus" | "wma" => false,
-        _ => {
-            codec_name_upper.contains("FLAC")
-                || codec_name_upper.contains("PCM")
-                || codec_name_upper.contains("ALAC")
-                || codec_name_upper.contains("WAVPACK")
-        }
-    };
-
-    let bit_depth_opt = if bit_depth > 0 { Some(bit_depth) } else { None };
-    let is_hi_res = QualityBadge::compute_is_hi_res(sample_rate, bit_depth_opt);
-    let bitrate_kbps = if bit_rate > 0 {
-        Some((bit_rate / 1000) as u32)
-    } else {
-        None
-    };
-
-    QualityBadge {
-        sample_rate,
-        channels,
-        bit_depth: bit_depth_opt,
-        bitrate_kbps,
-        codec_name: codec_name_upper,
-        container_format: ext.clone(),
-        is_lossless,
-        is_hi_res,
-        source_type: if matches!(ext.as_str(), "dsf" | "dff") {
-            Some("DSD".into())
-        } else {
-            None
+        DecodedSampleRepr::S32 => match logical_bits {
+            Some(bits) if bits <= 16 => Some(AudioFormat::s16(sample_rate, channels)),
+            Some(bits) if bits <= 24 => Some(AudioFormat::s24_in_32(sample_rate, channels)),
+            Some(bits) if bits <= 32 => Some(AudioFormat::s32(sample_rate, channels)),
+            _ => None,
         },
-        dsd_rate: if matches!(ext.as_str(), "dsf" | "dff") {
-            crate::audio::dsd::dsd_rate_from_sample_rate(sample_rate.saturating_mul(8)).ok()
-        } else {
-            None
-        },
-        dsd_output_mode: if matches!(ext.as_str(), "dsf" | "dff") {
-            Some(DsdOutputMode::Pcm)
-        } else {
-            None
-        },
+        DecodedSampleRepr::F32 => Some(AudioFormat::f32(sample_rate, channels)),
+        _ => None,
     }
 }
 
-fn frame_to_f32(frame: &frame::Audio, out: &mut Vec<f32>) -> AudioResult<()> {
-    out.clear();
-    let ch = frame.channels().max(1) as usize;
-    let n = frame.samples();
-    if n == 0 {
-        return Ok(());
+fn map_core(error: nnpm_audio_core::CoreError) -> AudioError {
+    AudioError::DecodeError {
+        path: PathBuf::new(),
+        details: error.to_string(),
     }
-
-    match frame.format() {
-        AvSample::F32(SampleType::Packed) => {
-            let plane = frame.plane::<f32>(0);
-            out.extend_from_slice(&plane[..n * ch]);
-        }
-        AvSample::F32(SampleType::Planar) => {
-            out.reserve(n * ch);
-            let planes: Vec<&[f32]> = (0..ch).map(|c| frame.plane::<f32>(c)).collect();
-            for i in 0..n {
-                for plane in &planes {
-                    out.push(plane[i]);
-                }
-            }
-        }
-        AvSample::I16(SampleType::Packed) => {
-            let plane = frame.plane::<i16>(0);
-            out.reserve(n * ch);
-            for &s in &plane[..n * ch] {
-                out.push(s as f32 / 32768.0);
-            }
-        }
-        AvSample::I16(SampleType::Planar) => {
-            out.reserve(n * ch);
-            let planes: Vec<&[i16]> = (0..ch).map(|c| frame.plane::<i16>(c)).collect();
-            for i in 0..n {
-                for plane in &planes {
-                    out.push(plane[i] as f32 / 32768.0);
-                }
-            }
-        }
-        AvSample::I32(SampleType::Packed) => {
-            let plane = frame.plane::<i32>(0);
-            out.reserve(n * ch);
-            for &s in &plane[..n * ch] {
-                out.push(s as f32 / 2_147_483_648.0);
-            }
-        }
-        AvSample::I32(SampleType::Planar) => {
-            out.reserve(n * ch);
-            let planes: Vec<&[i32]> = (0..ch).map(|c| frame.plane::<i32>(c)).collect();
-            for i in 0..n {
-                for plane in &planes {
-                    out.push(plane[i] as f32 / 2_147_483_648.0);
-                }
-            }
-        }
-        AvSample::F64(SampleType::Packed) => {
-            let plane = frame.plane::<f64>(0);
-            out.reserve(n * ch);
-            for &s in &plane[..n * ch] {
-                out.push(s as f32);
-            }
-        }
-        AvSample::F64(SampleType::Planar) => {
-            out.reserve(n * ch);
-            let planes: Vec<&[f64]> = (0..ch).map(|c| frame.plane::<f64>(c)).collect();
-            for i in 0..n {
-                for plane in &planes {
-                    out.push(plane[i] as f32);
-                }
-            }
-        }
-        AvSample::U8(SampleType::Packed) => {
-            let plane = frame.plane::<u8>(0);
-            out.reserve(n * ch);
-            for &s in &plane[..n * ch] {
-                out.push((s as f32 - 128.0) / 128.0);
-            }
-        }
-        AvSample::U8(SampleType::Planar) => {
-            out.reserve(n * ch);
-            let planes: Vec<&[u8]> = (0..ch).map(|c| frame.plane::<u8>(c)).collect();
-            for i in 0..n {
-                for plane in &planes {
-                    out.push((plane[i] as f32 - 128.0) / 128.0);
-                }
-            }
-        }
-        other => {
-            return Err(AudioError::DecodeError {
-                path: PathBuf::new(),
-                details: format!("Unsupported sample format for f32 convert: {:?}", other),
-            });
-        }
-    }
-    Ok(())
 }
 
-fn copy_frame_bytes(frame: &frame::Audio, out: &mut Vec<u8>) -> AudioResult<()> {
-    out.clear();
-    let ch = frame.channels().max(1) as usize;
-    let n = frame.samples();
-    if n == 0 {
-        return Ok(());
+fn map_dsd_rate_dto(rate: nnpm_audio_core::types::DsdRate) -> DsdRate {
+    match rate {
+        nnpm_audio_core::types::DsdRate::Dsd64 => DsdRate::Dsd64,
+        nnpm_audio_core::types::DsdRate::Dsd128 => DsdRate::Dsd128,
+        nnpm_audio_core::types::DsdRate::Dsd256 => DsdRate::Dsd256,
+        nnpm_audio_core::types::DsdRate::Dsd512 => DsdRate::Dsd512,
+        nnpm_audio_core::types::DsdRate::Dsd1024 => DsdRate::Dsd1024,
     }
-
-    let bytes_per = frame.format().bytes();
-    if bytes_per == 0 {
-        return Err(AudioError::DecodeError {
-            path: PathBuf::new(),
-            details: "Unknown bytes-per-sample".to_string(),
-        });
-    }
-
-    if frame.is_packed() {
-        let need = n * ch * bytes_per;
-        let data = frame.data(0);
-        if data.len() < need {
-            return Err(AudioError::DecodeError {
-                path: PathBuf::new(),
-                details: format!("Packed frame short: have {} need {}", data.len(), need),
-            });
-        }
-        out.extend_from_slice(&data[..need]);
-        return Ok(());
-    }
-
-    // Planar → interleaved packed.
-    out.reserve(n * ch * bytes_per);
-    for i in 0..n {
-        for c in 0..ch {
-            let plane = frame.data(c);
-            let start = i * bytes_per;
-            let end = start + bytes_per;
-            if end > plane.len() {
-                return Err(AudioError::DecodeError {
-                    path: PathBuf::new(),
-                    details: "Planar frame short while interleaving".to_string(),
-                });
-            }
-            out.extend_from_slice(&plane[start..end]);
-        }
-    }
-    Ok(())
 }
 
 pub fn parse_db_string(val: &str) -> Option<f32> {
@@ -1511,6 +658,26 @@ pub fn parse_db_string(val: &str) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_explicit_mqa_encoder_metadata_without_false_positives() {
+        assert!(nnpm_audio_core::mqa::is_mqa_metadata_tag(
+            "MQAENCODER",
+            "MQAEncode v1.1, 2.4.0+0"
+        ));
+        assert!(nnpm_audio_core::mqa::is_mqa_metadata_tag(
+            "encoder",
+            "MQAEncode v1.1, 2.4.0+0"
+        ));
+        assert!(!nnpm_audio_core::mqa::is_mqa_metadata_tag(
+            "ENCODER",
+            "reference libFLAC 1.4.3"
+        ));
+        assert!(!nnpm_audio_core::mqa::is_mqa_metadata_tag(
+            "ORIGINALSAMPLERATE",
+            "44100"
+        ));
+    }
 
     #[test]
     fn test_parse_db_string() {
@@ -1531,251 +698,22 @@ mod tests {
     }
 
     #[test]
-    fn test_map_s32_24bit() {
-        let fmt = map_av_to_audio_format(96_000, 2, AvSample::I32(SampleType::Packed), 24);
-        assert_eq!(fmt.sample_format, PcmSampleFormat::S24);
-        assert_eq!(fmt.bit_depth, 24);
-    }
-
-    #[test]
-    fn dff_raw_feeds_ffmpeg_dsd_decoder() {
-        fn chunk(id: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-            let mut out = Vec::new();
-            out.extend_from_slice(id);
-            out.extend_from_slice(&(payload.len() as u64).to_be_bytes());
-            out.extend_from_slice(payload);
-            if payload.len() % 2 != 0 {
-                out.push(0);
-            }
-            out
-        }
-        let mut prop = b"SND ".to_vec();
-        prop.extend(chunk(b"FS  ", &2_822_400u32.to_be_bytes()));
-        prop.extend(chunk(b"CHNL", &[0, 2, b'S', b'L', b'F', b'L', b'S', b'R']));
-        prop.extend(chunk(b"CMPR", b"DSD "));
-        let mut inner = chunk(b"FVER", &0x0105_0000u32.to_be_bytes());
-        inner.extend(chunk(b"PROP", &prop));
-        inner.extend(chunk(b"DSD ", &[0x69; 4096]));
-        let mut bytes = b"FRM8".to_vec();
-        bytes.extend_from_slice(&((4 + inner.len()) as u64).to_be_bytes());
-        bytes.extend_from_slice(b"DSD ");
-        bytes.extend(inner);
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fixture.dff");
-        std::fs::write(&path, bytes).unwrap();
-        let mut decoder = AudioDecoder::open(&path).unwrap();
+    fn exact_wire_uses_decoded_representation_not_metadata_guess() {
         assert_eq!(
-            decoder.quality_badge().dsd_rate,
-            Some(crate::audio::dto::DsdRate::Dsd64)
+            exact_wire_format(DecodedSampleRepr::F32, Some(32), 44_100, 2),
+            Some(AudioFormat::f32(44_100, 2))
         );
-        let samples = decoder.decode_next_packet().unwrap().unwrap();
-        assert!(!samples.is_empty());
-        assert!(samples.iter().all(|sample| sample.is_finite()));
-        assert!(
-            samples
-                .iter()
-                .map(|sample| sample.abs())
-                .fold(0.0, f32::max)
-                < 0.01
+        assert_eq!(
+            exact_wire_format(DecodedSampleRepr::S32, Some(20), 96_000, 2),
+            Some(AudioFormat::s24_in_32(96_000, 2))
         );
-        let mut resampler = crate::audio::gapless::LinearResampler::new(352_800, 48_000, 2);
-        let mut resampled = Vec::new();
-        resampler.resample(samples, &mut resampled);
-        assert!(
-            resampled
-                .iter()
-                .map(|sample| sample.abs())
-                .fold(0.0, f32::max)
-                < 0.01
+        assert_eq!(
+            exact_wire_format(DecodedSampleRepr::F64, Some(64), 192_000, 2),
+            None
         );
-
-        let mut converted = AudioDecoder::open(&path).unwrap();
-        converted
-            .set_output_format(Some(AudioFormat::f32(44_100, 2)))
-            .unwrap();
-        let converted_samples = converted.decode_next_packet().unwrap().unwrap();
-        assert!(converted_samples.len() < samples.len());
-        assert!(
-            converted_samples
-                .iter()
-                .map(|sample| sample.abs())
-                .fold(0.0, f32::max)
-                < 0.01
+        assert_eq!(
+            exact_wire_format(DecodedSampleRepr::S32, None, 48_000, 2),
+            None
         );
-    }
-
-    #[test]
-    fn dff_source_rejects_bit_perfect_wire() {
-        fn chunk(id: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-            let mut out = Vec::new();
-            out.extend_from_slice(id);
-            out.extend_from_slice(&(payload.len() as u64).to_be_bytes());
-            out.extend_from_slice(payload);
-            if payload.len() % 2 != 0 {
-                out.push(0);
-            }
-            out
-        }
-        let mut prop = b"SND ".to_vec();
-        prop.extend(chunk(b"FS  ", &2_822_400u32.to_be_bytes()));
-        prop.extend(chunk(b"CHNL", &[0, 2, b'S', b'L', b'F', b'L', b'S', b'R']));
-        prop.extend(chunk(b"CMPR", b"DSD "));
-        let mut inner = chunk(b"FVER", &0x0105_0000u32.to_be_bytes());
-        inner.extend(chunk(b"PROP", &prop));
-        inner.extend(chunk(b"DSD ", &[0x69; 4096]));
-        let mut bytes = b"FRM8".to_vec();
-        bytes.extend_from_slice(&((4 + inner.len()) as u64).to_be_bytes());
-        bytes.extend_from_slice(b"DSD ");
-        bytes.extend(inner);
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bit-perfect-reject.dff");
-        std::fs::write(&path, bytes).unwrap();
-        let mut decoder = AudioDecoder::open(&path).unwrap();
-        assert_eq!(decoder.quality_badge().source_type.as_deref(), Some("DSD"));
-        let err = decoder
-            .configure_bit_perfect_wire(AudioFormat::s24_in_32(176_400, 2), false, 4)
-            .expect_err("DSD must not enter the bit-perfect PCM wire");
-        let message = err.to_string();
-        assert!(
-            message.to_ascii_lowercase().contains("dsd"),
-            "unexpected error: {message}"
-        );
-    }
-
-    #[test]
-    fn dff_dst_feeds_ffmpeg_dst_decoder() {
-        fn chunk(id: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-            let mut out = Vec::with_capacity(12 + payload.len() + payload.len() % 2);
-            out.extend_from_slice(id);
-            out.extend_from_slice(&(payload.len() as u64).to_be_bytes());
-            out.extend_from_slice(payload);
-            if payload.len() % 2 != 0 {
-                out.push(0);
-            }
-            out
-        }
-
-        let mut prop = b"SND ".to_vec();
-        prop.extend(chunk(b"FS  ", &2_822_400u32.to_be_bytes()));
-        prop.extend(chunk(b"CHNL", &[0, 2, b'S', b'L', b'F', b'L', b'S', b'R']));
-        prop.extend(chunk(b"CMPR", b"DST "));
-
-        // FFmpeg accepts a DST frame whose first byte marks the uncompressed
-        // form, followed by one DSD64 frame (4,704 samples × 2 channels).
-        let mut dst_frame = vec![0u8];
-        dst_frame.extend(std::iter::repeat_n(0x69, 4_704 * 2));
-        let mut dst_payload = chunk(b"FRTE", &[0, 0, 0, 1, 0, 75, 0, 0]);
-        dst_payload.extend(chunk(b"DSTF", &dst_frame));
-
-        let mut inner = chunk(b"FVER", &0x0105_0000u32.to_be_bytes());
-        inner.extend(chunk(b"PROP", &prop));
-        inner.extend(chunk(b"DST ", &dst_payload));
-        let mut bytes = b"FRM8".to_vec();
-        bytes.extend_from_slice(&((4 + inner.len()) as u64).to_be_bytes());
-        bytes.extend_from_slice(b"DSD ");
-        bytes.extend(inner);
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fixture-dst.dff");
-        std::fs::write(&path, bytes).unwrap();
-        let mut decoder = AudioDecoder::open(&path).unwrap();
-        assert_eq!(decoder.quality_badge().codec_name, "DST");
-        let samples = decoder.decode_next_packet().unwrap().unwrap();
-        assert!(!samples.is_empty());
-        assert!(samples.iter().all(|sample| sample.is_finite()));
-
-        let mut converted = AudioDecoder::open(&path).unwrap();
-        converted
-            .set_output_format(Some(AudioFormat::f32(44_100, 2)))
-            .unwrap();
-        let converted_samples = converted.decode_next_packet().unwrap().unwrap();
-        assert!(!converted_samples.is_empty());
-        assert!(converted_samples.len() < 4_704 * 2);
-        assert!(converted_samples.iter().all(|sample| sample.is_finite()));
-    }
-
-    #[test]
-    fn dsf_pcm_uses_band_limited_ffmpeg_resampler() {
-        let sample_count = 32_768u64;
-        let data_size = sample_count / 8 * 2;
-        let file_size = 28 + 12 + 40 + 12 + data_size;
-        let mut bytes = Vec::with_capacity(file_size as usize);
-        bytes.extend_from_slice(b"DSD ");
-        bytes.extend_from_slice(&28u64.to_le_bytes());
-        bytes.extend_from_slice(&file_size.to_le_bytes());
-        bytes.extend_from_slice(&0u64.to_le_bytes());
-        bytes.extend_from_slice(b"fmt ");
-        bytes.extend_from_slice(&52u64.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&2u32.to_le_bytes());
-        bytes.extend_from_slice(&2u32.to_le_bytes());
-        bytes.extend_from_slice(&2_822_400u32.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&sample_count.to_le_bytes());
-        bytes.extend_from_slice(&4096u32.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(b"data");
-        bytes.extend_from_slice(&(12u64 + data_size).to_le_bytes());
-        // DSF LSB-first 0x96 is digital silence for DSD_LSBF_PLANAR.
-        bytes.extend(std::iter::repeat_n(0x96, data_size as usize));
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fixture.dsf");
-        std::fs::write(&path, bytes).unwrap();
-        let mut decoder = AudioDecoder::open(&path).unwrap();
-        assert_eq!(decoder.quality_badge().codec_name, "DSD");
-        decoder
-            .set_output_format(Some(AudioFormat::f32(44_100, 2)))
-            .unwrap();
-        let samples = decoder.decode_next_packet().unwrap().unwrap();
-        assert!(!samples.is_empty());
-        assert!(samples.len() < 8_192);
-        assert!(samples.iter().all(|sample| sample.is_finite()));
-        assert!(
-            samples
-                .iter()
-                .map(|sample| sample.abs())
-                .fold(0.0, f32::max)
-                < 0.01
-        );
-    }
-
-    #[test]
-    fn dsf_ffmpeg_source_rejects_bit_perfect_wire() {
-        let sample_count = 32_768u64;
-        let data_size = sample_count / 8 * 2;
-        let file_size = 28 + 12 + 40 + 12 + data_size;
-        let mut bytes = Vec::with_capacity(file_size as usize);
-        bytes.extend_from_slice(b"DSD ");
-        bytes.extend_from_slice(&28u64.to_le_bytes());
-        bytes.extend_from_slice(&file_size.to_le_bytes());
-        bytes.extend_from_slice(&0u64.to_le_bytes());
-        bytes.extend_from_slice(b"fmt ");
-        bytes.extend_from_slice(&52u64.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&2u32.to_le_bytes());
-        bytes.extend_from_slice(&2u32.to_le_bytes());
-        bytes.extend_from_slice(&2_822_400u32.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&sample_count.to_le_bytes());
-        bytes.extend_from_slice(&4096u32.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(b"data");
-        bytes.extend_from_slice(&(12u64 + data_size).to_le_bytes());
-        bytes.extend(std::iter::repeat_n(0x96, data_size as usize));
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bit-perfect-reject.dsf");
-        std::fs::write(&path, bytes).unwrap();
-        let mut decoder = AudioDecoder::open(&path).unwrap();
-        assert_eq!(decoder.quality_badge().source_type.as_deref(), Some("DSD"));
-        let err = decoder
-            .configure_bit_perfect_wire(AudioFormat::s24_in_32(176_400, 2), false, 4)
-            .expect_err("DSF must not enter the bit-perfect PCM wire");
-        assert!(err.to_string().to_ascii_lowercase().contains("dsd"));
     }
 }

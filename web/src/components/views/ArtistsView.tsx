@@ -48,7 +48,7 @@ export const ArtistsView: React.FC<ArtistsViewProps> = ({ onNavigate }) => {
             >
               {/* Circle Avatar */}
               <div className="relative w-28 h-28 rounded-full bg-gradient-to-tr from-brand-primary to-oled-card border-2 border-brand-border/80 mb-3 flex items-center justify-center overflow-hidden group-hover:scale-105 group-hover:border-brand-accent transition-all duration-300 shadow-md">
-                <RemoteArtwork kind="artist" artist={artist.name} alt={`${artist.name} portrait`} />
+                <RemoteArtwork kind="artist" artist={artist.name} src={artist.image_url} alt={`${artist.name} portrait`} />
               </div>
 
               {/* Name & Counts */}

@@ -16,6 +16,8 @@ export interface LyricData {
   plain_text?: string;
   source?: 'local' | 'lrclib';
   romanized?: LyricData;
+  /** True when a provider reports the track as instrumental. */
+  instrumental?: boolean;
 }
 
 export type LyricsMode = 'original' | 'romanized' | 'both';

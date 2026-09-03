@@ -227,7 +227,6 @@ body {
   color: rgb(var(--color-muted));
   pointer-events: auto;
   -webkit-app-region: no-drag;
-  app-region: no-drag;
   transition: color 140ms ease, background-color 140ms ease;
 }
 
@@ -722,6 +721,7 @@ body {
 /* Range input slider customized styling */
 input[type="range"] {
   -webkit-appearance: none;
+  appearance: none;
   background: rgb(var(--color-border));
   border-radius: 9999px;
   height: 6px;

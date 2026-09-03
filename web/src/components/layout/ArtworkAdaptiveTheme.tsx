@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { usePlayer } from '../../context/PlayerContext';
 import { useSettings } from '../../context/SettingsContext';
+import { usePlatform } from '../../platform';
 import { createArtworkTheme } from '../../services/imageTheme';
 import { resolveTrackArtworkSource } from '../../services/trackArtwork';
 import type { CustomImageTheme } from '../../types/settings';
@@ -23,6 +24,7 @@ const colorProperties: Record<string, keyof CustomImageTheme['colors']> = {
 export const ArtworkAdaptiveTheme = () => {
   const { status } = usePlayer();
   const { settings } = useSettings();
+  const { artworkAssets } = usePlatform();
   const track = status.current_track;
 
   useEffect(() => {
@@ -42,7 +44,7 @@ export const ArtworkAdaptiveTheme = () => {
     };
     let cancelled = false;
 
-    void resolveTrackArtworkSource(track)
+    void resolveTrackArtworkSource(track, artworkAssets)
       .then(async source => {
         if (!source || cancelled) return;
         const theme = await createArtworkTheme(source, `${track.title} — ${track.artist}`);
@@ -78,6 +80,7 @@ export const ArtworkAdaptiveTheme = () => {
     settings.custom_image_theme,
     settings.theme,
     track,
+    artworkAssets,
   ]);
 
   return null;

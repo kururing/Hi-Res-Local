@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     sample_rate INTEGER,
     channels INTEGER,
     bit_depth INTEGER,
+    is_mqa INTEGER NOT NULL DEFAULT 0,
     format TEXT NOT NULL,
     file_size INTEGER NOT NULL,
     file_modified_at TEXT NOT NULL,

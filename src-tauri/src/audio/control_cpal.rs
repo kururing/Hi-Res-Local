@@ -224,7 +224,10 @@ fn create_stream(
     let mut config: StreamConfig = supported_config.into();
     let sample_rate = config.sample_rate.0;
     let channels = config.channels;
-    config.buffer_size = BufferSize::Fixed(device_buffer_frames(sample_rate));
+    // Let WASAPI negotiate the period/alignment for the endpoint's current
+    // Shared mix format. A fixed CPAL buffer can be accepted by some USB DAC
+    // drivers yet crackle continuously at 176.4/192/352.8/384 kHz.
+    config.buffer_size = BufferSize::Default;
 
     pipeline
         .sample_rate
@@ -250,7 +253,9 @@ fn create_stream(
     ) {
         Ok(stream) => stream,
         Err(_) => {
-            config.buffer_size = BufferSize::Default;
+            // Conservative fallback for drivers that do not expose a usable
+            // default period through CPAL.
+            config.buffer_size = BufferSize::Fixed(device_buffer_frames(sample_rate));
             let cons = pipeline.recreate_ring(sample_rate, channels);
             build_stream(
                 &device,

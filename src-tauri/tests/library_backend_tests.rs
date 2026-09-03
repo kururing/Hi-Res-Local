@@ -39,6 +39,8 @@ fn create_sample_track(id: &str, title: &str, artist: &str, album: &str, format:
         sample_rate: Some(44100),
         channels: Some(2),
         bit_depth: Some(16),
+        is_mqa: false,
+        isrc: None,
         format: format.to_string(),
         file_size: 5_000_000,
         file_modified_at: "2026-01-01T00:00:00Z".to_string(),

@@ -323,7 +323,7 @@ fn render_thread_main(
     let bytes_per_frame = negotiated.bytes_per_frame().max(1);
     let format_ptr = negotiated.wave.as_wave_format_ex();
 
-    let (client, buffer_frames) = match activate_and_init_exclusive(&device, format_ptr) {
+    let (client, buffer_frames, period) = match activate_and_init_exclusive(&device, format_ptr) {
         Ok(v) => v,
         Err(e) => {
             let msg = e.to_string();
@@ -331,6 +331,33 @@ fn render_thread_main(
             return Err(AudioError::StreamInitialization(msg));
         }
     };
+
+    if let Err(err) = negotiated
+        .wave
+        .validate_pcm_layout(negotiated.container_bytes_per_sample)
+    {
+        tracing::error!(
+            target: "wasapi",
+            error = %err,
+            wave = %negotiated.wave,
+            "WAVEFORMATEX layout invariant failed at Initialize"
+        );
+        debug_assert!(false, "WAVEFORMATEX layout at Initialize: {err}");
+    }
+
+    if let Some(p) = pipeline.as_ref() {
+        p.set_render_wire(negotiated.wave.describe(), buffer_frames, period);
+        let expected_bpf = negotiated.bytes_per_frame();
+        if bytes_per_frame != expected_bpf {
+            tracing::error!(
+                target: "wasapi",
+                bytes_per_frame,
+                expected_bpf,
+                "stale bytes_per_frame vs negotiated wire"
+            );
+            debug_assert_eq!(bytes_per_frame, expected_bpf);
+        }
+    }
 
     let buffer_event = unsafe {
         match CreateEventW(None, false, false, None) {
@@ -489,7 +516,7 @@ fn open_device_by_id(device_id: &str) -> AudioResult<IMMDevice> {
 fn activate_and_init_exclusive(
     device: &IMMDevice,
     format: *const WAVEFORMATEX,
-) -> AudioResult<(IAudioClient, u32)> {
+) -> AudioResult<(IAudioClient, u32, i64)> {
     let client: IAudioClient = unsafe {
         device
             .Activate(CLSCTX_ALL, None)
@@ -537,7 +564,7 @@ fn activate_and_init_exclusive(
                 buffer_frames = frames,
                 "exclusive Initialize succeeded"
             );
-            Ok((client, frames))
+            Ok((client, frames, period))
         }
         Err(e) if e.code() == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED => {
             let frames = unsafe {
@@ -590,7 +617,7 @@ fn activate_and_init_exclusive(
                 aligned_period = aligned,
                 "exclusive Initialize (aligned) succeeded"
             );
-            Ok((client, frames))
+            Ok((client, frames, aligned))
         }
         Err(e) => {
             let code = e.code().0 as u32;
@@ -643,6 +670,11 @@ fn fill_period(
     }
 
     let byte_len = frames_available as usize * bytes_per_frame;
+    debug_assert_eq!(
+        byte_len % bytes_per_frame.max(1),
+        0,
+        "GetBuffer length must be a multiple of blockAlign"
+    );
     let buf = unsafe { std::slice::from_raw_parts_mut(ptr, byte_len) };
 
     if pending_reset.load(Ordering::Acquire) {
@@ -672,10 +704,24 @@ fn fill_period(
         flags = AUDCLNT_BUFFERFLAGS_SILENT.0 as u32;
     } else {
         let got = consumer.pop_bytes(buf);
-        frames_written = (got / bytes_per_frame.max(1)) as u32;
-        if got < byte_len {
-            buf[got..].fill(0);
-            let missing_frames = ((byte_len - got) / bytes_per_frame.max(1)) as u64;
+        let bpf = bytes_per_frame.max(1);
+        let aligned = (got / bpf) * bpf;
+        if aligned < got {
+            static UNALIGNED: AtomicBool = AtomicBool::new(false);
+            if !UNALIGNED.swap(true, Ordering::Relaxed) {
+                tracing::error!(
+                    target: "wasapi",
+                    got,
+                    aligned,
+                    bpf,
+                    "PCM ring pop was not frame-aligned; dropping trailing bytes"
+                );
+            }
+        }
+        frames_written = (aligned / bpf) as u32;
+        if aligned < byte_len {
+            buf[aligned..].fill(0);
+            let missing_frames = ((byte_len - aligned) / bpf) as u64;
             if missing_frames > 0 {
                 underrun_count.fetch_add(1, Ordering::Relaxed);
                 underrun_frames.fetch_add(missing_frames, Ordering::Relaxed);
@@ -687,7 +733,7 @@ fn fill_period(
                     );
                 }
             }
-            if got == 0 {
+            if aligned == 0 {
                 flags = AUDCLNT_BUFFERFLAGS_SILENT.0 as u32;
             }
         }

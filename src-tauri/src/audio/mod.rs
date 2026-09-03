@@ -1,6 +1,6 @@
 //! Native Local Audio Subsystem for Nghe Nhac Pro Max (Tauri Backend)
 //!
-//! Windows path: **FFmpeg decode → PCM ring → WASAPI Exclusive → DAC**
+//! Windows path: **nnpm-audio-core decode → PCM ring → WASAPI Exclusive → DAC**
 //! - Auto sample-rate switching per track (exclusive re-init)
 //! - Bit-perfect mode disables EQ / ReplayGain / software volume / resampling
 //! - Non-Windows keeps CPAL shared output for compile compatibility
@@ -64,12 +64,14 @@ pub mod dto;
 pub mod engine;
 pub mod error;
 pub mod gapless;
+pub mod http_input;
 pub mod pcm;
 pub mod pcm_convert;
 pub mod pcm_ring;
 pub mod pipeline;
 pub mod player;
 pub mod queue;
+pub mod toml_config;
 
 #[cfg(windows)]
 pub mod wasapi;
@@ -91,10 +93,11 @@ pub use dto::{
 };
 pub use error::{AudioError, AudioResult};
 pub use gapless::{GaplessController, LinearResampler, PreloadedTrack};
-pub use pcm::{format_sample_rate_khz, AudioFormat, PcmSampleFormat};
+pub use pcm::{format_sample_rate_khz, frame_aligned_len, AudioFormat, PcmSampleFormat};
 pub use pcm_convert::{
-    f32_to_pcm_bytes, pack_container4_to_packed_s24, pack_packed_s24_to_container4,
-    pcm_bytes_to_f32,
+    f32_to_pcm_bytes, i16_to_pcm16_le, pack_container4_to_packed_s24,
+    pack_packed_s24_to_container4, pack_s32_le_left_justified_to_s16, pcm_bytes_to_f32,
+    synthetic_stereo_pcm, ChannelIdentityPattern,
 };
 pub use pcm_ring::{PcmRing, PcmRingConsumer, PcmRingProducer, PCM_RING_MS};
 pub use player::{AudioCommand, AudioPlayer};

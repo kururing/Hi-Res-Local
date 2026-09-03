@@ -233,6 +233,10 @@ describe('isEqualizerAvailable', () => {
   it('blocks EQ in Advanced Native DSD / DoP before playback starts', () => {
     expect(isEqualizerAvailable(null, {
       ...DEFAULT_SETTINGS,
+      mqa_passthrough: true,
+    })).toBe(false);
+    expect(isEqualizerAvailable(null, {
+      ...DEFAULT_SETTINGS,
       playback_mode: 'advanced',
       audio_backend: 'asio',
       dsd_output_mode: 'native_dsd',

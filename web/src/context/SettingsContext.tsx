@@ -1,11 +1,11 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { AppSettings, DEFAULT_SETTINGS, AppLanguage, AppTheme, withWasapiExclusiveMode } from '../types/settings';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { AppSettings, DEFAULT_SETTINGS, AppLanguage, AppTheme, withWasapiExclusiveMode, normalizeAudioSettings } from '../types/settings';
 import { Storage } from '../services/storage';
-import { IpcService, isTauri } from '../services/ipc';
 import { EqualizerPreset } from '../types/audio';
 import { loadAppFont } from '../loadAppFonts';
 import { getAppFontStacks } from '../services/fonts';
 import { getImageThemeBorderColor } from '../services/imageTheme';
+import { usePlatform } from '../platform';
 
 export const DEFAULT_EQ_PRESETS: EqualizerPreset[] = [
   { id: 'flat', name: 'Flat / Neutral', gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
@@ -34,12 +34,60 @@ interface SettingsContextType {
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
 
 export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const {
+    runtime,
+    capabilities,
+    library,
+    audioConfiguration,
+    window: windowApi,
+  } = usePlatform();
   const [settings, setSettings] = useState<AppSettings>(() => Storage.getSettings());
   const [customEqPresets, setCustomEqPresets] = useState<EqualizerPreset[]>(() => Storage.getCustomEqPresets());
+  const closeToTrayRef = useRef(settings.close_to_tray);
+  closeToTrayRef.current = settings.close_to_tray;
+  const allPresets = [...DEFAULT_EQ_PRESETS, ...customEqPresets];
 
   useEffect(() => {
-    if (!isTauri()) return;
-    void IpcService.invoke('get_library_roots').then(roots => {
+    if (typeof localStorage === 'undefined') return;
+    if (localStorage.getItem('nghenhac_settings_v2')) return;
+    const load = audioConfiguration.getAudioTomlPatch;
+    if (!load) return;
+    let cancelled = false;
+    void load.call(audioConfiguration).then(patch => {
+      if (cancelled || !patch) return;
+      setSettings(previous => {
+        const next = normalizeAudioSettings({
+          ...previous,
+          output_device: patch.output_device || previous.output_device,
+          wasapi_exclusive: patch.wasapi_exclusive,
+          bit_perfect: patch.bit_perfect,
+          dsd_output_mode: (patch.dsd_output_mode as AppSettings['dsd_output_mode']) || previous.dsd_output_mode,
+          eq_enabled: patch.eq_enabled,
+          replay_gain_mode: (patch.replay_gain_mode as AppSettings['replay_gain_mode']) || previous.replay_gain_mode,
+        });
+        Storage.saveSettings(next);
+        return next;
+      });
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [audioConfiguration]);
+
+  const updateSettings = useCallback((partial: Partial<AppSettings>) => {
+    setSettings(prev => {
+      const next = { ...prev, ...partial };
+      Storage.saveSettings(next);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!capabilities.directoryScanning) return;
+
+    let cancelled = false;
+    void library.getRoots().then(roots => {
+      if (cancelled) return;
       const folders = roots.filter(root => root.is_active).map(root => root.path);
       setSettings(previous => {
         if (JSON.stringify(previous.music_folders) === JSON.stringify(folders)) return previous;
@@ -47,8 +95,14 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         Storage.saveSettings(next);
         return next;
       });
-    }).catch(error => console.warn('Failed to load library folders', error));
-  }, []);
+    }).catch(error => {
+      if (!cancelled) console.warn('Failed to load library folders', error);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [capabilities.directoryScanning, library]);
 
   // Apply Theme to DOM
   useEffect(() => {
@@ -90,6 +144,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [settings.theme, settings.custom_image_theme]);
 
+  useEffect(() => {
+    document.documentElement.lang = settings.language === 'en' ? 'en' : 'vi';
+  }, [settings.language]);
+
   // Blur is shared by custom-image and now-playing artwork themes. Keep this
   // isolated so moving the slider never reapplies or swaps the background image.
   useEffect(() => {
@@ -117,99 +175,112 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Keep the player running in the system tray when the user closes the window.
   useEffect(() => {
-    if (!isTauri()) return;
-
     let unlisten: (() => void) | undefined;
     let disposed = false;
 
-    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-      const window = getCurrentWindow();
-      return window.onCloseRequested(event => {
-        if (settings.close_to_tray) {
-          event.preventDefault();
-          void window.hide();
-        }
+    void windowApi.onCloseRequested(event => {
+      if (!closeToTrayRef.current) return;
+      event.preventDefault();
+      void windowApi.hide().catch(error => {
+        console.warn('Failed to hide window to tray', error);
       });
     }).then(dispose => {
       if (disposed) dispose();
       else unlisten = dispose;
+    }).catch(error => {
+      if (!disposed) console.warn('Failed to listen for window close', error);
     });
 
     return () => {
       disposed = true;
       unlisten?.();
     };
-  }, [settings.close_to_tray]);
+  }, [windowApi]);
 
-  // Sync EQ with backend/audio engine
+  // Sync EQ with backend/audio engine. Web has no DSP engine in this round.
   useEffect(() => {
+    if (runtime === 'web') return;
+
     const activeGains = settings.eq_preset_id === 'custom'
       ? settings.eq_custom_gains
       : (allPresets.find(p => p.id === settings.eq_preset_id)?.gains || DEFAULT_SETTINGS.eq_custom_gains);
 
-    void IpcService.invoke('set_equalizer', {
-      enabled: settings.eq_enabled,
-      gains: activeGains,
-    }).catch(error => console.error('Failed to apply equalizer settings', error));
-  }, [settings.eq_enabled, settings.eq_preset_id, settings.eq_custom_gains]);
+    void audioConfiguration.setEqualizer(settings.eq_enabled, activeGains)
+      .catch(error => console.error('Failed to apply equalizer settings', error));
+  }, [
+    audioConfiguration,
+    runtime,
+    settings.eq_enabled,
+    settings.eq_preset_id,
+    settings.eq_custom_gains,
+    customEqPresets,
+  ]);
 
   // Restore the persisted playback mode with a single engine call, then the
   // remaining audio preferences (crossfade, replay gain).
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!capabilities.nativeAudio) return;
+
+    let cancelled = false;
     void (async () => {
       try {
-        await IpcService.invoke('apply_playback_mode', {
+        await audioConfiguration.applyPlaybackMode({
           mode: settings.playback_mode,
           deviceId: settings.output_device || 'default',
           backend: settings.playback_mode === 'advanced' ? settings.audio_backend : null,
           dsdTransport: settings.playback_mode === 'advanced' ? settings.dsd_output_mode : null,
           asioDriverId: settings.asio_driver_id,
+          mqaPassthrough: settings.mqa_passthrough,
         });
       } catch (error) {
+        if (cancelled) return;
         console.warn(`Failed to restore playback mode "${settings.playback_mode}"; trying Auto`, error);
         try {
-          await IpcService.invoke('apply_playback_mode', {
+          await audioConfiguration.applyPlaybackMode({
             mode: 'auto',
             deviceId: settings.output_device || 'default',
             backend: null,
             dsdTransport: null,
             asioDriverId: settings.asio_driver_id,
+            mqaPassthrough: false,
           });
           // Keep the preferred mode in both memory and storage. EngineStatus
           // exposes the temporary Auto route while a future launch can retry.
         } catch (autoError) {
-          console.warn('Failed to apply Auto playback mode fallback', autoError);
+          if (!cancelled) console.warn('Failed to apply Auto playback mode fallback', autoError);
         }
       }
 
+      if (cancelled) return;
       try {
-        await IpcService.invoke('set_crossfade', {
-          duration_secs: settings.crossfade_duration,
-        });
-        await IpcService.invoke('set_replay_gain', {
+        await audioConfiguration.setCrossfade(settings.crossfade_duration);
+        await audioConfiguration.setReplayGain({
           mode: settings.replay_gain_mode,
           preamp_db: settings.replay_gain_preamp,
           prevent_clipping: true,
         });
       } catch (error) {
-        console.error('Failed to restore audio preferences', error);
+        if (!cancelled) console.error('Failed to restore audio preferences', error);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
     // Restore once from the initial persisted settings.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [audioConfiguration, capabilities.nativeAudio]);
 
   // Keep the persisted Exclusive switch aligned with the live engine.
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!capabilities.nativeAudio) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
 
-    void IpcService.listen('audio://exclusive_mode', payload => {
+    void audioConfiguration.subscribeExclusiveMode(payload => {
       if (disposed) return;
       if (!payload.enabled) {
-        updateSettings(withWasapiExclusiveMode(false));
+        updateSettings({ ...withWasapiExclusiveMode(false), mqa_passthrough: false });
       }
     }).then(dispose => {
       if (disposed) {
@@ -217,24 +288,15 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return;
       }
       unlisten = dispose;
+    }).catch(error => {
+      if (!disposed) console.warn('Failed to subscribe to exclusive mode', error);
     });
 
     return () => {
       disposed = true;
       unlisten?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const allPresets = [...DEFAULT_EQ_PRESETS, ...customEqPresets];
-
-  const updateSettings = useCallback((partial: Partial<AppSettings>) => {
-    setSettings(prev => {
-      const next = { ...prev, ...partial };
-      Storage.saveSettings(next);
-      return next;
-    });
-  }, []);
+  }, [audioConfiguration, capabilities.nativeAudio, updateSettings]);
 
   const setLanguage = (language: AppLanguage) => {
     updateSettings({ language });
@@ -283,8 +345,9 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const removeMusicFolder = async (folder: string) => {
+    if (runtime === 'web') return;
     try {
-      const removed = await IpcService.invoke('remove_library_root_by_path', { path: folder });
+      const removed = await library.removeRoot(folder);
       if (!removed) return;
       updateSettings({
         music_folders: settings.music_folders.filter(f => f !== folder),

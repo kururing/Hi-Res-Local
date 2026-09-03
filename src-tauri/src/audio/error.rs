@@ -25,7 +25,7 @@ pub enum AudioError {
     #[error("Format not supported by DAC ({requested}): {details}")]
     FormatNotSupported { requested: String, details: String },
 
-    #[error("FFmpeg decoder error for path {path}: {details}")]
+    #[error("Decoder error for path {path}: {details}")]
     DecodeError { path: PathBuf, details: String },
 
     #[error("Seek error at {target_ms}ms: {reason}")]

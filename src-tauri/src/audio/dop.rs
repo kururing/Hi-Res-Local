@@ -13,8 +13,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::audio::dsd::{DsdEncoding, DsdFormat, DsdiffReader, DsfReader};
+use crate::audio::dsd::{DsdEncoding, DsdFormat};
 use crate::audio::error::{AudioError, AudioResult};
+use nnpm_audio_core::dsd::DsdSource;
+use nnpm_audio_core::ndsd::NdsdSourceAdapter;
+use nnpm_audio_core::source::MediaSource;
 
 pub const DOP_MARKER_A: u8 = 0x05;
 pub const DOP_MARKER_B: u8 = 0xFA;
@@ -106,13 +109,7 @@ pub fn dop_sample_rate_is_advertised(
 /// (DSF bytes are bit-reversed by the reader; DST frames are decompressed).
 #[allow(clippy::large_enum_variant)] // Kept inline on the realtime path to avoid an extra allocation.
 pub enum RawDsdStream {
-    Dsf(DsfReader),
-    DffRaw(DsdiffReader),
-    DffDst {
-        reader: DsdiffReader,
-        decoder: dst_decoder::decoder::DstDecoder,
-        decoded: Vec<u8>,
-    },
+    Core(NdsdSourceAdapter),
 }
 
 impl RawDsdStream {
@@ -120,101 +117,82 @@ impl RawDsdStream {
         let extension = path
             .extension()
             .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if extension == "dsf" {
-            let reader = DsfReader::open(path).map_err(|error| AudioError::UnsupportedFormat {
-                path: path.to_path_buf(),
-                details: error.to_string(),
-            })?;
-            let format = reader.format.clone();
-            return Ok((format, Self::Dsf(reader)));
-        }
-        if extension != "dff" {
+            .unwrap_or_default();
+        if !extension.eq_ignore_ascii_case("dsf") && !extension.eq_ignore_ascii_case("dff") {
             return Err(AudioError::UnsupportedFormat {
                 path: path.to_path_buf(),
                 details: "Raw DSD accepts .dsf or .dff; standalone .dst is not supported".into(),
             });
         }
-
-        let reader = DsdiffReader::open(path).map_err(|error| AudioError::UnsupportedFormat {
-            path: path.to_path_buf(),
-            details: error.to_string(),
-        })?;
-        let format = reader.format.clone();
-        match format.encoding {
-            DsdEncoding::Raw => Ok((format, Self::DffRaw(reader))),
-            DsdEncoding::Dst => {
-                let decoder = dst_decoder::decoder::DstDecoder::new(
-                    usize::from(format.channels),
-                    format.dsd_sample_rate as usize,
-                )
-                .map_err(|error| AudioError::FormatNotSupported {
-                    requested: format.codec_label(),
-                    details: format!(
-                        "native DST decompression is unavailable for this DSD rate: {error}"
-                    ),
-                })?;
-                let decoded = vec![0x55; decoder.dsd_frame_bytes()];
-                Ok((
-                    format,
-                    Self::DffDst {
-                        reader,
-                        decoder,
-                        decoded,
-                    },
-                ))
-            }
-        }
+        let source =
+            MediaSource::open_file(path).map_err(|error| AudioError::UnsupportedFormat {
+                path: path.to_path_buf(),
+                details: error.to_string(),
+            })?;
+        let adapter =
+            NdsdSourceAdapter::open(source).map_err(|error| AudioError::UnsupportedFormat {
+                path: path.to_path_buf(),
+                details: error.to_string(),
+            })?;
+        let core = adapter.format();
+        let format = DsdFormat {
+            container: match core.container {
+                nnpm_audio_core::dsd::DsdContainer::Dsf => crate::audio::dsd::DsdContainer::Dsf,
+                nnpm_audio_core::dsd::DsdContainer::Dff => crate::audio::dsd::DsdContainer::Dff,
+            },
+            encoding: match core.encoding {
+                nnpm_audio_core::dsd::DsdEncoding::Raw => DsdEncoding::Raw,
+                nnpm_audio_core::dsd::DsdEncoding::Dst => DsdEncoding::Dst,
+            },
+            dsd_sample_rate: core.dsd_sample_rate,
+            pcm_sample_rate: core.dsd_sample_rate / 8,
+            dsd_rate: crate::audio::dsd::dsd_rate_from_sample_rate(core.dsd_sample_rate).map_err(
+                |error| AudioError::UnsupportedFormat {
+                    path: path.to_path_buf(),
+                    details: error.to_string(),
+                },
+            )?,
+            channels: core.channels,
+            sample_count: core.sample_count,
+            duration_ms: core.duration_ms,
+            data_offset: core.data_offset,
+            data_size: core.data_size,
+            block_size: core.block_size,
+            lsb_first: core.lsb_first,
+            dst_frame_rate: None,
+            dst_frames: Vec::new(),
+            id3: None,
+        };
+        Ok((format, Self::Core(adapter)))
     }
 
     pub fn seek_ms(&mut self, target_ms: u64) {
         match self {
-            Self::Dsf(reader) => reader.seek_ms(target_ms),
-            Self::DffRaw(reader) => reader.seek_ms(target_ms),
-            Self::DffDst { reader, .. } => reader.seek_ms(target_ms),
+            Self::Core(reader) => {
+                let _ = reader.seek_ms(target_ms);
+            }
         }
     }
 
     pub fn next_bytes(&mut self) -> AudioResult<Option<Vec<u8>>> {
         match self {
-            Self::Dsf(reader) => {
-                reader
-                    .next_packet(RAW_PACKET_BYTES)
-                    .map_err(|error| AudioError::DecodeError {
-                        path: reader.path_for_error(),
-                        details: error.to_string(),
-                    })
-            }
-            Self::DffRaw(reader) => {
-                reader
-                    .next_packet(RAW_PACKET_BYTES)
-                    .map_err(|error| AudioError::DecodeError {
-                        path: reader.path_for_error(),
-                        details: error.to_string(),
-                    })
-            }
-            Self::DffDst {
-                reader,
-                decoder,
-                decoded,
-            } => {
-                let Some(frame) = reader.next_packet(4 * 1024 * 1024).map_err(|error| {
+            Self::Core(reader) => {
+                let Some(mut block) = reader.next_block(RAW_PACKET_BYTES).map_err(|error| {
                     AudioError::DecodeError {
-                        path: reader.path_for_error(),
+                        path: PathBuf::new(),
                         details: error.to_string(),
                     }
                 })?
                 else {
                     return Ok(None);
                 };
-                let written = decoder.decode_frame(&frame, decoded).map_err(|error| {
-                    AudioError::DecodeError {
-                        path: reader.path_for_error(),
-                        details: format!("DST frame decode failed: {error}"),
-                    }
-                })?;
-                Ok(Some(decoded[..written].to_vec()))
+                if block.lsb_first {
+                    block
+                        .bytes
+                        .iter_mut()
+                        .for_each(|byte| *byte = byte.reverse_bits());
+                }
+                Ok(Some(block.bytes))
             }
         }
     }
@@ -419,10 +397,7 @@ mod tests {
             with_256,
             vec![DsdRate::Dsd64, DsdRate::Dsd128, DsdRate::Dsd256]
         );
-        assert_eq!(
-            advertised_dop_rates(|pcm| pcm == 1_411_200),
-            vec![DsdRate::Dsd512]
-        );
+        assert!(advertised_dop_rates(|pcm| pcm == 1_411_200).is_empty());
         let family_48 = advertised_dop_rates(|pcm| pcm == 192_000);
         assert_eq!(family_48, vec![DsdRate::Dsd64]);
         assert!(dop_sample_rate_is_advertised(2_822_400, &family_48));
